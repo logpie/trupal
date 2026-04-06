@@ -183,8 +183,3 @@ func getTmuxPaneID() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// --- Stubs (replaced in later tasks) ---
-
-func runWatchLoop(projectDir string, cfg Config) {
-	fmt.Println("watch loop not yet implemented")
-}
