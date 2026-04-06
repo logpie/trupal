@@ -185,16 +185,6 @@ func getTmuxPaneID() (string, error) {
 
 // --- Stubs (replaced in later tasks) ---
 
-func loadConfig(projectDir string) Config {
-	return Config{PollInterval: 3}
-}
-
 func runWatchLoop(projectDir string, cfg Config) {
 	fmt.Println("watch loop not yet implemented")
-}
-
-type Config struct {
-	BuildCmd        string
-	BuildExtensions []string
-	PollInterval    int
 }
