@@ -10,13 +10,10 @@ import (
 	"time"
 )
 
-// Pre-compiled regex patterns matched against added lines in unified diffs.
+// Pre-compiled single-line patterns matched against added lines.
 var (
-	pEmptyCatch  = regexp.MustCompile(`catch\s*\(\w*\)\s*\{\s*\}`)
-	pExceptPass  = regexp.MustCompile(`except\s*(\s+\w+)?:\s*pass`)
-	pGoIgnoreErr = regexp.MustCompile(`_\s*,?\s*=\s*\w+`)
-	pSuppression = regexp.MustCompile(`@ts-ignore|@ts-expect-error|eslint-disable|#\s*type:\s*ignore|nolint|NOSONAR|@SuppressWarnings|#\s*nosec`)
-	pHunkHeader  = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+	pSuppression = regexp.MustCompile(
+		`@ts-ignore|@ts-expect-error|eslint-disable|#\s*type:\s*ignore|nolint|NOSONAR|@SuppressWarnings|#\s*nosec`)
 )
 
 // PatternFinding records a single pattern match inside a diff.
@@ -26,56 +23,36 @@ type PatternFinding struct {
 	Pattern string // human-readable description
 }
 
-// ScanDiffPatterns scans a unified diff and returns all pattern findings on added lines.
+// ScanDiffPatterns scans a unified diff for suspicious patterns.
+// Uses both single-line matching and multi-line context window.
 func ScanDiffPatterns(rawDiff string) []PatternFinding {
 	var findings []PatternFinding
 	var currentFile string
 	var newLineNum int
 
+	// Collect added lines with context for multi-line detection.
+	var addedLines []addedLine
+
 	for _, line := range strings.Split(rawDiff, "\n") {
-		// Track current file from "+++ b/<path>" lines.
 		if strings.HasPrefix(line, "+++ b/") {
 			currentFile = strings.TrimPrefix(line, "+++ b/")
 			newLineNum = 0
 			continue
 		}
 
-		// Track hunk start line numbers.
 		if strings.HasPrefix(line, "@@") {
 			newLineNum = parseHunkNewStart(line)
 			continue
 		}
 
-		// Skip file header lines.
 		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
 			continue
 		}
 
-		// Added line.
 		if strings.HasPrefix(line, "+") {
-			content := line[1:] // strip leading "+"
+			content := line[1:]
 
-			if pEmptyCatch.MatchString(content) {
-				findings = append(findings, PatternFinding{
-					File:    currentFile,
-					Line:    newLineNum,
-					Pattern: "empty catch block",
-				})
-			}
-			if pExceptPass.MatchString(content) {
-				findings = append(findings, PatternFinding{
-					File:    currentFile,
-					Line:    newLineNum,
-					Pattern: "bare except: pass",
-				})
-			}
-			if pGoIgnoreErr.MatchString(content) && isLikelyErrorIgnore(content) {
-				findings = append(findings, PatternFinding{
-					File:    currentFile,
-					Line:    newLineNum,
-					Pattern: "ignored error (Go)",
-				})
-			}
+			// Single-line: lint/type suppression.
 			if pSuppression.MatchString(content) {
 				findings = append(findings, PatternFinding{
 					File:    currentFile,
@@ -84,50 +61,107 @@ func ScanDiffPatterns(rawDiff string) []PatternFinding {
 				})
 			}
 
+			addedLines = append(addedLines, addedLine{currentFile, newLineNum, content})
 			newLineNum++
-			continue
+		} else if !strings.HasPrefix(line, "-") {
+			// Context line.
+			newLineNum++
+		}
+	}
+
+	// Multi-line: detect error swallowing patterns across consecutive added lines.
+	findings = append(findings, detectErrorSwallowing(addedLines)...)
+
+	return findings
+}
+
+// detectErrorSwallowing finds multi-line error swallowing patterns:
+//   - Python: except ... : \n pass (or return None)
+//   - JS/TS/Java: catch(...) { } with empty body
+//   - Go: _, err := ...; _ = err  or just _ = err
+func detectErrorSwallowing(lines []addedLine) []PatternFinding {
+	var findings []PatternFinding
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line.content)
+
+		// Python: "except" line followed by "pass" or "return None" with nothing else.
+		if strings.HasPrefix(trimmed, "except") && strings.HasSuffix(trimmed, ":") {
+			// Look at next non-empty added line in same file.
+			if next := nextNonEmptyInFile(lines, i); next != nil {
+				nextTrimmed := strings.TrimSpace(next.content)
+				if nextTrimmed == "pass" || nextTrimmed == "return None" || nextTrimmed == "return" {
+					findings = append(findings, PatternFinding{
+						File:    line.file,
+						Line:    line.lineNum,
+						Pattern: "except → " + nextTrimmed,
+					})
+				}
+			}
 		}
 
-		// Removed line — do NOT increment newLineNum.
-		if strings.HasPrefix(line, "-") {
-			continue
+		// JS/TS/Java: catch block. Look for "catch" line, then "}" with nothing between.
+		if (strings.Contains(trimmed, "catch") && strings.HasSuffix(trimmed, "{")) ||
+			(strings.Contains(trimmed, "catch") && strings.Contains(trimmed, "{")) {
+			if next := nextNonEmptyInFile(lines, i); next != nil {
+				nextTrimmed := strings.TrimSpace(next.content)
+				if nextTrimmed == "}" || nextTrimmed == "} catch" {
+					findings = append(findings, PatternFinding{
+						File:    line.file,
+						Line:    line.lineNum,
+						Pattern: "empty catch block",
+					})
+				}
+			}
 		}
 
-		// Context line — increment newLineNum.
-		if newLineNum > 0 {
-			newLineNum++
+		// Go: _ = err or _, _ = someFunc()
+		if strings.HasPrefix(trimmed, "_") {
+			if strings.Contains(trimmed, "err") || strings.Contains(trimmed, "Err") {
+				findings = append(findings, PatternFinding{
+					File:    line.file,
+					Line:    line.lineNum,
+					Pattern: "error ignored (Go)",
+				})
+			}
 		}
 	}
 
 	return findings
 }
 
-// isLikelyErrorIgnore returns true when a Go line looks like an ignored error
-// assignment (trimmed line starts with "_" and contains "err" or "Err").
-func isLikelyErrorIgnore(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, "_") && (strings.Contains(trimmed, "err") || strings.Contains(trimmed, "Err"))
+type addedLine struct {
+	file    string
+	lineNum int
+	content string
 }
 
-// ScanDeletedTests parses `git diff --name-status` output and returns filenames
-// of deleted test files.
+// nextNonEmptyInFile returns the next non-empty added line in the same file, or nil.
+func nextNonEmptyInFile(lines []addedLine, i int) *addedLine {
+	file := lines[i].file
+	for j := i + 1; j < len(lines); j++ {
+		if lines[j].file != file {
+			return nil
+		}
+		if strings.TrimSpace(lines[j].content) != "" {
+			return &lines[j]
+		}
+	}
+	return nil
+}
+
+// ScanDeletedTests checks git diff --name-status output for deleted test files.
 func ScanDeletedTests(nameStatus string) []string {
 	var deleted []string
 	for _, line := range strings.Split(nameStatus, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if len(line) < 2 {
 			continue
 		}
-		// Match "D\t<filename>" or "D <filename>".
-		var filename string
-		if strings.HasPrefix(line, "D\t") {
-			filename = strings.TrimPrefix(line, "D\t")
-		} else if strings.HasPrefix(line, "D ") {
-			filename = strings.TrimSpace(strings.TrimPrefix(line, "D "))
-		} else {
+		if line[0] != 'D' {
 			continue
 		}
-
+		filename := strings.TrimSpace(line[1:])
 		lower := strings.ToLower(filename)
 		if strings.Contains(lower, "test") || strings.Contains(lower, "spec") || strings.HasSuffix(lower, "_test.go") {
 			deleted = append(deleted, filename)
@@ -136,41 +170,39 @@ func ScanDeletedTests(nameStatus string) []string {
 	return deleted
 }
 
-// BuildResult holds the outcome of a build command run.
+// BuildResult holds the output of a build check.
 type BuildResult struct {
 	OK         bool
 	ErrorCount int
 	Output     string
 }
 
-// RunBuildCheck runs buildCmd in projectDir with a 30-second timeout.
-// It captures combined stdout+stderr, reports success/failure, and counts error lines.
+// RunBuildCheck runs the configured build command and counts errors.
 func RunBuildCheck(projectDir string, buildCmd string) BuildResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	parts := strings.Fields(buildCmd)
-	var cmd *exec.Cmd
 	if len(parts) == 0 {
-		return BuildResult{OK: false, ErrorCount: 1, Output: "empty build command"}
+		return BuildResult{OK: true}
 	}
-	cmd = exec.CommandContext(ctx, parts[0], parts[1:]...)
+
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	cmd.Dir = projectDir
 
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-	output := buf.String()
+	combined := stdout.String() + stderr.String()
 
 	if err == nil {
-		return BuildResult{OK: true, ErrorCount: 0, Output: output}
+		return BuildResult{OK: true, Output: combined}
 	}
 
-	// Count lines containing "error" (case-insensitive) but exclude "0 error".
 	errorCount := 0
-	for _, line := range strings.Split(output, "\n") {
+	for _, line := range strings.Split(combined, "\n") {
 		lower := strings.ToLower(line)
 		if strings.Contains(lower, "error") && !strings.Contains(lower, "0 error") {
 			errorCount++
@@ -180,25 +212,24 @@ func RunBuildCheck(projectDir string, buildCmd string) BuildResult {
 		errorCount = 1
 	}
 
-	return BuildResult{OK: false, ErrorCount: errorCount, Output: output}
+	return BuildResult{OK: false, ErrorCount: errorCount, Output: combined}
 }
 
-// parseHunkNewStart extracts the new-file start line number from a hunk header
-// like "@@ -10,5 +20,8 @@". Returns 0 if parsing fails.
+// parseHunkNewStart extracts the new-file start line from a hunk header.
 func parseHunkNewStart(hunkLine string) int {
-	matches := pHunkHeader.FindStringSubmatch(hunkLine)
-	if len(matches) < 2 {
-		return 0
+	re := regexp.MustCompile(`\+(\d+)`)
+	m := re.FindStringSubmatch(hunkLine)
+	if len(m) < 2 {
+		return 1
 	}
-	n, err := strconv.Atoi(matches[1])
+	n, err := strconv.Atoi(m[1])
 	if err != nil {
-		return 0
+		return 1
 	}
 	return n
 }
 
-// ShouldRunBuild returns true if any changed file ends with a configured extension.
-// If no extensions are configured, it always returns true.
+// ShouldRunBuild checks if any changed file matches the configured build extensions.
 func ShouldRunBuild(changedFiles []string, extensions []string) bool {
 	if len(extensions) == 0 {
 		return true

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"hash/fnv"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 func runWatchLoop(projectDir string, cfg Config) {
 	session := NewSession(projectDir)
 	logPath := filepath.Join(projectDir, ".trupal.log")
+	var lastLogHash uint64
 
 	// Truncate log on start.
 	os.WriteFile(logPath, nil, 0644)
@@ -32,7 +34,14 @@ func runWatchLoop(projectDir string, cfg Config) {
 	for {
 		state := pollCycle(session, projectDir, cfg)
 		Render(state)
-		WriteLog(logPath, state)
+
+		// Only log when findings change (dedup identical cycles).
+		h := stateHash(state)
+		if h != lastLogHash {
+			WriteLog(logPath, state)
+			lastLogHash = h
+		}
+
 		time.Sleep(time.Duration(cfg.PollInterval) * time.Second)
 	}
 }
@@ -121,6 +130,35 @@ func buildTrend(history []int, buildOK bool) string {
 	return ""
 }
 
+// stateHash returns a hash of the meaningful display state (excluding elapsed time).
+// Used to deduplicate log entries.
+func stateHash(state DisplayState) uint64 {
+	h := fnv.New64a()
+	for _, f := range state.ChangedFiles {
+		h.Write([]byte(f))
+	}
+	for _, f := range state.UntrackedFiles {
+		h.Write([]byte(f))
+	}
+	if state.Build != nil {
+		if state.Build.OK {
+			h.Write([]byte("ok"))
+		} else {
+			fmt.Fprintf(h, "%d%s", state.Build.ErrorCount, state.Build.Trend)
+		}
+	}
+	for _, f := range state.TrajectoryFindings {
+		h.Write([]byte(f.Message))
+	}
+	for _, f := range state.PatternFindings {
+		fmt.Fprintf(h, "%s%d%s", f.File, f.Line, f.Pattern)
+	}
+	for _, f := range state.DeletedTests {
+		h.Write([]byte(f))
+	}
+	return h.Sum64()
+}
+
 // splitDiffByFile splits a unified diff into per-file chunks keyed by filename.
 // File boundaries are detected by "diff --git" headers; the filename is
 // extracted from "+++ b/<path>" lines.
@@ -178,7 +216,7 @@ func gitDiffNameOnly(projectDir string) []string {
 	return files
 }
 
-// gitUntrackedFiles returns untracked files (not in .gitignore).
+// gitUntrackedFiles returns untracked files (not in .gitignore), excluding trupal's own files.
 func gitUntrackedFiles(projectDir string) []string {
 	out := runGit(projectDir, "ls-files", "--others", "--exclude-standard")
 	if out == "" {
@@ -187,9 +225,10 @@ func gitUntrackedFiles(projectDir string) []string {
 	var files []string
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" {
-			files = append(files, line)
+		if line == "" || strings.HasPrefix(filepath.Base(line), ".trupal.") {
+			continue
 		}
+		files = append(files, line)
 	}
 	return files
 }

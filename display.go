@@ -118,8 +118,7 @@ func renderBuild(b *BuildDisplay) {
 }
 
 func formatPatternFinding(pf PatternFinding) string {
-	base := filepath.Base(pf.File)
-	return fmt.Sprintf("%s:%d %s", base, pf.Line, pf.Pattern)
+	return fmt.Sprintf("%s:%d %s", filepath.Base(pf.File), pf.Line, pf.Pattern)
 }
 
 // WriteLog appends a plain-text (no ANSI) summary of the display state to the log file.
