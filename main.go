@@ -10,7 +10,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop|watch> [dir]")
+		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop> [project-dir]")
 		os.Exit(1)
 	}
 
@@ -20,14 +20,15 @@ func main() {
 	case "stop":
 		cmdStop()
 	case "watch":
+		// Internal: called inside the split pane. Not user-facing.
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: trupal watch <gitRoot>")
+			fmt.Fprintln(os.Stderr, "internal error: watch requires git root")
 			os.Exit(1)
 		}
 		cmdWatch(os.Args[2])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
-		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop|watch> [dir]")
+		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop> [project-dir]")
 		os.Exit(1)
 	}
 }
@@ -99,7 +100,7 @@ func cmdStop() {
 	pidFile := filepath.Join(gitRoot, ".trupal.pid")
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: trupal is not running (no pid file at %s)\n", pidFile)
+		fmt.Fprintln(os.Stderr, "trupal is not running")
 		os.Exit(1)
 	}
 
