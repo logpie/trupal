@@ -174,12 +174,14 @@ func findGitRoot(dir string) (string, error) {
 	}
 }
 
-// getTmuxPaneID returns the current tmux pane ID via display-message.
+// getTmuxPaneID returns the pane ID of the pane this process is running in.
+// Uses $TMUX_PANE which tmux sets per-pane (unlike display-message which
+// reports the active pane, not necessarily the caller's pane).
 func getTmuxPaneID() (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{pane_id}").Output()
-	if err != nil {
-		return "", err
+	paneID := os.Getenv("TMUX_PANE")
+	if paneID == "" {
+		return "", fmt.Errorf("TMUX_PANE not set")
 	}
-	return strings.TrimSpace(string(out)), nil
+	return paneID, nil
 }
 
