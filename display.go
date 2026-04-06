@@ -23,40 +23,45 @@ type DisplayState struct {
 	Elapsed            string
 	ChangedFiles       []string
 	UntrackedFiles     []string
-	Build              *BuildDisplay // nil = no build configured or not run this cycle
+	Build              *BuildDisplay
 	TrajectoryFindings []Finding
-	PatternFindings    []PatternFinding
 	DeletedTests       []string
+	// Brain
+	BrainFindings []BrainFinding
+	BrainThinking bool
+	CCStatus      string // "active", "thinking", "idle"
 }
 
 // BuildDisplay carries build result info for rendering.
 type BuildDisplay struct {
 	OK         bool
 	ErrorCount int
-	Trend      string // e.g. "was 5", "stalled x4", "" (first run)
+	Trend      string
 }
 
 // Render clears the screen and draws a full status frame.
 func Render(state DisplayState) {
-	// Clear screen and move cursor to top-left.
 	fmt.Print("\033[2J\033[H")
 
-	// Header — keep it short for narrow panes.
+	// Header.
 	fmt.Printf("%s─── trupal ───%s\n", dim, reset)
-	fmt.Printf("%s%s | %s%s\n", dim, filepath.Base(state.ProjectDir), state.Elapsed, reset)
+	status := ""
+	if state.CCStatus != "" {
+		status = " cc:" + state.CCStatus
+	}
+	fmt.Printf("%s%s | %s%s%s\n", dim, filepath.Base(state.ProjectDir), state.Elapsed, status, reset)
 	fmt.Println()
 
-	hasContent := len(state.ChangedFiles) > 0 ||
+	// --- Status section ---
+	hasStatus := len(state.ChangedFiles) > 0 ||
 		len(state.UntrackedFiles) > 0 ||
 		state.Build != nil ||
 		len(state.TrajectoryFindings) > 0 ||
-		len(state.PatternFindings) > 0 ||
 		len(state.DeletedTests) > 0
 
-	if !hasContent {
+	if !hasStatus && len(state.BrainFindings) == 0 && !state.BrainThinking {
 		fmt.Printf("  %swatching...%s\n", dim, reset)
 	} else {
-		// Changed files — one per line, basename only to fit narrow pane.
 		if len(state.ChangedFiles) > 0 {
 			fmt.Printf("  %smodified:%s\n", dim, reset)
 			limit := 6
@@ -69,7 +74,6 @@ func Render(state DisplayState) {
 			}
 		}
 
-		// Untracked files.
 		if len(state.UntrackedFiles) > 0 {
 			fmt.Printf("  %snew:%s\n", dim, reset)
 			limit := 4
@@ -82,22 +86,29 @@ func Render(state DisplayState) {
 			}
 		}
 
-		fmt.Println()
-
-		// Build status.
 		if state.Build != nil {
 			renderBuild(state.Build)
 		}
 
-		// Findings — these are the important part.
 		for _, f := range state.TrajectoryFindings {
 			fmt.Printf("  %s▸ %s%s\n", yellow, f.Message, reset)
 		}
-		for _, pf := range state.PatternFindings {
-			fmt.Printf("  %s▸ %s%s\n", yellow, formatPatternFinding(pf), reset)
-		}
 		for _, dt := range state.DeletedTests {
 			fmt.Printf("  %s▸ deleted %s%s\n", yellow, filepath.Base(dt), reset)
+		}
+	}
+
+	// --- Brain section ---
+	if len(state.BrainFindings) > 0 || state.BrainThinking {
+		fmt.Println()
+		fmt.Printf("%s─── brain ────%s\n", dim, reset)
+
+		if state.BrainThinking {
+			fmt.Printf("  %sthinking...%s\n", dim, reset)
+		}
+
+		for _, f := range state.BrainFindings {
+			renderBrainFinding(f)
 		}
 	}
 
@@ -117,11 +128,38 @@ func renderBuild(b *BuildDisplay) {
 	fmt.Printf("  %s✗ %s%s\n", red, label, reset)
 }
 
-func formatPatternFinding(pf PatternFinding) string {
-	return fmt.Sprintf("%s:%d %s", filepath.Base(pf.File), pf.Line, pf.Pattern)
+func renderBrainFinding(f BrainFinding) {
+	ts := f.Timestamp.Format("15:04")
+	statusTag := ""
+	if f.Status == "resolved" {
+		statusTag = " [resolved]"
+	} else if f.Status == "waived" {
+		statusTag = " [waived]"
+	}
+
+	// Reasoning in dim.
+	if f.Reasoning != "" {
+		lines := strings.Split(f.Reasoning, "\n")
+		for i, line := range lines {
+			if i == 0 {
+				fmt.Printf("  %s%s%s %s%s\n", dim, ts, statusTag, line, reset)
+			} else {
+				fmt.Printf("  %s      %s%s\n", dim, line, reset)
+			}
+		}
+	}
+
+	// Nudge in yellow.
+	if f.Nudge != "" {
+		color := yellow
+		if f.Status == "resolved" || f.Status == "waived" {
+			color = dim
+		}
+		fmt.Printf("  %s  → %s%s\n", color, f.Nudge, reset)
+	}
 }
 
-// WriteLog appends a plain-text (no ANSI) summary of the display state to the log file.
+// WriteLog appends a plain-text summary to the log file.
 func WriteLog(logPath string, state DisplayState) {
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -154,11 +192,14 @@ func WriteLog(logPath string, state DisplayState) {
 	for _, finding := range state.TrajectoryFindings {
 		fmt.Fprintf(f, "  ! %s\n", finding.Message)
 	}
-	for _, pf := range state.PatternFindings {
-		fmt.Fprintf(f, "  ! %s:%d %s\n", pf.File, pf.Line, pf.Pattern)
-	}
 	for _, dt := range state.DeletedTests {
 		fmt.Fprintf(f, "  ! deleted test: %s\n", dt)
+	}
+	for _, bf := range state.BrainFindings {
+		fmt.Fprintf(f, "  brain [%s]: %s\n", bf.Status, bf.Reasoning)
+		if bf.Nudge != "" {
+			fmt.Fprintf(f, "    → %s\n", bf.Nudge)
+		}
 	}
 
 	fmt.Fprintf(f, "\n")
