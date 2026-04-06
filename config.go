@@ -13,11 +13,19 @@ type Config struct {
 	BuildCmd        string
 	BuildExtensions []string
 	PollInterval    int
+	BrainProvider   string // "claude" or "codex"
+	BrainModel      string // e.g. "sonnet", "opus", "haiku"
+	BrainEffort     string // "low", "medium", "high", "max"
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
-	return Config{PollInterval: 3}
+	return Config{
+		PollInterval:  3,
+		BrainProvider: "claude",
+		BrainModel:    "sonnet",
+		BrainEffort:   "high",
+	}
 }
 
 // loadConfig reads <projectDir>/.trupal.toml and returns a Config.
@@ -54,6 +62,12 @@ func loadConfig(projectDir string) Config {
 			if err == nil && n > 0 {
 				cfg.PollInterval = n
 			}
+		case "brain_provider":
+			cfg.BrainProvider = value
+		case "brain_model":
+			cfg.BrainModel = value
+		case "brain_effort":
+			cfg.BrainEffort = value
 		}
 	}
 
