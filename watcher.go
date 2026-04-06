@@ -2,88 +2,299 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"hash/fnv"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// runWatchLoop is the main polling loop. It creates a Session, prints startup
-// info, waits 3 seconds, then loops forever: poll → render → sleep.
 func runWatchLoop(projectDir string, cfg Config) {
 	session := NewSession(projectDir)
+	findings := NewFindingStore()
 	logPath := filepath.Join(projectDir, ".trupal.log")
 	var lastLogHash uint64
 
-	// Truncate log on start.
 	os.WriteFile(logPath, nil, 0644)
 
-	fmt.Printf("trupal watching: %s\n", shortenPath(projectDir))
-	if cfg.BuildCmd != "" {
-		fmt.Printf("build command: %s\n", cfg.BuildCmd)
-		if len(cfg.BuildExtensions) > 0 {
-			fmt.Printf("build extensions: %s\n", strings.Join(cfg.BuildExtensions, ", "))
-		}
+	// Find CC's session JSONL.
+	jsonlPath := FindSessionJSONL(projectDir)
+	if jsonlPath == "" {
+		fmt.Printf("trupal watching: %s\n", shortenPath(projectDir))
+		fmt.Println("no CC session found — watching for new sessions...")
+	} else {
+		fmt.Printf("trupal watching: %s\n", shortenPath(projectDir))
+		fmt.Printf("CC session: %s\n", filepath.Base(jsonlPath))
 	}
-	fmt.Printf("poll interval: %ds\n", cfg.PollInterval)
 
+	if cfg.BuildCmd != "" {
+		fmt.Printf("build: %s\n", cfg.BuildCmd)
+	}
+	fmt.Printf("brain: %s/%s (effort: %s)\n", cfg.BrainProvider, cfg.BrainModel, cfg.BrainEffort)
+	fmt.Println("starting in 3s...")
 	time.Sleep(3 * time.Second)
 
+	// Start JSONL watcher.
+	var jsonlWatcher *JSONLWatcher
+	if jsonlPath != "" {
+		var err error
+		jsonlWatcher, err = NewJSONLWatcher(jsonlPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not watch JSONL: %v\n", err)
+		}
+	}
+
+	// Start brain.
+	var brain *Brain
+	if jsonlPath != "" {
+		var err error
+		brain, err = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not start brain: %v\n", err)
+		}
+	}
+
+	// Debounce channel: AfterFunc sends the reason here; loop reads it next iteration.
+	debounceCh := make(chan string, 1)
+	var debounceTimer *time.Timer
+
+	brainBusy := false
+	brainThinking := false
+	interval := time.Duration(cfg.PollInterval) * time.Second
+
+	// Main loop ticker.
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Idle detection.
+	lastJSONLActivity := time.Now()
+	idleNotified := false
+
 	for {
-		state := pollCycle(session, projectDir, cfg)
+		triggerBrain := false
+		triggerReason := ""
+
+		// Drain any pending debounce signal.
+		select {
+		case reason := <-debounceCh:
+			if !brainBusy {
+				triggerBrain = true
+				triggerReason = reason
+			}
+		default:
+		}
+
+		// Check for JSONL events (non-blocking).
+		if jsonlWatcher != nil {
+			select {
+			case <-jsonlWatcher.Events:
+				lastJSONLActivity = time.Now()
+				idleNotified = false
+
+				entries := jsonlWatcher.ReadNew()
+				significant := false
+				for _, e := range entries {
+					if e.Type == "assistant" && e.HasText {
+						significant = true // CC made a claim
+					}
+					if e.Type == "user" && e.Role == "user" {
+						significant = true // tool result or new prompt
+					}
+				}
+
+				if significant && !brainBusy {
+					// Debounce: wait 2s for burst to settle.
+					if debounceTimer != nil {
+						debounceTimer.Stop()
+					}
+					debounceTimer = time.AfterFunc(2*time.Second, func() {
+						select {
+						case debounceCh <- "CC session updated":
+						default:
+						}
+					})
+				}
+			default:
+				// No JSONL events.
+			}
+		}
+
+		// Check for idle (60s since last JSONL activity).
+		if jsonlWatcher != nil && !idleNotified && time.Since(lastJSONLActivity) > 60*time.Second {
+			if !brainBusy {
+				triggerBrain = true
+				triggerReason = "CC has been idle for 60s — good time for a session review"
+			}
+			idleNotified = true
+		}
+
+		// Git poll cycle.
+		changedFiles := gitDiffNameOnly(projectDir)
+		rawDiff := gitDiff(projectDir)
+		nameStatus := gitDiffNameStatus(projectDir)
+		untrackedFiles := gitUntrackedFiles(projectDir)
+
+		fileDiffs := splitDiffByFile(rawDiff)
+		session.UpdateFileEdits(fileDiffs)
+
+		// Build check.
+		var buildDisplay *BuildDisplay
+		if cfg.BuildCmd != "" && len(changedFiles) > 0 && ShouldRunBuild(changedFiles, cfg.BuildExtensions) {
+			result := RunBuildCheck(projectDir, cfg.BuildCmd)
+			session.AppendErrorCount(result.ErrorCount)
+
+			trend := buildTrend(session.ErrorHistory, result.OK)
+			buildDisplay = &BuildDisplay{
+				OK:         result.OK,
+				ErrorCount: result.ErrorCount,
+				Trend:      trend,
+			}
+
+			// Build status changed → trigger brain.
+			if !brainBusy && len(session.ErrorHistory) >= 2 {
+				prev := session.ErrorHistory[len(session.ErrorHistory)-2]
+				curr := result.ErrorCount
+				if (prev == 0 && curr > 0) || (prev > 0 && curr == 0) {
+					triggerBrain = true
+					triggerReason = fmt.Sprintf("build status changed: %d → %d errors", prev, curr)
+				}
+			}
+		}
+
+		deletedTests := ScanDeletedTests(nameStatus)
+		trajectoryFindings := session.EvalTrajectory()
+
+		// Trajectory signal → trigger brain.
+		if !brainBusy && len(trajectoryFindings) > 0 && !triggerBrain {
+			triggerBrain = true
+			triggerReason = "trajectory signal: " + trajectoryFindings[0].Message
+		}
+
+		// CC status.
+		ccStatus := ""
+		if jsonlPath != "" {
+			ccStatus = DetectCCStatus(jsonlPath)
+		}
+
+		// Trigger brain analysis if needed.
+		if triggerBrain && brain != nil && !brainBusy {
+			brainBusy = true
+			brainThinking = true
+
+			go func(reason string) {
+				defer func() {
+					brainBusy = false
+					brainThinking = false
+				}()
+
+				resp, err := brain.Notify(reason)
+				if err != nil {
+					// Brain may have crashed — try restart.
+					brain.Stop()
+					newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second)
+					if restartErr == nil {
+						brain = newBrain
+					}
+					return
+				}
+
+				// Process response.
+				if resp != nil {
+					for _, nudge := range resp.Nudges {
+						findings.Add(nudge.Severity, nudge.Message, resp.Reasoning)
+					}
+					if len(resp.ResolvedFindings) > 0 {
+						findings.Resolve(resp.ResolvedFindings)
+					}
+				}
+			}(triggerReason)
+		}
+
+		// Check for new CC session.
+		if jsonlPath != "" {
+			if newPath := CheckForNewSession(projectDir, jsonlPath); newPath != "" {
+				jsonlPath = newPath
+				if jsonlWatcher != nil {
+					jsonlWatcher.Close()
+				}
+				jsonlWatcher, _ = NewJSONLWatcher(jsonlPath)
+			}
+		} else {
+			// No session yet — keep looking.
+			jsonlPath = FindSessionJSONL(projectDir)
+			if jsonlPath != "" {
+				jsonlWatcher, _ = NewJSONLWatcher(jsonlPath)
+				brain, _ = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+			}
+		}
+
+		// Build display state.
+		state := DisplayState{
+			ProjectDir:         shortenPath(projectDir),
+			Elapsed:            session.Elapsed(),
+			ChangedFiles:       changedFiles,
+			UntrackedFiles:     untrackedFiles,
+			Build:              buildDisplay,
+			TrajectoryFindings: trajectoryFindings,
+			DeletedTests:       deletedTests,
+			BrainFindings:      findings.Recent(10),
+			BrainThinking:      brainThinking,
+			CCStatus:           ccStatus,
+		}
+
 		Render(state)
 
-		// Only log when findings change (dedup identical cycles).
 		h := stateHash(state)
 		if h != lastLogHash {
 			WriteLog(logPath, state)
 			lastLogHash = h
 		}
 
-		time.Sleep(time.Duration(cfg.PollInterval) * time.Second)
+		<-ticker.C
 	}
 }
 
-// pollCycle runs one watch cycle and returns a DisplayState ready for rendering.
-func pollCycle(session *Session, projectDir string, cfg Config) DisplayState {
-	changedFiles := gitDiffNameOnly(projectDir)
-	rawDiff := gitDiff(projectDir)
-	nameStatus := gitDiffNameStatus(projectDir)
+// --- Helpers (unchanged from MVP) ---
 
-	fileDiffs := splitDiffByFile(rawDiff)
-	session.UpdateFileEdits(fileDiffs)
+// splitDiffByFile splits a unified diff into per-file chunks keyed by filename.
+// File boundaries are detected by "diff --git" headers; the filename is
+// extracted from "+++ b/<path>" lines.
+func splitDiffByFile(rawDiff string) map[string]string {
+	result := make(map[string]string)
+	if rawDiff == "" {
+		return result
+	}
 
-	var buildDisplay *BuildDisplay
-	if cfg.BuildCmd != "" && len(changedFiles) > 0 && ShouldRunBuild(changedFiles, cfg.BuildExtensions) {
-		result := RunBuildCheck(projectDir, cfg.BuildCmd)
-		session.AppendErrorCount(result.ErrorCount)
+	lines := strings.Split(rawDiff, "\n")
+	var currentFile string
+	var buf strings.Builder
 
-		trend := buildTrend(session.ErrorHistory, result.OK)
-		buildDisplay = &BuildDisplay{
-			OK:         result.OK,
-			ErrorCount: result.ErrorCount,
-			Trend:      trend,
+	flush := func() {
+		if currentFile != "" && buf.Len() > 0 {
+			result[currentFile] = buf.String()
 		}
 	}
 
-	patternFindings := ScanDiffPatterns(rawDiff)
-	deletedTests := ScanDeletedTests(nameStatus)
-	trajectoryFindings := session.EvalTrajectory()
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") {
+			flush()
+			currentFile = ""
+			buf.Reset()
+		}
 
-	untrackedFiles := gitUntrackedFiles(projectDir)
+		if strings.HasPrefix(line, "+++ b/") {
+			currentFile = strings.TrimPrefix(line, "+++ b/")
+		}
 
-	return DisplayState{
-		ProjectDir:         shortenPath(projectDir),
-		Elapsed:            session.Elapsed(),
-		ChangedFiles:       changedFiles,
-		UntrackedFiles:     untrackedFiles,
-		Build:              buildDisplay,
-		TrajectoryFindings: trajectoryFindings,
-		PatternFindings:    patternFindings,
-		DeletedTests:       deletedTests,
+		if currentFile != "" || strings.HasPrefix(line, "diff --git ") {
+			buf.WriteString(line)
+			buf.WriteByte('\n')
+		}
 	}
+	flush()
+
+	return result
 }
 
 // buildTrend computes the Trend string for BuildDisplay from the error history.
@@ -150,53 +361,15 @@ func stateHash(state DisplayState) uint64 {
 	for _, f := range state.TrajectoryFindings {
 		h.Write([]byte(f.Message))
 	}
-	for _, f := range state.PatternFindings {
-		fmt.Fprintf(h, "%s%d%s", f.File, f.Line, f.Pattern)
-	}
 	for _, f := range state.DeletedTests {
 		h.Write([]byte(f))
 	}
+	for _, f := range state.BrainFindings {
+		h.Write([]byte(f.ID))
+		h.Write([]byte(f.Status))
+	}
+	h.Write([]byte(fmt.Sprintf("%v", state.BrainThinking)))
 	return h.Sum64()
-}
-
-// splitDiffByFile splits a unified diff into per-file chunks keyed by filename.
-// File boundaries are detected by "diff --git" headers; the filename is
-// extracted from "+++ b/<path>" lines.
-func splitDiffByFile(rawDiff string) map[string]string {
-	result := make(map[string]string)
-	if rawDiff == "" {
-		return result
-	}
-
-	lines := strings.Split(rawDiff, "\n")
-	var currentFile string
-	var buf strings.Builder
-
-	flush := func() {
-		if currentFile != "" && buf.Len() > 0 {
-			result[currentFile] = buf.String()
-		}
-	}
-
-	for _, line := range lines {
-		if strings.HasPrefix(line, "diff --git ") {
-			flush()
-			currentFile = ""
-			buf.Reset()
-		}
-
-		if strings.HasPrefix(line, "+++ b/") {
-			currentFile = strings.TrimPrefix(line, "+++ b/")
-		}
-
-		if currentFile != "" || strings.HasPrefix(line, "diff --git ") {
-			buf.WriteString(line)
-			buf.WriteByte('\n')
-		}
-	}
-	flush()
-
-	return result
 }
 
 // gitDiffNameOnly returns the list of changed files relative to HEAD using
