@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -12,6 +13,10 @@ import (
 // info, waits 3 seconds, then loops forever: poll → render → sleep.
 func runWatchLoop(projectDir string, cfg Config) {
 	session := NewSession(projectDir)
+	logPath := filepath.Join(projectDir, ".trupal.log")
+
+	// Truncate log on start.
+	os.WriteFile(logPath, nil, 0644)
 
 	fmt.Printf("trupal watching: %s\n", shortenPath(projectDir))
 	if cfg.BuildCmd != "" {
@@ -27,6 +32,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 	for {
 		state := pollCycle(session, projectDir, cfg)
 		Render(state)
+		WriteLog(logPath, state)
 		time.Sleep(time.Duration(cfg.PollInterval) * time.Second)
 	}
 }

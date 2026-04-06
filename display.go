@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -38,10 +41,9 @@ func Render(state DisplayState) {
 	// Clear screen and move cursor to top-left.
 	fmt.Print("\033[2J\033[H")
 
-	// Header.
-	fmt.Printf("%s--- TruPal ---%s\n", dim, reset)
-	fmt.Printf("%swatching: %s%s\n", dim, state.ProjectDir, reset)
-	fmt.Printf("%ssession: %s%s\n", dim, state.Elapsed, reset)
+	// Header — keep it short for narrow panes.
+	fmt.Printf("%s─── trupal ───%s\n", dim, reset)
+	fmt.Printf("%s%s | %s%s\n", dim, filepath.Base(state.ProjectDir), state.Elapsed, reset)
 	fmt.Println()
 
 	hasContent := len(state.ChangedFiles) > 0 ||
@@ -54,73 +56,111 @@ func Render(state DisplayState) {
 	if !hasContent {
 		fmt.Printf("  %swatching...%s\n", dim, reset)
 	} else {
-		// Changed files.
+		// Changed files — one per line, basename only to fit narrow pane.
 		if len(state.ChangedFiles) > 0 {
-			limit := 8
-			shown := state.ChangedFiles
-			if len(shown) > limit {
-				extra := len(shown) - limit
-				shown = shown[:limit]
-				fmt.Printf("  %schanged: %s +%d more%s\n", dim, strings.Join(shown, ", "), extra, reset)
-			} else {
-				fmt.Printf("  %schanged: %s%s\n", dim, strings.Join(shown, ", "), reset)
+			fmt.Printf("  %smodified:%s\n", dim, reset)
+			limit := 6
+			for i, f := range state.ChangedFiles {
+				if i >= limit {
+					fmt.Printf("  %s+%d more%s\n", dim, len(state.ChangedFiles)-limit, reset)
+					break
+				}
+				fmt.Printf("  %s· %s%s\n", dim, filepath.Base(f), reset)
 			}
-			fmt.Println()
 		}
 
 		// Untracked files.
 		if len(state.UntrackedFiles) > 0 {
-			limit := 5
-			shown := state.UntrackedFiles
-			if len(shown) > limit {
-				extra := len(shown) - limit
-				shown = shown[:limit]
-				fmt.Printf("  %snew: %s +%d more%s\n", dim, strings.Join(shown, ", "), extra, reset)
-			} else {
-				fmt.Printf("  %snew: %s%s\n", dim, strings.Join(shown, ", "), reset)
+			fmt.Printf("  %snew:%s\n", dim, reset)
+			limit := 4
+			for i, f := range state.UntrackedFiles {
+				if i >= limit {
+					fmt.Printf("  %s+%d more%s\n", dim, len(state.UntrackedFiles)-limit, reset)
+					break
+				}
+				fmt.Printf("  %s· %s%s\n", dim, filepath.Base(f), reset)
 			}
-			fmt.Println()
 		}
+
+		fmt.Println()
 
 		// Build status.
 		if state.Build != nil {
-			fmt.Print("  build: ")
 			renderBuild(state.Build)
-			fmt.Println()
-			fmt.Println()
 		}
 
-		// Trajectory findings.
+		// Findings — these are the important part.
 		for _, f := range state.TrajectoryFindings {
-			fmt.Printf("  %s! %s%s\n", yellow, f.Message, reset)
+			fmt.Printf("  %s▸ %s%s\n", yellow, f.Message, reset)
 		}
-
-		// Pattern findings.
 		for _, pf := range state.PatternFindings {
-			fmt.Printf("  %s! %s (%s:+%d)%s\n", yellow, pf.Pattern, pf.File, pf.Line, reset)
+			fmt.Printf("  %s▸ %s%s\n", yellow, formatPatternFinding(pf), reset)
 		}
-
-		// Deleted tests.
 		for _, dt := range state.DeletedTests {
-			fmt.Printf("  %s! deleted %s%s\n", yellow, dt, reset)
+			fmt.Printf("  %s▸ deleted %s%s\n", yellow, filepath.Base(dt), reset)
 		}
 	}
 
 	fmt.Println()
-	// Footer.
-	fmt.Printf("  %slast check: just now%s\n", dim, reset)
-	fmt.Printf("%s%s%s\n", dim, strings.Repeat("-", 40), reset)
+	fmt.Printf("%s──────────────%s\n", dim, reset)
 }
 
-// renderBuild prints the build status inline (no trailing newline).
 func renderBuild(b *BuildDisplay) {
 	if b.OK {
-		fmt.Printf("%s%sclean%s", green, bold, reset)
+		fmt.Printf("  %s✓ build clean%s\n", green, reset)
 		return
 	}
 	label := fmt.Sprintf("%d errors", b.ErrorCount)
 	if b.Trend != "" {
-		label = fmt.Sprintf("%s (%s)", label, b.Trend)
+		label += " (" + b.Trend + ")"
 	}
-	fmt.Printf("%s%s%s", red, label, reset)
+	fmt.Printf("  %s✗ %s%s\n", red, label, reset)
+}
+
+func formatPatternFinding(pf PatternFinding) string {
+	base := filepath.Base(pf.File)
+	return fmt.Sprintf("%s:%d %s", base, pf.Line, pf.Pattern)
+}
+
+// WriteLog appends a plain-text (no ANSI) summary of the display state to the log file.
+func WriteLog(logPath string, state DisplayState) {
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	ts := time.Now().Format("15:04:05")
+	fmt.Fprintf(f, "--- %s (session: %s) ---\n", ts, state.Elapsed)
+
+	if len(state.ChangedFiles) > 0 {
+		fmt.Fprintf(f, "  modified: %s\n", strings.Join(state.ChangedFiles, ", "))
+	}
+	if len(state.UntrackedFiles) > 0 {
+		fmt.Fprintf(f, "  new: %s\n", strings.Join(state.UntrackedFiles, ", "))
+	}
+
+	if state.Build != nil {
+		if state.Build.OK {
+			fmt.Fprintf(f, "  build: clean\n")
+		} else {
+			trend := ""
+			if state.Build.Trend != "" {
+				trend = " (" + state.Build.Trend + ")"
+			}
+			fmt.Fprintf(f, "  build: %d errors%s\n", state.Build.ErrorCount, trend)
+		}
+	}
+
+	for _, finding := range state.TrajectoryFindings {
+		fmt.Fprintf(f, "  ! %s\n", finding.Message)
+	}
+	for _, pf := range state.PatternFindings {
+		fmt.Fprintf(f, "  ! %s:%d %s\n", pf.File, pf.Line, pf.Pattern)
+	}
+	for _, dt := range state.DeletedTests {
+		fmt.Fprintf(f, "  ! deleted test: %s\n", dt)
+	}
+
+	fmt.Fprintf(f, "\n")
 }
