@@ -11,6 +11,9 @@ import (
 )
 
 func runWatchLoop(projectDir string, cfg Config) {
+	InitDebugLog(projectDir)
+	defer CloseDebugLog()
+
 	session := NewSession(projectDir)
 	findings := NewFindingStore()
 	logPath := filepath.Join(projectDir, ".trupal.log")
@@ -20,6 +23,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 
 	// Find CC's session JSONL.
 	jsonlPath := FindSessionJSONL(projectDir)
+	Debugf("[watcher] JSONL path: %q", jsonlPath)
 	if jsonlPath == "" {
 		fmt.Printf("trupal watching: %s\n", shortenPath(projectDir))
 		fmt.Println("no CC session found — watching for new sessions...")
@@ -93,13 +97,14 @@ func runWatchLoop(projectDir string, cfg Config) {
 				idleNotified = false
 
 				entries := jsonlWatcher.ReadNew()
+				Debugf("[watcher] JSONL event: %d new entries", len(entries))
 				significant := false
 				for _, e := range entries {
 					if e.Type == "assistant" && e.HasText {
-						significant = true // CC made a claim
+						significant = true
 					}
 					if e.Type == "user" && e.Role == "user" {
-						significant = true // tool result or new prompt
+						significant = true
 					}
 				}
 
@@ -179,6 +184,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 
 		// Trigger brain analysis if needed.
 		if triggerBrain && brain != nil && !brainBusy {
+			Debugf("[watcher] triggering brain: %s", triggerReason)
 			brainBusy = true
 			brainThinking = true
 

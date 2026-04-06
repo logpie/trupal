@@ -75,10 +75,12 @@ If nothing noteworthy: {"reasoning": "checked X, Y, Z — nothing to flag", "nud
 
 Guidelines:
 - Be specific: quote file names, line numbers, tool names, JSONL timestamps
-- Be concise: nudges display in a narrow tmux pane (under 120 chars)
+- CONCISE reasoning: 2-3 SHORT sentences max. Your output displays in a narrow tmux pane (~30 chars wide). No paragraphs.
+- CONCISE nudges: under 80 chars each
 - Don't nag: minor style issues are not worth flagging
 - High precision: only flag things you're confident about
-- Check your active findings: if CC addressed one, mark it resolved`, jsonlPath, projectDir, findingsJSON)
+- Check your active findings: if CC addressed one, mark it resolved
+- If nothing important to report, say so briefly — don't fill space with summaries of what CC is doing`, jsonlPath, projectDir, findingsJSON)
 }
 
 // StartBrain spawns the CC subprocess.
@@ -112,9 +114,12 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain,
 	// Discard stderr.
 	cmd.Stderr = nil
 
+	Debugf("[brain] starting: claude %s", strings.Join(args, " "))
 	if err := cmd.Start(); err != nil {
+		Debugf("[brain] start failed: %v", err)
 		return nil, fmt.Errorf("start brain: %w", err)
 	}
+	Debugf("[brain] started (pid %d)", cmd.Process.Pid)
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB lines
@@ -141,9 +146,12 @@ func (b *Brain) Notify(message string) (*BrainResponse, error) {
 	}
 
 	// Send user message.
+	Debugf("[brain] notify: %s", truncate(message, 200))
+	start := time.Now()
 	msg := fmt.Sprintf(`{"type":"user","message":{"role":"user","content":%s}}`, jsonString(message))
 	if _, err := fmt.Fprintln(b.stdin, msg); err != nil {
 		b.running = false
+		Debugf("[brain] write failed: %v", err)
 		return nil, fmt.Errorf("write to brain: %w", err)
 	}
 
@@ -183,16 +191,21 @@ func (b *Brain) Notify(message string) (*BrainResponse, error) {
 		}
 	}
 
+	elapsed := time.Since(start)
 	if lastText == "" {
+		Debugf("[brain] no response after %s", elapsed)
 		return &BrainResponse{Reasoning: "(no response from brain)"}, nil
 	}
+
+	Debugf("[brain] response received after %s (%d chars)", elapsed, len(lastText))
 
 	// Parse the JSON from the last text block.
 	resp, err := parseBrainJSON(lastText)
 	if err != nil {
-		// Brain didn't output valid JSON — treat the whole text as reasoning.
+		Debugf("[brain] JSON parse failed, using raw text: %v", err)
 		return &BrainResponse{Reasoning: lastText}, nil
 	}
+	Debugf("[brain] %d nudges, %d resolved, reasoning: %s", len(resp.Nudges), len(resp.ResolvedFindings), truncate(resp.Reasoning, 100))
 	return resp, nil
 }
 
@@ -217,8 +230,17 @@ func parseBrainJSON(text string) (*BrainResponse, error) {
 	return nil, fmt.Errorf("no valid JSON in brain response")
 }
 
+// truncate shortens s to maxLen with "..." suffix if needed.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 // Stop kills the brain subprocess.
 func (b *Brain) Stop() {
+	Debugf("[brain] stopping")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
