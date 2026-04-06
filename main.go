@@ -68,8 +68,8 @@ func cmdStart() {
 		os.Exit(1)
 	}
 
-	// Find CC's pane to split alongside it.
-	ccPane := findCCPane()
+	// Find CC's pane to split alongside it (match by project dir).
+	ccPane := findCCPane(gitRoot)
 
 	// Launch watch command in a new tmux split pane.
 	// Use "--" so tmux execs directly without shell (avoids word-splitting on paths with spaces).
@@ -181,16 +181,23 @@ func findGitRoot(dir string) (string, error) {
 	}
 }
 
-// findCCPane searches all tmux panes for one running `claude` and returns its pane ID.
+// findCCPane searches all tmux panes for one running `claude` in the given project directory.
 // Returns "" if not found (falls back to splitting the current pane).
-func findCCPane() string {
-	out, err := exec.Command("tmux", "list-panes", "-s", "-F", "#{pane_id} #{pane_current_command}").Output()
+func findCCPane(projectDir string) string {
+	out, err := exec.Command("tmux", "list-panes", "-s", "-F", "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}").Output()
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) == 2 && parts[1] == "claude" {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) == 3 && parts[1] == "claude" && parts[2] == projectDir {
+			return parts[0]
+		}
+	}
+	// Fallback: any claude pane (better than nothing).
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) >= 2 && parts[1] == "claude" {
 			return parts[0]
 		}
 	}
