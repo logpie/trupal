@@ -68,15 +68,13 @@ func cmdStart() {
 		os.Exit(1)
 	}
 
-	// Launch watch command in a new tmux split pane
-	watchCmd := fmt.Sprintf("%s watch %s", self, gitRoot)
-	splitArgs := []string{"split-window", "-h", "-l", "30%", "-d", watchCmd}
-	out, err := exec.Command("tmux", splitArgs...).Output()
-	if err != nil {
+	// Launch watch command in a new tmux split pane.
+	// Use "--" so tmux execs directly without shell (avoids word-splitting on paths with spaces).
+	if err := exec.Command("tmux", "split-window", "-h", "-l", "30%", "-d",
+		"--", self, "watch", gitRoot).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error creating tmux pane: %v\n", err)
 		os.Exit(1)
 	}
-	_ = out
 
 	fmt.Printf("trupal started for %s\n", gitRoot)
 }
