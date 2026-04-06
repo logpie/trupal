@@ -99,9 +99,14 @@ func runWatchLoop(projectDir string, cfg Config) {
 				entries := jsonlWatcher.ReadNew()
 				Debugf("[watcher] JSONL event: %d new entries", len(entries))
 				significant := false
+				var summary []string
 				for _, e := range entries {
 					if e.Type == "assistant" && e.HasText {
 						significant = true
+						summary = append(summary, "CC sent text response")
+					}
+					if e.Type == "assistant" && e.HasTool {
+						summary = append(summary, "CC used a tool")
 					}
 					if e.Type == "user" && e.Role == "user" {
 						significant = true
@@ -109,13 +114,17 @@ func runWatchLoop(projectDir string, cfg Config) {
 				}
 
 				if significant && !brainBusy {
+					reason := "CC session updated"
+					if len(summary) > 0 {
+						reason = strings.Join(summary, "; ")
+					}
 					// Debounce: wait 2s for burst to settle.
 					if debounceTimer != nil {
 						debounceTimer.Stop()
 					}
 					debounceTimer = time.AfterFunc(2*time.Second, func() {
 						select {
-						case debounceCh <- "CC session updated":
+						case debounceCh <- reason:
 						default:
 						}
 					})
