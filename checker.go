@@ -115,15 +115,21 @@ func detectErrorSwallowing(lines []addedLine) []PatternFinding {
 			}
 		}
 
-		// Go: _ = err or _, _ = someFunc()
-		if strings.HasPrefix(trimmed, "_") {
-			if strings.Contains(trimmed, "err") || strings.Contains(trimmed, "Err") {
-				findings = append(findings, PatternFinding{
-					File:    line.file,
-					Line:    line.lineNum,
-					Pattern: "error ignored (Go)",
-				})
-			}
+		// Go error ignoring patterns:
+		// 1. "_, _ :=" or ", _ =" — discarding a return value (almost always an error)
+		// 2. "_ = someFunc(...)" — discarding error return
+		if strings.Contains(trimmed, ", _ :=") || strings.Contains(trimmed, ", _ =") {
+			findings = append(findings, PatternFinding{
+				File:    line.file,
+				Line:    line.lineNum,
+				Pattern: "return value discarded",
+			})
+		} else if strings.HasPrefix(trimmed, "_ =") && strings.Contains(trimmed, "(") {
+			findings = append(findings, PatternFinding{
+				File:    line.file,
+				Line:    line.lineNum,
+				Pattern: "return value discarded",
+			})
 		}
 	}
 
