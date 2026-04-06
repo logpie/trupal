@@ -68,10 +68,17 @@ func cmdStart() {
 		os.Exit(1)
 	}
 
+	// Find CC's pane to split alongside it.
+	ccPane := findCCPane()
+
 	// Launch watch command in a new tmux split pane.
 	// Use "--" so tmux execs directly without shell (avoids word-splitting on paths with spaces).
-	if err := exec.Command("tmux", "split-window", "-h", "-l", "30%", "-d",
-		"--", self, "watch", gitRoot).Run(); err != nil {
+	args := []string{"split-window", "-h", "-l", "30%", "-d"}
+	if ccPane != "" {
+		args = append(args, "-t", ccPane)
+	}
+	args = append(args, "--", self, "watch", gitRoot)
+	if err := exec.Command("tmux", args...).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error creating tmux pane: %v\n", err)
 		os.Exit(1)
 	}
@@ -172,6 +179,22 @@ func findGitRoot(dir string) (string, error) {
 		}
 		current = parent
 	}
+}
+
+// findCCPane searches all tmux panes for one running `claude` and returns its pane ID.
+// Returns "" if not found (falls back to splitting the current pane).
+func findCCPane() string {
+	out, err := exec.Command("tmux", "list-panes", "-s", "-F", "#{pane_id} #{pane_current_command}").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) == 2 && parts[1] == "claude" {
+			return parts[0]
+		}
+	}
+	return ""
 }
 
 // getTmuxPaneID returns the pane ID of the pane this process is running in.
