@@ -57,10 +57,13 @@ func pollCycle(session *Session, projectDir string, cfg Config) DisplayState {
 	deletedTests := ScanDeletedTests(nameStatus)
 	trajectoryFindings := session.EvalTrajectory()
 
+	untrackedFiles := gitUntrackedFiles(projectDir)
+
 	return DisplayState{
 		ProjectDir:         shortenPath(projectDir),
 		Elapsed:            session.Elapsed(),
 		ChangedFiles:       changedFiles,
+		UntrackedFiles:     untrackedFiles,
 		Build:              buildDisplay,
 		TrajectoryFindings: trajectoryFindings,
 		PatternFindings:    patternFindings,
@@ -156,6 +159,22 @@ func splitDiffByFile(rawDiff string) map[string]string {
 // "git diff --name-only HEAD".
 func gitDiffNameOnly(projectDir string) []string {
 	out := runGit(projectDir, "diff", "--name-only", "HEAD")
+	if out == "" {
+		return nil
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	return files
+}
+
+// gitUntrackedFiles returns untracked files (not in .gitignore).
+func gitUntrackedFiles(projectDir string) []string {
+	out := runGit(projectDir, "ls-files", "--others", "--exclude-standard")
 	if out == "" {
 		return nil
 	}

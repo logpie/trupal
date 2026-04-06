@@ -1,0 +1,3 @@
+build_cmd = "go vet ./..."
+build_extensions = [".go"]
+poll_interval = 3

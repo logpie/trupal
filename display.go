@@ -19,6 +19,7 @@ type DisplayState struct {
 	ProjectDir         string
 	Elapsed            string
 	ChangedFiles       []string
+	UntrackedFiles     []string
 	Build              *BuildDisplay // nil = no build configured or not run this cycle
 	TrajectoryFindings []Finding
 	PatternFindings    []PatternFinding
@@ -44,6 +45,7 @@ func Render(state DisplayState) {
 	fmt.Println()
 
 	hasContent := len(state.ChangedFiles) > 0 ||
+		len(state.UntrackedFiles) > 0 ||
 		state.Build != nil ||
 		len(state.TrajectoryFindings) > 0 ||
 		len(state.PatternFindings) > 0 ||
@@ -62,6 +64,20 @@ func Render(state DisplayState) {
 				fmt.Printf("  %schanged: %s +%d more%s\n", dim, strings.Join(shown, ", "), extra, reset)
 			} else {
 				fmt.Printf("  %schanged: %s%s\n", dim, strings.Join(shown, ", "), reset)
+			}
+			fmt.Println()
+		}
+
+		// Untracked files.
+		if len(state.UntrackedFiles) > 0 {
+			limit := 5
+			shown := state.UntrackedFiles
+			if len(shown) > limit {
+				extra := len(shown) - limit
+				shown = shown[:limit]
+				fmt.Printf("  %snew: %s +%d more%s\n", dim, strings.Join(shown, ", "), extra, reset)
+			} else {
+				fmt.Printf("  %snew: %s%s\n", dim, strings.Join(shown, ", "), reset)
 			}
 			fmt.Println()
 		}
