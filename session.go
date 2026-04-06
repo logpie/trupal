@@ -42,6 +42,7 @@ func (s *Session) UpdateFileEdits(fileDiffs map[string]string) {
 	for filename := range s.LastDiffHash {
 		if _, ok := fileDiffs[filename]; !ok {
 			delete(s.LastDiffHash, filename)
+			delete(s.FileEditCount, filename)
 		}
 	}
 }
@@ -72,40 +73,24 @@ func (s *Session) EvalTrajectory() []Finding {
 		}
 	}
 
-	// Need at least 3 data points for error trend analysis.
+	// Error trend analysis (need at least 3 data points).
+	// Note: stall and fix-then-break are shown in the build trend line (buildTrend in watcher.go).
+	// Here we detect trending upward (monotonically non-decreasing with at least one increase).
 	history := s.ErrorHistory
 	if len(history) >= 3 {
-		// Error stall: last 3+ entries are equal and > 0.
-		last := history[len(history)-1]
-		if last > 0 {
-			stallLen := 1
-			for i := len(history) - 2; i >= 0; i-- {
-				if history[i] == last {
-					stallLen++
-				} else {
-					break
-				}
-			}
-			if stallLen >= 3 {
-				findings = append(findings, Finding{
-					Level:   "warn",
-					Message: fmt.Sprintf("error stall: %d errors unchanged for %d cycles", last, stallLen),
-				})
-			}
-		}
-
-		// Fix-then-break: in the last 10 entries, a decrease followed by an increase.
 		recent := history
 		if len(recent) > 10 {
 			recent = recent[len(recent)-10:]
 		}
-		for i := 1; i < len(recent)-1; i++ {
-			if recent[i] < recent[i-1] && recent[i+1] > recent[i] {
+		last := recent[len(recent)-1]
+		if last > 0 && len(recent) >= 3 {
+			// Trending upward: last 3+ entries are non-decreasing with at least one increase.
+			tail := recent[len(recent)-3:]
+			if tail[0] <= tail[1] && tail[1] <= tail[2] && tail[2] > tail[0] {
 				findings = append(findings, Finding{
 					Level:   "warn",
-					Message: "fix-then-break: error count decreased then increased again",
+					Message: fmt.Sprintf("error count trending up: %d -> %d -> %d", tail[0], tail[1], tail[2]),
 				})
-				break // report once per evaluation
 			}
 		}
 	}

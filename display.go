@@ -50,22 +50,18 @@ func Render(state DisplayState) {
 		len(state.DeletedTests) > 0
 
 	if !hasContent {
-		fmt.Printf("%swatching...%s\n", dim, reset)
+		fmt.Printf("  %swatching...%s\n", dim, reset)
 	} else {
 		// Changed files.
 		if len(state.ChangedFiles) > 0 {
 			limit := 8
 			shown := state.ChangedFiles
-			extra := 0
 			if len(shown) > limit {
-				extra = len(shown) - limit
+				extra := len(shown) - limit
 				shown = shown[:limit]
-			}
-			for _, f := range shown {
-				fmt.Printf("%s  %s%s\n", dim, f, reset)
-			}
-			if extra > 0 {
-				fmt.Printf("%s  +%d more%s\n", dim, extra, reset)
+				fmt.Printf("  %schanged: %s +%d more%s\n", dim, strings.Join(shown, ", "), extra, reset)
+			} else {
+				fmt.Printf("  %schanged: %s%s\n", dim, strings.Join(shown, ", "), reset)
 			}
 			fmt.Println()
 		}
@@ -80,23 +76,23 @@ func Render(state DisplayState) {
 
 		// Trajectory findings.
 		for _, f := range state.TrajectoryFindings {
-			fmt.Printf("%s! %s%s\n", yellow, f.Message, reset)
+			fmt.Printf("  %s! %s%s\n", yellow, f.Message, reset)
 		}
 
 		// Pattern findings.
 		for _, pf := range state.PatternFindings {
-			fmt.Printf("%s! %s (%s:+%d)%s\n", yellow, pf.Pattern, pf.File, pf.Line, reset)
+			fmt.Printf("  %s! %s (%s:+%d)%s\n", yellow, pf.Pattern, pf.File, pf.Line, reset)
 		}
 
 		// Deleted tests.
 		for _, dt := range state.DeletedTests {
-			fmt.Printf("%s! deleted %s%s\n", yellow, dt, reset)
+			fmt.Printf("  %s! deleted %s%s\n", yellow, dt, reset)
 		}
 	}
 
 	fmt.Println()
 	// Footer.
-	fmt.Printf("%slast check: just now%s\n", dim, reset)
+	fmt.Printf("  %slast check: just now%s\n", dim, reset)
 	fmt.Printf("%s%s%s\n", dim, strings.Repeat("-", 40), reset)
 }
 

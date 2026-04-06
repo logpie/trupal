@@ -41,7 +41,7 @@ func pollCycle(session *Session, projectDir string, cfg Config) DisplayState {
 	session.UpdateFileEdits(fileDiffs)
 
 	var buildDisplay *BuildDisplay
-	if cfg.BuildCmd != "" && ShouldRunBuild(changedFiles, cfg.BuildExtensions) {
+	if cfg.BuildCmd != "" && len(changedFiles) > 0 && ShouldRunBuild(changedFiles, cfg.BuildExtensions) {
 		result := RunBuildCheck(projectDir, cfg.BuildCmd)
 		session.AppendErrorCount(result.ErrorCount)
 
@@ -81,7 +81,7 @@ func buildTrend(history []int, buildOK bool) string {
 
 	// fix-then-break: previously clean, now broken.
 	if prev == 0 && curr > 0 {
-		return ""
+		return "was clean"
 	}
 
 	// Progress: error count decreased.
