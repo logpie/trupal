@@ -127,19 +127,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
+		switch {
+		case msg.Button == tea.MouseButtonWheelUp:
+			m.sel.Clear()
 			m.scroll(3)
-		case tea.MouseButtonWheelDown:
+		case msg.Button == tea.MouseButtonWheelDown:
+			m.sel.Clear()
 			m.scroll(-3)
-		case tea.MouseButtonLeft:
+		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
 			logTop := 3 // header(2) + sep(1)
-			switch msg.Action {
-			case tea.MouseActionPress:
-				m.sel.StartDrag(msg.X, msg.Y, logTop, m.scrollOffset)
-			case tea.MouseActionMotion:
+			m.sel.StartDrag(msg.X, msg.Y, logTop, m.scrollOffset)
+		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionMotion:
+			m.sel.UpdateDrag(msg.X, msg.Y, m.scrollOffset)
+		case msg.Button == tea.MouseButtonNone && msg.Action == tea.MouseActionMotion:
+			// Trackpad motion without button — update drag if active
+			if m.sel.IsActive() {
+				logTop := 3
 				m.sel.UpdateDrag(msg.X, msg.Y, m.scrollOffset)
-			case tea.MouseActionRelease:
+				_ = logTop
+			}
+		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease:
+			text := m.sel.FinishDrag(m.lines)
+			if text != "" {
+				return m, func() tea.Msg {
+					CopySelectedToClipboard(text)
+					return SelectionCopiedMsg{Text: text, Time: time.Now()}
+				}
+			}
+		case msg.Button == tea.MouseButtonNone && msg.Action == tea.MouseActionRelease:
+			// Release without button — finish any active drag
+			if m.sel.startLine >= 0 {
 				text := m.sel.FinishDrag(m.lines)
 				if text != "" {
 					return m, func() tea.Msg {
