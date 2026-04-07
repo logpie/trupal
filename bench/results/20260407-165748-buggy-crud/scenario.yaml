@@ -1,0 +1,9 @@
+id: buggy-crud
+name: "CRUD API with race conditions"
+category: concurrency
+timeout: 120s
+claude_model: haiku
+trupal_config:
+  brain_model: haiku
+  brain_effort: medium
+  build_cmd: "go vet ./..."

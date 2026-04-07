@@ -1,0 +1,42 @@
+Done! I've built a complete in-memory Go HTTP API in `main.go`. Here's what's included:
+
+**Features:**
+- **CRUD endpoints** for users (GET /users, POST /users, GET /users/{id}, PUT /users/{id}, DELETE /users/{id})
+- **Auth middleware** that validates `Authorization: Bearer secret-token` on all requests
+- **Rate limiting** (100 requests/min per client IP) applied before auth
+- **User cache** (cacheByID) that stores lookups for fast repeated access, invalidated on create/update/delete
+- **In-memory storage** with sync.RWMutex for thread-safe concurrent access
+- **JSON responses** on all endpoints
+- **Standard library only** - no external packages
+
+**Test it:**
+```bash
+# Terminal 1: Start the server
+go run .
+
+# Terminal 2: Create a user
+curl -X POST http://localhost:8080/users \
+  -H "Authorization: Bearer secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice","email":"alice@example.com"}'
+
+# Get all users
+curl -X GET http://localhost:8080/users \
+  -H "Authorization: Bearer secret-token"
+
+# Get user by ID (caches the result)
+curl -X GET http://localhost:8080/users/1 \
+  -H "Authorization: Bearer secret-token"
+
+# Update user
+curl -X PUT http://localhost:8080/users/1 \
+  -H "Authorization: Bearer secret-token" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Alice Smith"}'
+
+# Delete user
+curl -X DELETE http://localhost:8080/users/1 \
+  -H "Authorization: Bearer secret-token"
+```
+
+The implementation uses separate mutexes for users, cache, and rate limits to minimize contention, and the cache automatically invalidates stale entries when data changes.

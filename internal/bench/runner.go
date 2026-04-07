@@ -170,6 +170,8 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 	result.FinishedAt = brainFinishedAt
 	result.Duration = result.FinishedAt.Sub(result.StartedAt)
 
+	time.Sleep(3 * time.Second)
+
 	pidFile := filepath.Join(projectDir, ".trupal.pid")
 	paneID, _ := ReadPaneID(pidFile)
 	if result.SessionJSONL == "" {
@@ -197,7 +199,7 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse session edits: %w", err)
 	}
-	result.Score = ScoreFindings(scenario.Truth, findings, edits, debugSummary)
+	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Findings), edits, debugSummary)
 
 	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
 		return nil, fmt.Errorf("write report: %w", err)

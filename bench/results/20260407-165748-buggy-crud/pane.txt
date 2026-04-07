@@ -1,0 +1,41 @@
+ trupal · trupal-ben
+ ● cc  ● 2s ago  $0.
+────────────────────
+       │   `s.rateLi
+       │   forever.
+       │   minute, t
+       │   should be
+       │   but you'r
+       │   letting i
+       │   Either de
+       │   expired e
+       │   when you
+       │   them, or
+       │   time-base
+       │   goroutine
+16:58  i   Can't deb
+       │   build fai
+       │   without s
+       │   error mes
+       │   notificat
+       │   1 error b
+       │   can't see
+       │   is from t
+       │   alone.
+16:58  ▸   Tell me w
+       │   actual bu
+       │   is. Run `
+       │   main.go`
+       │   the outpu
+       │   code look
+       │   structura
+       │   but somet
+       │   failing.
+       │   getting a
+       │   error, a
+       │   signature
+       │   mismatch,
+       │   something
+────────────────────
+ 1 mod: main.go
+

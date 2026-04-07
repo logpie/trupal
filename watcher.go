@@ -341,6 +341,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 						reasoning = result.resp.Reasoning
 					}
 					id := findings.Add(nudge.Severity, nudge.Message, reasoning)
+					Debugf("[brain] nudge: %s", nudge.Message)
 					for _, f := range findings.Recent(1) {
 						if f.ID == id {
 							p.Send(nudgeMsg{finding: f})

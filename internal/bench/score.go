@@ -33,6 +33,7 @@ type BrainResponseEvent struct {
 type DebugSummary struct {
 	ResponseCount     int
 	ResponseEvents    []BrainResponseEvent
+	Findings          []ObservedFinding
 	InputTokens       int
 	OutputTokens      int
 	CacheReadTokens   int
@@ -73,10 +74,11 @@ type Scorecard struct {
 }
 
 var (
-	debugUsagePattern  = regexp.MustCompile(`^\d{2}:\d{2}:\d{2}\.\d{3} \[brain\] usage: in=(\d+) out=(\d+) cache_read=(\d+) cache_create=(\d+) cost=\$([0-9.]+)$`)
-	debugResultPattern = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2}\.\d{3}) \[brain\] (\d+) nudges, (\d+) resolved, reasoning: (.*)$`)
-	logHeaderPattern   = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2})\s`)
-	stopWords          = map[string]struct{}{"the": {}, "and": {}, "for": {}, "with": {}, "without": {}, "into": {}, "from": {}, "this": {}, "that": {}, "should": {}, "not": {}, "flagged": {}, "global": {}, "missing": {}, "accessed": {}, "write": {}, "reads": {}, "uses": {}, "used": {}, "file": {}, "correct": {}, "flag": {}, "under": {}, "best": {}, "effort": {}, "are": {}, "all": {}, "one": {}, "two": {}, "api": {}, "http": {}, "user": {}, "users": {}}
+	debugUsagePattern   = regexp.MustCompile(`^\d{2}:\d{2}:\d{2}\.\d{3} \[brain\] usage: in=(\d+) out=(\d+) cache_read=(\d+) cache_create=(\d+) cost=\$([0-9.]+)$`)
+	debugResultPattern  = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2}\.\d{3}) \[brain\] (\d+) nudges, (\d+) resolved, reasoning: (.*)$`)
+	debugFindingPattern = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2}\.\d{3}) \[brain\] (observation|nudge): (.*)$`)
+	logHeaderPattern    = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2})\s`)
+	stopWords           = map[string]struct{}{"the": {}, "and": {}, "for": {}, "with": {}, "without": {}, "into": {}, "from": {}, "this": {}, "that": {}, "should": {}, "not": {}, "flagged": {}, "global": {}, "missing": {}, "accessed": {}, "write": {}, "reads": {}, "uses": {}, "used": {}, "file": {}, "correct": {}, "flag": {}, "under": {}, "best": {}, "effort": {}, "are": {}, "all": {}, "one": {}, "two": {}, "api": {}, "http": {}, "user": {}, "users": {}}
 )
 
 func ParseTrupalLog(path string, baseDate time.Time) ([]ObservedFinding, error) {
@@ -132,6 +134,7 @@ func ParseDebugLog(path string, baseDate time.Time) (DebugSummary, error) {
 	defer f.Close()
 
 	var summary DebugSummary
+	seenFindings := make(map[string]int)
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -151,12 +154,54 @@ func ParseDebugLog(path string, baseDate time.Time) (DebugSummary, error) {
 				Resolved:  atoi(matches[3]),
 				Reasoning: matches[4],
 			})
+			continue
+		}
+		if matches := debugFindingPattern.FindStringSubmatch(line); len(matches) == 4 {
+			message := strings.TrimSpace(matches[3])
+			if message == "" {
+				continue
+			}
+			firstSeen := combineClock(baseDate, matches[1], true)
+			if idx, ok := seenFindings[message]; ok {
+				if summary.Findings[idx].FirstSeen.IsZero() || (!firstSeen.IsZero() && firstSeen.Before(summary.Findings[idx].FirstSeen)) {
+					summary.Findings[idx].FirstSeen = firstSeen
+				}
+				continue
+			}
+			seenFindings[message] = len(summary.Findings)
+			summary.Findings = append(summary.Findings, ObservedFinding{
+				Message:   message,
+				FirstSeen: firstSeen,
+			})
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return DebugSummary{}, err
 	}
 	return summary, nil
+}
+
+func MergeObservedFindings(groups ...[]ObservedFinding) []ObservedFinding {
+	merged := make([]ObservedFinding, 0)
+	seen := make(map[string]int)
+	for _, group := range groups {
+		for _, finding := range group {
+			message := strings.TrimSpace(finding.Message)
+			if message == "" {
+				continue
+			}
+			finding.Message = message
+			if idx, ok := seen[message]; ok {
+				if merged[idx].FirstSeen.IsZero() || (!finding.FirstSeen.IsZero() && finding.FirstSeen.Before(merged[idx].FirstSeen)) {
+					merged[idx].FirstSeen = finding.FirstSeen
+				}
+				continue
+			}
+			seen[message] = len(merged)
+			merged = append(merged, finding)
+		}
+	}
+	return merged
 }
 
 func ParseSessionEdits(path string) ([]EditEvent, error) {
