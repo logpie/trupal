@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -241,6 +242,46 @@ func TestLogNudgeCompactWrap(t *testing.T) {
 	secondIndent := lipgloss.Width(m.lines[1]) - lipgloss.Width(wrapped[1])
 	if firstIndent != secondIndent {
 		t.Fatalf("wrapped nudge text does not align: first indent=%d second indent=%d", firstIndent, secondIndent)
+	}
+}
+
+func TestBrainStatusThinkingStartsSpinnerWithoutLogging(t *testing.T) {
+	m := initialModel("test")
+	m.width = 60
+	m.height = 15
+
+	newM, _ := m.Update(brainStatusMsg{thinking: true})
+	m = newM.(model)
+
+	if !m.brain.thinking {
+		t.Fatal("expected brain thinking state to be active")
+	}
+	// No separate spinner command — animation runs via tickEvery
+	if len(m.lines) != 0 {
+		t.Fatalf("expected no log lines for analyzing state, got %d", len(m.lines))
+	}
+	if !containsStr(m.View(), "analyzing") {
+		t.Fatalf("expected analyzing indicator in header, got %q", m.View())
+	}
+}
+
+func TestBrainStatusFinishedShowsRelativeAge(t *testing.T) {
+	m := initialModel("test")
+	m.width = 60
+	m.height = 15
+
+	newM, _ := m.Update(brainStatusMsg{thinking: false, lastTime: time.Now().Add(-65 * time.Second)})
+	m = newM.(model)
+
+	if m.brain.thinking {
+		t.Fatal("expected brain thinking state to be inactive")
+	}
+	view := m.View()
+	if containsStr(view, "analyzing") {
+		t.Fatalf("expected finished brain indicator, got %q", view)
+	}
+	if !containsStr(view, "1m ago") {
+		t.Fatalf("expected relative age in header, got %q", view)
 	}
 }
 

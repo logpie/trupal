@@ -83,10 +83,10 @@ type model struct {
 	project    string
 	elapsed    string
 	ccStatus   string
-	brainState string
 	buildState string
 	findings   int // active count
 	resolved   int
+	brain      brainIndicatorState
 
 	// Footer state
 	fileLine    string // current files summary
@@ -99,12 +99,19 @@ type model struct {
 	quitting bool
 }
 
+type brainIndicatorState struct {
+	thinking bool
+	lastTime time.Time
+	tick     int
+}
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
 func initialModel(project string) model {
 	return model{
-		project:    project,
-		ccStatus:   "starting",
-		brainState: sDim.Render("starting"),
-		sel:        NewSelection(),
+		project:  project,
+		ccStatus: "starting",
+		sel:      NewSelection(),
 	}
 }
 
@@ -119,7 +126,7 @@ func ProgramOptions() []tea.ProgramOption {
 }
 
 func tickEvery() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 // --- Update ---
@@ -200,7 +207,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		if m.brain.thinking {
+			m.brain.tick++
+		}
 		return m, tickEvery()
+
+	// Spinner animation happens via tickEvery (3s ticks)
+	// Brain tick advances each cycle when thinking
 
 	case statusMsg:
 		if msg.ccStatus != "" {
@@ -261,13 +274,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case brainStatusMsg:
 		if msg.thinking {
-			m.brainState = sCyan.Render("◌") + " analyzing"
-		} else if !msg.lastTime.IsZero() {
-			ago := int(time.Since(msg.lastTime).Seconds())
-			if ago < 60 {
-				m.brainState = sOk.Render("●") + sDim.Render(fmt.Sprintf(" %ds", ago))
-			} else {
-				m.brainState = sOk.Render("●") + sDim.Render(fmt.Sprintf(" %dm", ago/60))
+			m.brain.thinking = true
+			m.brain.tick = 0
+		} else {
+			m.brain.thinking = false
+			if !msg.lastTime.IsZero() {
+				m.brain.lastTime = msg.lastTime
 			}
 		}
 
@@ -288,6 +300,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m model) brainIndicator() string {
+	if m.brain.thinking {
+		frame := spinnerFrames[m.brain.tick%len(spinnerFrames)]
+		return sCyan.Render(frame) + " analyzing"
+	}
+	if !m.brain.lastTime.IsZero() {
+		ago := int(time.Since(m.brain.lastTime).Seconds())
+		if ago < 0 {
+			ago = 0
+		}
+		if ago < 60 {
+			return sOk.Render("●") + sDim.Render(fmt.Sprintf(" %ds ago", ago))
+		}
+		return sOk.Render("●") + sDim.Render(fmt.Sprintf(" %dm ago", ago/60))
+	}
+	return sDim.Render("starting")
 }
 
 // --- Log helpers ---
@@ -492,7 +522,7 @@ func (m model) View() string {
 	default:
 		indicators = append(indicators, sDim.Render("○")+" cc")
 	}
-	indicators = append(indicators, m.brainState)
+	indicators = append(indicators, m.brainIndicator())
 	if m.buildState != "" {
 		indicators = append(indicators, m.buildState)
 	}
