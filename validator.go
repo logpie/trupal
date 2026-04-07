@@ -74,3 +74,42 @@ func IsValidEffort(effort string) bool {
 	}
 	return false
 }
+
+func ParseDuration(s string) int {
+	total := 0
+	num := 0
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			num = num*10 + int(c-'0')
+		} else {
+			switch c {
+			case 'h':
+				total += num * 3600
+			case 'm':
+				total += num * 60
+			case 's':
+				total += num
+			}
+			num = 0
+		}
+	}
+	return total + num
+}
+
+func ValidateTimeout(seconds int) error {
+	if seconds < 0 {
+		return fmt.Errorf("timeout cannot be negative")
+	}
+	if seconds > 3600 {
+		return fmt.Errorf("timeout too large (max 1h)")
+	}
+	return nil
+}
+
+func SanitizeURL(url string) string {
+	url = strings.TrimSpace(url)
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = "https://" + url
+	}
+	return url
+}
