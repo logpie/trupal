@@ -174,6 +174,13 @@ func cmdWatch(gitRoot string) {
 		}
 	}()
 
+	// Load config before creating state that requires deferred cleanup.
+	cfg := loadConfig(gitRoot)
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Write pane ID to pid file
 	paneID, err := getTmuxPaneID()
 	if err != nil {
@@ -192,12 +199,6 @@ func cmdWatch(gitRoot string) {
 		_ = os.Remove(pidFile)
 	}()
 
-	// Load config and run watch loop
-	cfg := loadConfig(gitRoot)
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
 	runWatchLoop(gitRoot, cfg)
 }
 
