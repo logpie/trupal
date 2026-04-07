@@ -406,7 +406,13 @@ func runWatchLoop(projectDir string, cfg Config) {
 			triggerReason = ""
 		}
 
-		// Trigger brain analysis if needed.
+		// Trigger brain analysis if needed. Cooldown: wait 10s after last response.
+		brainCooldown := !brainLastTime.IsZero() && time.Since(brainLastTime) < 10*time.Second
+		if triggerBrain && brainCooldown {
+			// Queue for later instead of triggering now.
+			pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
+			triggerBrain = false
+		}
 		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
 			Debugf("[watcher] triggering brain: %s", triggerReason)
 			brainBusy = true
