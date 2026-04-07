@@ -20,9 +20,12 @@ type JSONLEntry struct {
 	SessionID string          `json:"sessionId"`
 	Message   json.RawMessage `json:"message"`
 	// Parsed from message:
-	Role    string // "user" or "assistant"
-	HasText bool   // assistant message contains a text block
-	HasTool bool   // assistant message contains a tool_use block
+	Role      string   // "user" or "assistant"
+	HasText   bool     // assistant message contains a text block
+	HasTool   bool     // assistant message contains a tool_use block
+	ToolNames []string // names of tools used (e.g. "Edit", "Bash", "Write")
+	ToolFiles []string // file paths from tool inputs (if available)
+	TextSnip  string   // first 200 chars of text content
 }
 
 // JSONLWatcher watches CC's session JSONL file for new entries.
@@ -213,9 +216,12 @@ func classifyEntry(e *JSONLEntry) {
 	}
 	e.Role = msg.Role
 
-	// Check content for text/tool_use blocks.
+	// Check content for text/tool_use blocks with details.
 	var blocks []struct {
-		Type string `json:"type"`
+		Type  string          `json:"type"`
+		Text  string          `json:"text"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
 	}
 	if err := json.Unmarshal(msg.Content, &blocks); err != nil {
 		// Content might be a string (user messages).
@@ -224,9 +230,31 @@ func classifyEntry(e *JSONLEntry) {
 	for _, b := range blocks {
 		if b.Type == "text" {
 			e.HasText = true
+			if e.TextSnip == "" && len(b.Text) > 0 {
+				snip := b.Text
+				if len(snip) > 200 {
+					snip = snip[:200]
+				}
+				e.TextSnip = snip
+			}
 		}
 		if b.Type == "tool_use" {
 			e.HasTool = true
+			if b.Name != "" {
+				e.ToolNames = append(e.ToolNames, b.Name)
+			}
+			// Extract file path from tool input.
+			if b.Input != nil {
+				var input struct {
+					FilePath string `json:"file_path"`
+					Command  string `json:"command"`
+				}
+				if json.Unmarshal(b.Input, &input) == nil {
+					if input.FilePath != "" {
+						e.ToolFiles = append(e.ToolFiles, input.FilePath)
+					}
+				}
+			}
 		}
 	}
 }

@@ -146,13 +146,39 @@ func runWatchLoop(projectDir string, cfg Config) {
 				Debugf("[watcher] JSONL event: %d new entries", len(entries))
 				significant := false
 				var summary []string
+				seen := make(map[string]bool)
 				for _, e := range entries {
 					if e.Type == "assistant" && e.HasText {
 						significant = true
-						summary = append(summary, "CC sent text response")
+						// Include a snippet of what CC said.
+						if e.TextSnip != "" {
+							snip := e.TextSnip
+							if len(snip) > 100 {
+								snip = snip[:100]
+							}
+							key := "text:" + snip
+							if !seen[key] {
+								seen[key] = true
+								summary = append(summary, fmt.Sprintf("CC said: %q", snip))
+							}
+						}
 					}
 					if e.Type == "assistant" && e.HasTool {
-						summary = append(summary, "CC used a tool")
+						for i, tool := range e.ToolNames {
+							file := ""
+							if i < len(e.ToolFiles) {
+								file = filepath.Base(e.ToolFiles[i])
+							}
+							key := tool + ":" + file
+							if !seen[key] {
+								seen[key] = true
+								if file != "" {
+									summary = append(summary, fmt.Sprintf("CC used %s on %s", tool, file))
+								} else {
+									summary = append(summary, fmt.Sprintf("CC used %s", tool))
+								}
+							}
+						}
 					}
 					if e.Type == "user" && e.Role == "user" {
 						significant = true
