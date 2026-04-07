@@ -39,6 +39,17 @@ func DebugEnabled() bool {
 	return debugLog.file != nil
 }
 
+func RotateDebugLog(projectDir string) {
+	debugLog.mu.Lock()
+	defer debugLog.mu.Unlock()
+	if debugLog.file != nil {
+		debugLog.file.Close()
+	}
+	os.Rename(filepath.Join(projectDir, ".trupal.debug"), filepath.Join(projectDir, ".trupal.debug.old"))
+	f, _ := os.OpenFile(filepath.Join(projectDir, ".trupal.debug"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	debugLog.file = f
+}
+
 // Debugf writes a timestamped line to the debug log.
 func Debugf(format string, args ...interface{}) {
 	debugLog.mu.Lock()

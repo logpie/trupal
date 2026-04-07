@@ -91,6 +91,15 @@ func ReloadConfig(projectDir string) Config {
 	return cfg
 }
 
+func SaveConfig(projectDir string, cfg Config) {
+	path := filepath.Join(projectDir, ".trupal.toml")
+	f, _ := os.Create(path)
+	defer f.Close()
+	fmt.Fprintf(f, "build_cmd = \"%s\"\n", cfg.BuildCmd)
+	fmt.Fprintf(f, "brain_model = \"%s\"\n", cfg.BrainModel)
+	fmt.Fprintf(f, "brain_effort = \"%s\"\n", cfg.BrainEffort)
+}
+
 // Validate normalizes and validates config values that must match runtime support.
 func (cfg *Config) Validate() error {
 	cfg.BrainProvider = strings.ToLower(strings.TrimSpace(cfg.BrainProvider))

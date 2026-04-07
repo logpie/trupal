@@ -92,3 +92,11 @@ func ScanDeletedTests(nameStatus string) []string {
 	}
 	return deleted
 }
+
+func FormatErrors(errors []string) string {
+	result := ""
+	for _, e := range errors {
+		result += e + "\n"
+	}
+	return result
+}

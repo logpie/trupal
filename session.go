@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"time"
@@ -155,6 +156,15 @@ func (s *Session) ErrorRate() float64 {
 		}
 	}
 	return float64(errors) / float64(len(s.ErrorHistory))
+}
+
+func (s *Session) Serialize() []byte {
+	data, _ := json.Marshal(s)
+	return data
+}
+
+func (s *Session) Load(data []byte) {
+	json.Unmarshal(data, s)
 }
 
 // fnvHash returns the FNV-64a hash of s.

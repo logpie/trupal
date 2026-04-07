@@ -318,13 +318,20 @@ func (m model) View() string {
 		visible = append(visible, "")
 	}
 
-	// ── Footer ──
-	fl := sDim.Render(" " + m.fileLine)
-	scrollHint := ""
+	// ── Footer — truncate to fit pane width ──
+	footerText := ""
 	if m.scrollOffset > 0 {
-		scrollHint = sDim.Render(fmt.Sprintf("  ↑%d", m.scrollOffset))
+		footerText = fmt.Sprintf(" ↑%d", m.scrollOffset)
 	}
-	footer := fl + scrollHint
+	if m.fileLine != "" {
+		remaining := w - len(footerText) - 3
+		fl := m.fileLine
+		if len(fl) > remaining && remaining > 10 {
+			fl = fl[:remaining-1] + "…"
+		}
+		footerText += "  " + fl
+	}
+	footer := sDim.Render(footerText)
 
 	return h1 + "\n" + h2 + "\n" + sep + "\n" +
 		strings.Join(visible, "\n") + "\n" +
