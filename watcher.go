@@ -290,7 +290,11 @@ func runWatchLoop(projectDir string, cfg Config) {
 					fmt.Print("\r\033[K") // clear heartbeat before nudges
 				}
 				for _, nudge := range result.resp.Nudges {
-					id := findings.Add(nudge.Severity, nudge.Message, result.resp.Reasoning)
+					reasoning := nudge.Reasoning
+					if reasoning == "" {
+						reasoning = result.resp.Reasoning
+					}
+					id := findings.Add(nudge.Severity, nudge.Message, reasoning)
 					for _, f := range findings.Recent(1) {
 						if f.ID == id {
 							LogNudge(f)

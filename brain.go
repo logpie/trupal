@@ -20,8 +20,9 @@ type BrainResponse struct {
 
 // BrainNudge is a single nudge from the brain.
 type BrainNudge struct {
-	Severity string `json:"severity"`
-	Message  string `json:"message"`
+	Severity  string `json:"severity"`
+	Message   string `json:"message"`
+	Reasoning string `json:"reasoning,omitempty"` // per-nudge context
 }
 
 // Brain manages the CC subprocess.
@@ -80,15 +81,17 @@ ALWAYS generate a nudge for it. Do NOT suppress nudges because you think CC is "
 is "intentional." Your job is to flag code problems. CC decides what to do with them.
 
 Respond with JSON only:
-{"reasoning": "1-2 sentences", "nudges": [{"severity": "warn|error", "message": "under 80 chars"}], "resolved_findings": []}
+{"reasoning": "1 sentence summary", "nudges": [{"severity": "warn|error", "message": "conversational nudge", "reasoning": "1 sentence explaining this specific finding"}], "resolved_findings": []}
 
-Empty response (ONLY when no code issues found): {"reasoning": "nothing to flag", "nudges": [], "resolved_findings": []}
+Empty response: {"reasoning": "nothing to flag", "nudges": [], "resolved_findings": []}
 
 Rules:
-- 1-2 sentences max for reasoning. You display in a ~30 char wide pane.
-- Under 80 chars per nudge
+- Reasoning: 1 sentence explaining what you checked. This is shown to the human as context below the nudge.
+  Do NOT include internal thinking like "Need nudges" or "Checking JSONL" — only what helps the human understand the finding.
+- Each nudge gets its OWN reasoning. Do not repeat the same reasoning for multiple nudges.
+- Nudge: conversational, under 100 chars, addressed to CC.
 - High precision only. Don't nag about style.
-- If nothing important, say so in 5 words and move on.`, jsonlPath, projectDir, findingsJSON)
+- If nothing important, respond with empty nudges immediately.`, jsonlPath, projectDir, findingsJSON)
 }
 
 func brainCommand(provider string) (string, error) {
