@@ -60,15 +60,16 @@ type tickMsg time.Time
 // --- Model ---
 
 type model struct {
-	lines      []string // chat log lines
-	width      int
-	height     int
-	ccStatus   string
-	brainState string
-	buildState string
-	elapsed    string
-	project    string
-	quitting   bool
+	lines        []string // chat log lines
+	width        int
+	height       int
+	ccStatus     string
+	brainState   string
+	buildState   string
+	elapsed      string
+	project      string
+	lastFileLine string // dedup repeated file status
+	quitting     bool
 }
 
 func initialModel(project string) model {
@@ -110,7 +111,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statusMsg:
 		m.ccStatus = msg.ccStatus
-		m.elapsed = msg.elapsed
+		if msg.elapsed != "" {
+			m.elapsed = msg.elapsed
+		}
 		if msg.project != "" {
 			m.project = msg.project
 		}
@@ -125,16 +128,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.buildState = errStyle.Render(label)
 			}
 		}
-		// Log file changes.
-		parts := []string{}
-		if len(msg.files) > 0 {
-			parts = append(parts, fmt.Sprintf("%d mod: %s", len(msg.files), joinBase(msg.files, 3)))
+		// Log file changes only if different from last logged.
+		fileLine := ""
+		if len(msg.files) > 0 || len(msg.newFiles) > 0 {
+			parts := []string{}
+			if len(msg.files) > 0 {
+				parts = append(parts, fmt.Sprintf("%d mod: %s", len(msg.files), joinBase(msg.files, 3)))
+			}
+			if len(msg.newFiles) > 0 {
+				parts = append(parts, fmt.Sprintf("%d new: %s", len(msg.newFiles), joinBase(msg.newFiles, 2)))
+			}
+			fileLine = strings.Join(parts, "  ")
 		}
-		if len(msg.newFiles) > 0 {
-			parts = append(parts, fmt.Sprintf("%d new: %s", len(msg.newFiles), joinBase(msg.newFiles, 2)))
-		}
-		if len(parts) > 0 {
-			m.addLine(dimStyle.Render(strings.Join(parts, "  ")))
+		if fileLine != "" && fileLine != m.lastFileLine {
+			m.addLine(dimStyle.Render(fileLine))
+			m.lastFileLine = fileLine
 		}
 		return m, nil
 
@@ -144,13 +152,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			icon = errStyle.Render("✗")
 		}
 		m.addLine("")
-		m.addLine(fmt.Sprintf("%s %s", icon, msg.finding.Nudge))
+		// Word-wrap nudge to pane width.
+		nudgeWidth := m.width - 8 // leave room for timestamp + icon
+		if nudgeWidth < 20 {
+			nudgeWidth = 20
+		}
+		for i, line := range wordWrap(msg.finding.Nudge, nudgeWidth) {
+			if i == 0 {
+				m.addLine(fmt.Sprintf("%s %s", icon, line))
+			} else {
+				m.addLine("  " + line)
+			}
+		}
+		// Reasoning word-wrapped too.
 		if msg.finding.Reasoning != "" {
-			for _, line := range strings.Split(msg.finding.Reasoning, "\n") {
-				line = strings.TrimSpace(line)
-				if line != "" {
-					m.addLine("  " + dimStyle.Render(line))
-				}
+			for _, line := range wordWrap(msg.finding.Reasoning, nudgeWidth) {
+				m.addLine("  " + dimStyle.Render(line))
 			}
 		}
 		m.addLine("")
@@ -245,6 +262,30 @@ func (m model) View() string {
 	logContent := strings.Join(visibleLines, "\n")
 
 	return header + "\n" + sep + "\n" + logContent + "\n" + sep + "\n" + footer
+}
+
+func wordWrap(text string, width int) []string {
+	if width < 10 {
+		width = 10
+	}
+	text = strings.ReplaceAll(text, "\n", " ")
+	var lines []string
+	for len(text) > 0 {
+		if len(text) <= width {
+			lines = append(lines, text)
+			break
+		}
+		cut := width
+		for cut > 0 && text[cut] != ' ' {
+			cut--
+		}
+		if cut == 0 {
+			cut = width
+		}
+		lines = append(lines, text[:cut])
+		text = strings.TrimLeft(text[cut:], " ")
+	}
+	return lines
 }
 
 func joinBase(files []string, max int) string {

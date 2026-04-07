@@ -35,7 +35,11 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 	if jsonlPath == "" {
 		p.Send(logLineMsg{line: "no CC session found — waiting..."})
 	} else {
-		p.Send(logLineMsg{line: fmt.Sprintf("watching session %s", filepath.Base(jsonlPath))})
+		sessionName := filepath.Base(jsonlPath)
+		if len(sessionName) > 12 {
+			sessionName = sessionName[:8] + "…"
+		}
+		p.Send(logLineMsg{line: fmt.Sprintf("watching session %s", sessionName)})
 	}
 
 	// Start JSONL watcher.
