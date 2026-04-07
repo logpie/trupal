@@ -15,7 +15,7 @@ import (
 
 // JSONLEntry represents a parsed JSONL line from CC's session file.
 type JSONLEntry struct {
-	Type      string          `json:"type"`      // "user", "assistant", "attachment", etc.
+	Type      string          `json:"type"` // "user", "assistant", "attachment", etc.
 	Timestamp string          `json:"timestamp"`
 	SessionID string          `json:"sessionId"`
 	Message   json.RawMessage `json:"message"`
@@ -173,8 +173,10 @@ func (w *JSONLWatcher) ReadNew() []JSONLEntry {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB lines
 
+	bytesRead := int64(0)
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		bytesRead += int64(len(line)) + 1 // +1 for newline
 		if len(line) == 0 {
 			continue
 		}
@@ -195,8 +197,7 @@ func (w *JSONLWatcher) ReadNew() []JSONLEntry {
 		return entries // don't advance offset — retry next time
 	}
 
-	pos, _ := f.Seek(0, io.SeekCurrent)
-	w.offset = pos
+	w.offset += bytesRead
 
 	return entries
 }
@@ -379,8 +380,14 @@ func SubagentFiles(jsonlPath string) []string {
 	sort.Slice(files, func(i, j int) bool {
 		iInfo, _ := os.Stat(files[i])
 		jInfo, _ := os.Stat(files[j])
-		if iInfo == nil || jInfo == nil {
+		if iInfo == nil && jInfo == nil {
+			return i < j
+		}
+		if iInfo == nil {
 			return false
+		}
+		if jInfo == nil {
+			return true
 		}
 		return iInfo.ModTime().After(jInfo.ModTime())
 	})

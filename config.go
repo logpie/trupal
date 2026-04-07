@@ -93,7 +93,11 @@ func ReloadConfig(projectDir string) Config {
 
 func SaveConfig(projectDir string, cfg Config) {
 	path := filepath.Join(projectDir, ".trupal.toml")
-	f, _ := os.Create(path)
+	f, err := os.Create(path)
+	if err != nil {
+		Debugf("[config] failed to save config: %v", err)
+		return
+	}
 	defer f.Close()
 	fmt.Fprintf(f, "build_cmd = \"%s\"\n", cfg.BuildCmd)
 	fmt.Fprintf(f, "brain_model = \"%s\"\n", cfg.BrainModel)

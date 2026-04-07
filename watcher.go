@@ -338,8 +338,13 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			if brainStale {
 				break
 			}
-			if result.brain != brain {
+			if result.brain != brain && brain != nil {
 				Debugf("[watcher] ignoring brain result from stale instance")
+				break
+			}
+			if brain == nil && result.resp == nil {
+				brain = result.brain
+				Debugf("[watcher] brain restarted successfully")
 				break
 			}
 			if result.resp != nil {
@@ -391,8 +396,15 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			if !shuttingDown && brain != nil {
 				brain.Stop()
 				brain = nil
-				restartNeeded = true
-				restartAt = time.Now().Add(5 * time.Second)
+				restartDirs := extraDirSlice()
+				go func() {
+					newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second, restartDirs...)
+					if restartErr != nil {
+						Debugf("[watcher] brain restart failed: %v", restartErr)
+						return
+					}
+					brainResultCh <- brainResult{brain: newBrain}
+				}()
 			}
 		default:
 		}
