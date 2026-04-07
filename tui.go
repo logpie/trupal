@@ -63,7 +63,7 @@ type brainStatusMsg struct {
 	thinking bool
 	lastTime time.Time
 }
-type brainCostMsg struct{ stats BrainStats }
+type brainStatsMsg struct{ stats BrainStats }
 type logLineMsg struct{ line string }
 type tickMsg time.Time
 
@@ -281,7 +281,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case brainCostMsg:
+	case brainStatsMsg:
 		m.brain.stats = msg.stats
 
 	case SelectionCopiedMsg:
@@ -326,6 +326,52 @@ func formatCostUSD(cost float64) string {
 		return "$0.00"
 	}
 	return fmt.Sprintf("$%.4f", cost)
+}
+
+func formatTokenCount(n int) string {
+	if n < 10000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 100000 {
+		value := float64(n) / 1000
+		text := fmt.Sprintf("%.1fK", value)
+		return strings.Replace(text, ".0K", "K", 1)
+	}
+	return fmt.Sprintf("%dK", (n+500)/1000)
+}
+
+func brainStatsCandidates(stats BrainStats) []string {
+	cost := formatCostUSD(stats.TotalCostUSD)
+	if stats.PromptTokens() == 0 && stats.TotalOutputTokens == 0 {
+		return []string{cost}
+	}
+
+	in := formatTokenCount(stats.TotalInputTokens)
+	out := formatTokenCount(stats.TotalOutputTokens)
+	cacheRead := formatTokenCount(stats.TotalCacheReadTokens)
+	cacheCreate := formatTokenCount(stats.TotalCacheCreationTokens)
+	cachePct := fmt.Sprintf("%d%%", stats.CacheHitRate())
+
+	return []string{
+		fmt.Sprintf("in=%s out=%s cache_read=%s cache_create=%s %s cost=%s", in, out, cacheRead, cacheCreate, cachePct, cost),
+		fmt.Sprintf("in=%s out=%s cr=%s cc=%s %s %s", in, out, cacheRead, cacheCreate, cachePct, cost),
+		fmt.Sprintf("in=%s out=%s %s %s", in, out, cachePct, cost),
+		fmt.Sprintf("%s %s cache", cost, cachePct),
+		cost,
+	}
+}
+
+func chooseBrainStatsIndicator(stats BrainStats, maxWidth int) string {
+	candidates := brainStatsCandidates(stats)
+	if maxWidth <= 0 {
+		return candidates[len(candidates)-1]
+	}
+	for _, candidate := range candidates {
+		if lipgloss.Width(candidate) <= maxWidth {
+			return candidate
+		}
+	}
+	return candidates[len(candidates)-1]
 }
 
 // --- Log helpers ---
@@ -532,7 +578,6 @@ func (m model) View() string {
 		indicators = append(indicators, sDim.Render("○")+" cc")
 	}
 	indicators = append(indicators, m.brainIndicator())
-	indicators = append(indicators, sDim.Render(formatCostUSD(m.brain.stats.TotalCostUSD)))
 	if m.buildState != "" {
 		indicators = append(indicators, m.buildState)
 	}
@@ -542,6 +587,14 @@ func (m model) View() string {
 	if m.resolved > 0 {
 		indicators = append(indicators, sOk.Render(fmt.Sprintf("✓ %d", m.resolved)))
 	}
+
+	statsMaxWidth := w - 1
+	if used := joinWidth(indicators, "  "); used > 0 {
+		statsMaxWidth -= used + 2
+	}
+	statsIndicator := sDim.Render(chooseBrainStatsIndicator(m.brain.stats, statsMaxWidth))
+	indicators = append(indicators[:2], append([]string{statsIndicator}, indicators[2:]...)...)
+
 	h2Items := make([]string, 0, len(indicators))
 	for i, indicator := range indicators {
 		if i < len(indicators)-1 {

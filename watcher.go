@@ -141,7 +141,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			fmt.Fprintf(os.Stderr, "warning: could not start brain: %v\n", err)
 		}
 	}
-	p.Send(brainCostMsg{stats: brainStats})
+	p.Send(brainStatsMsg{stats: brainStats})
 
 	// Debounce channel: AfterFunc sends the reason here; loop reads it next iteration.
 	debounceCh := make(chan string, 1)
@@ -311,7 +311,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			brainThinking = false
 			if result.brain != nil {
 				brainStats = result.brain.Stats()
-				p.Send(brainCostMsg{stats: brainStats})
+				p.Send(brainStatsMsg{stats: brainStats})
 			}
 			if brainStale {
 				break
@@ -373,7 +373,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			// Restart brain unless shutting down.
 			if !shuttingDown && brain != nil {
 				brainStats = brain.Stats()
-				p.Send(brainCostMsg{stats: brainStats})
+				p.Send(brainStatsMsg{stats: brainStats})
 				brain.Stop()
 				brain = nil
 				restartDirs := extraDirSlice()
@@ -420,7 +420,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 					clearBrainState()
 					if brain != nil {
 						brainStats = brain.Stats()
-						p.Send(brainCostMsg{stats: brainStats})
+						p.Send(brainStatsMsg{stats: brainStats})
 						brain.Stop()
 						brain = nil
 					}

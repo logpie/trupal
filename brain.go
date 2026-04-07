@@ -57,6 +57,21 @@ func (s *BrainStats) addTurn(usage BrainUsage, costUSD float64) {
 	s.TotalCostUSD += costUSD
 }
 
+// PromptTokens returns the total prompt-side token volume, including cache hits
+// and cache writes, for computing cache effectiveness.
+func (s BrainStats) PromptTokens() int {
+	return s.TotalInputTokens + s.TotalCacheReadTokens + s.TotalCacheCreationTokens
+}
+
+// CacheHitRate returns the percent of prompt-side tokens served from cache.
+func (s BrainStats) CacheHitRate() int {
+	total := s.PromptTokens()
+	if total == 0 {
+		return 0
+	}
+	return (s.TotalCacheReadTokens*100 + total/2) / total
+}
+
 // Brain manages the CC subprocess.
 type Brain struct {
 	cmd     *exec.Cmd

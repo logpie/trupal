@@ -286,16 +286,85 @@ func TestBrainStatusFinishedShowsRelativeAge(t *testing.T) {
 	}
 }
 
-func TestBrainCostDisplaysInHeader(t *testing.T) {
+func TestBrainStatsDisplaysCompactHeader(t *testing.T) {
 	m := initialModel("test")
-	m.width = 60
+	m.width = 48
 	m.height = 15
 
-	newM, _ := m.Update(brainCostMsg{stats: BrainStats{TotalCostUSD: 0.0123}})
+	newM, _ := m.Update(brainStatsMsg{stats: BrainStats{
+		TotalInputTokens:         58,
+		TotalOutputTokens:        5053,
+		TotalCacheReadTokens:     392000,
+		TotalCacheCreationTokens: 36000,
+		TotalCostUSD:             0.11,
+	}})
 	m = newM.(model)
 
-	if !containsStr(m.View(), "$0.0123") {
-		t.Fatalf("expected brain cost in header, got %q", m.View())
+	view := m.View()
+	if !containsStr(view, "in=58 out=5053 92% $0.1100") {
+		t.Fatalf("expected compact brain stats in header, got %q", view)
+	}
+	if containsStr(view, "cache_read=") {
+		t.Fatalf("expected narrow header to avoid detailed cache counts, got %q", view)
+	}
+}
+
+func TestBrainStatsDisplaysMinimalCacheFallback(t *testing.T) {
+	m := initialModel("test")
+	m.width = 34
+	m.height = 15
+
+	newM, _ := m.Update(brainStatsMsg{stats: BrainStats{
+		TotalInputTokens:         58,
+		TotalOutputTokens:        5053,
+		TotalCacheReadTokens:     392000,
+		TotalCacheCreationTokens: 36000,
+		TotalCostUSD:             0.11,
+	}})
+	m = newM.(model)
+
+	view := m.View()
+	if !containsStr(view, "$0.1100 92% cache") {
+		t.Fatalf("expected minimal cache fallback in header, got %q", view)
+	}
+	if containsStr(view, "in=58 out=5053") {
+		t.Fatalf("expected minimal fallback to drop detailed token counts, got %q", view)
+	}
+}
+
+func TestBrainStatsDisplaysDetailedHeaderWhenWide(t *testing.T) {
+	m := initialModel("test")
+	m.width = 120
+	m.height = 15
+
+	newM, _ := m.Update(brainStatsMsg{stats: BrainStats{
+		TotalInputTokens:         58,
+		TotalOutputTokens:        5053,
+		TotalCacheReadTokens:     392000,
+		TotalCacheCreationTokens: 36000,
+		TotalCostUSD:             0.11,
+	}})
+	m = newM.(model)
+
+	view := m.View()
+	if !containsStr(view, "in=58 out=5053 cache_read=392K cache_create=36K 92% cost=$0.1100") {
+		t.Fatalf("expected detailed brain stats in wide header, got %q", view)
+	}
+}
+
+func TestFormatTokenCount(t *testing.T) {
+	cases := map[int]string{
+		58:     "58",
+		5053:   "5053",
+		14500:  "14.5K",
+		36000:  "36K",
+		392000: "392K",
+	}
+
+	for input, want := range cases {
+		if got := formatTokenCount(input); got != want {
+			t.Fatalf("formatTokenCount(%d) = %q, want %q", input, got, want)
+		}
 	}
 }
 
