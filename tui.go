@@ -172,6 +172,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.sel.PrepareDrag(point.Line, point.Col, m.logRect())
 		case msg.Action == tea.MouseActionMotion && (msg.Button == tea.MouseButtonLeft || msg.Button == tea.MouseButtonNone):
+			if m.sel.Anchor.Valid() {
+				m.autoScrollSelection(msg.Y)
+			}
 			point, ok := m.selectionPointAt(msg.X, msg.Y, true)
 			if !ok {
 				return m, nil
@@ -431,6 +434,20 @@ func (m model) visibleLogRange() (start, end int) {
 	return start, end
 }
 
+func (m *model) autoScrollSelection(y int) {
+	rect := m.logRect()
+	if rect.H <= 0 {
+		return
+	}
+
+	switch {
+	case y < rect.Y:
+		m.scroll(rect.Y - y)
+	case y >= rect.Y+rect.H:
+		m.scroll(-(y - (rect.Y + rect.H) + 1))
+	}
+}
+
 func (m model) selectionPointAt(x, y int, clamp bool) (selectionPoint, bool) {
 	rect := m.logRect()
 	if rect.W <= 0 || rect.H <= 0 {
@@ -443,20 +460,16 @@ func (m model) selectionPointAt(x, y int, clamp bool) (selectionPoint, bool) {
 		x, y = rect.Clamp(x, y)
 	}
 
-	start, end := m.visibleLogRange()
-	if end <= start {
+	if len(m.lines) == 0 {
 		return selectionPoint{}, false
 	}
 
-	lineIdx := start + (y - rect.Y)
-	if lineIdx < start {
-		lineIdx = start
+	lineIdx := len(m.lines) - m.logH() - m.scrollOffset + (y - rect.Y)
+	if lineIdx < 0 {
+		lineIdx = 0
 	}
-	if lineIdx >= end {
-		lineIdx = end - 1
-	}
-	if lineIdx < 0 || lineIdx >= len(m.lines) {
-		return selectionPoint{}, false
+	if lineIdx >= len(m.lines) {
+		lineIdx = len(m.lines) - 1
 	}
 
 	relX := x - rect.X

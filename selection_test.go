@@ -29,6 +29,25 @@ func TestSelectionPointAtUsesVisibleWindow(t *testing.T) {
 	}
 }
 
+func TestSelectionPointAtUsesScrollOffset(t *testing.T) {
+	m := initialModel("test")
+	m.width = 40
+	m.height = 15 // logH = 9
+	m.scrollOffset = 5
+
+	for i := 0; i < 20; i++ {
+		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
+	}
+
+	point, ok := m.selectionPointAt(0, 3, false)
+	if !ok {
+		t.Fatal("expected selection point in log area")
+	}
+	if point.Line != 6 {
+		t.Fatalf("expected first visible line to map to absolute line 6, got %d", point.Line)
+	}
+}
+
 func TestMouseWheelScrollsOnlyInsideLogArea(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
@@ -129,6 +148,59 @@ func TestMouseDragCopiesSelection(t *testing.T) {
 	}
 }
 
+func TestMouseDragCopiesSelectionFromScrolledView(t *testing.T) {
+	m := initialModel("test")
+	m.width = 40
+	m.height = 15
+	m.scrollOffset = 5
+
+	for i := 0; i < 20; i++ {
+		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
+	}
+
+	var copied string
+	prevCopy := copySelectedText
+	copySelectedText = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() {
+		copySelectedText = prevCopy
+	}()
+
+	newM, _ := m.Update(tea.MouseMsg{
+		X:      0,
+		Y:      3,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	m = newM.(model)
+
+	newM, _ = m.Update(tea.MouseMsg{
+		X:      20,
+		Y:      4,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionMotion,
+	})
+	m = newM.(model)
+
+	newM, cmd := m.Update(tea.MouseMsg{
+		X:      20,
+		Y:      4,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionRelease,
+	})
+	m = newM.(model)
+	if cmd == nil {
+		t.Fatal("expected copy command on drag release")
+	}
+
+	_ = cmd()
+	if copied != "line06\nline07" {
+		t.Fatalf("expected copied text %q, got %q", "line06\nline07", copied)
+	}
+}
+
 func TestMouseMotionWithoutPressStillSelects(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
@@ -170,6 +242,62 @@ func TestMouseMotionWithoutPressStillSelects(t *testing.T) {
 	_ = cmd()
 	if copied != "line11\nline12" {
 		t.Fatalf("expected copied text %q, got %q", "line11\nline12", copied)
+	}
+}
+
+func TestMouseDragAutoScrollsAboveViewport(t *testing.T) {
+	m := initialModel("test")
+	m.width = 40
+	m.height = 15
+	m.scrollOffset = 3
+
+	for i := 0; i < 20; i++ {
+		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
+	}
+
+	var copied string
+	prevCopy := copySelectedText
+	copySelectedText = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() {
+		copySelectedText = prevCopy
+	}()
+
+	newM, _ := m.Update(tea.MouseMsg{
+		X:      0,
+		Y:      3,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	m = newM.(model)
+
+	newM, _ = m.Update(tea.MouseMsg{
+		X:      0,
+		Y:      2,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionMotion,
+	})
+	m = newM.(model)
+	if m.scrollOffset != 4 {
+		t.Fatalf("expected drag above viewport to scroll up by 1, got %d", m.scrollOffset)
+	}
+
+	newM, cmd := m.Update(tea.MouseMsg{
+		X:      0,
+		Y:      2,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionRelease,
+	})
+	m = newM.(model)
+	if cmd == nil {
+		t.Fatal("expected copy command on drag release")
+	}
+
+	_ = cmd()
+	if copied != "line07\nl" {
+		t.Fatalf("expected copied text %q, got %q", "line07\nl", copied)
 	}
 }
 
