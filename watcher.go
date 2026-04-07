@@ -134,6 +134,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 	restartNeeded := false
 	restartAt := time.Time{}
 	loggedTrajectory := make(map[string]bool)
+	recentEditedFiles := make([]string, 0, 8)
 	extraDirs := make(map[string]bool) // directories CC works in (from JSONL tool calls)
 
 	extraDirSlice := func() []string {
@@ -237,6 +238,9 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 								dir := filepath.Dir(e.ToolFiles[i])
 								if dir != "" && dir != "." {
 									extraDirs[dir] = true
+								}
+								if isEditTool(tool) {
+									recentEditedFiles = appendUniqueLimited(recentEditedFiles, displayPath(projectDir, e.ToolFiles[i]), 8)
 								}
 							}
 							key := tool + ":" + file
@@ -509,21 +513,22 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			triggerBrain = false
 		}
 		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
-			Debugf("[watcher] triggering brain: %s", triggerReason)
+			notification := buildBrainNotification(triggerReason, recentEditedFiles, nameStatus, rawDiff, untrackedFiles, buildDisplay)
+			Debugf("[watcher] triggering brain: %s", truncate(notification, 200))
 			brainBusy = true
 			brainThinking = true
 			p.Send(brainStatusMsg{thinking: true})
 			activeBrain := brain
 			findingsJSON := findings.ActiveJSON()
 
-			go func(brain *Brain, reason, findingsJSON string) {
-				resp, err := brain.Notify(reason, findingsJSON)
+			go func(brain *Brain, notification, findingsJSON string) {
+				resp, err := brain.Notify(notification, findingsJSON)
 				if err != nil {
 					brainErrCh <- brainErr{brain: brain, err: err}
 					return
 				}
 				brainResultCh <- brainResult{brain: brain, resp: resp}
-			}(activeBrain, triggerReason, findingsJSON)
+			}(activeBrain, notification, findingsJSON)
 		}
 
 		// Build display state.
@@ -658,6 +663,149 @@ func splitDiffByFile(rawDiff string) map[string]string {
 	flush()
 
 	return result
+}
+
+func isEditTool(tool string) bool {
+	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "edit", "multiedit", "write":
+		return true
+	default:
+		return false
+	}
+}
+
+func appendUniqueLimited(items []string, value string, limit int) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	var filtered []string
+	for _, item := range items {
+		if item != value {
+			filtered = append(filtered, item)
+		}
+	}
+	filtered = append(filtered, value)
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[len(filtered)-limit:]
+	}
+	return filtered
+}
+
+func displayPath(projectDir, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		if rel, err := filepath.Rel(projectDir, path); err == nil && rel != "" && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return path
+}
+
+func buildBrainNotification(reason string, editedFiles []string, nameStatus, rawDiff string, untrackedFiles []string, build *BuildDisplay) string {
+	var sb strings.Builder
+	sb.WriteString(reason)
+	sb.WriteString("\n\nRECENT JSONL EDITS:\n")
+	if len(editedFiles) == 0 {
+		sb.WriteString("- none detected from recent Edit/Write tool calls\n")
+	} else {
+		for _, file := range editedFiles {
+			sb.WriteString("- ")
+			sb.WriteString(file)
+			sb.WriteByte('\n')
+		}
+	}
+
+	sb.WriteString("\nGIT DIFF SUMMARY:\n")
+	sb.WriteString(summarizeGitDiff(nameStatus, rawDiff, untrackedFiles))
+	sb.WriteString("\n\nBUILD STATUS:\n")
+	sb.WriteString("- ")
+	sb.WriteString(formatBuildStatus(build))
+	return sb.String()
+}
+
+func summarizeGitDiff(nameStatus, rawDiff string, untrackedFiles []string) string {
+	type diffStat struct {
+		added   int
+		deleted int
+	}
+
+	stats := make(map[string]diffStat)
+	for file, diff := range splitDiffByFile(rawDiff) {
+		var stat diffStat
+		for _, line := range strings.Split(diff, "\n") {
+			switch {
+			case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+				continue
+			case strings.HasPrefix(line, "+"):
+				stat.added++
+			case strings.HasPrefix(line, "-"):
+				stat.deleted++
+			}
+		}
+		stats[file] = stat
+	}
+
+	var lines []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(nameStatus), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		status := fields[0]
+		path := fields[len(fields)-1]
+		seen[path] = true
+		stat := stats[path]
+		switch {
+		case strings.HasPrefix(status, "R") && len(fields) >= 3:
+			lines = append(lines, fmt.Sprintf("- R %s -> %s%s", fields[1], fields[2], formatDiffCounts(stat.added, stat.deleted)))
+		default:
+			lines = append(lines, fmt.Sprintf("- %s %s%s", status, path, formatDiffCounts(stat.added, stat.deleted)))
+		}
+	}
+	for _, path := range untrackedFiles {
+		if seen[path] {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- ?? %s (untracked)", path))
+	}
+	if len(lines) == 0 {
+		return "- clean working tree"
+	}
+	const maxLines = 8
+	if len(lines) > maxLines {
+		extra := len(lines) - maxLines
+		lines = append(lines[:maxLines], fmt.Sprintf("- ... %d more changed files", extra))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatDiffCounts(added, deleted int) string {
+	if added == 0 && deleted == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (+%d -%d)", added, deleted)
+}
+
+func formatBuildStatus(build *BuildDisplay) string {
+	if build == nil {
+		return "not run this cycle"
+	}
+	if build.OK {
+		return "passing"
+	}
+	if build.Trend != "" {
+		return fmt.Sprintf("failing: %d errors (%s)", build.ErrorCount, build.Trend)
+	}
+	return fmt.Sprintf("failing: %d errors", build.ErrorCount)
 }
 
 // buildTrend computes the Trend string for BuildDisplay from the error history.
