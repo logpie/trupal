@@ -120,11 +120,11 @@ func TestMouseDragCopiesSelection(t *testing.T) {
 
 	newM, _ = m.Update(copiedMsg)
 	m = newM.(model)
-	if m.toastMsg != "copied to tmux buffer" {
+	if m.toastMsg != "✓ copied! paste with prefix+]" {
 		t.Fatalf("expected success toast, got %q", m.toastMsg)
 	}
-	if !m.sel.HasSelection() {
-		t.Fatal("selection should remain visible after copy")
+	if m.sel.HasSelection() {
+		t.Fatal("selection should be cleared after copy")
 	}
 }
 

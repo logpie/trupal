@@ -7,11 +7,59 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-
-	tea "github.com/charmbracelet/bubbletea"
 	"strings"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+// DisplayState holds state for the log file writer.
+type DisplayState struct {
+	ProjectDir         string
+	Elapsed            string
+	ChangedFiles       []string
+	UntrackedFiles     []string
+	Build              *BuildDisplay
+	TrajectoryFindings []Finding
+	DeletedTests       []string
+	BrainFindings      []BrainFinding
+	BrainThinking      bool
+	BrainLastMsg       string
+	BrainLastTime      time.Time
+	CCStatus           string
+}
+
+type BuildDisplay struct {
+	OK         bool
+	ErrorCount int
+	Trend      string
+}
+
+func WriteLog(logPath string, state DisplayState) {
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	t := time.Now().Format("15:04:05")
+	fmt.Fprintf(f, "%s cc:%s", t, state.CCStatus)
+	if state.Build != nil {
+		if state.Build.OK {
+			fmt.Fprintf(f, " build:ok")
+		} else {
+			fmt.Fprintf(f, " build:%d-err", state.Build.ErrorCount)
+		}
+	}
+	if len(state.ChangedFiles) > 0 {
+		fmt.Fprintf(f, " mod:%s", strings.Join(state.ChangedFiles, ","))
+	}
+	for _, bf := range state.BrainFindings {
+		if bf.Status == "shown" {
+			fmt.Fprintf(f, "\n  ⚠ %s", bf.Nudge)
+		}
+	}
+	fmt.Fprintf(f, "\n")
+}
 
 func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 	InitDebugLog(projectDir)

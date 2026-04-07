@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"time"
@@ -124,48 +123,6 @@ func (s *Session) Reset() {
 	s.LastDiffHash = make(map[string]uint64)
 }
 
-func (s *Session) Summary() string {
-	totalEdits := 0
-	for _, c := range s.FileEditCount {
-		totalEdits += c
-	}
-	return fmt.Sprintf("files=%d edits=%d errors=%d duration=%s",
-		len(s.FileEditCount), totalEdits, len(s.ErrorHistory), s.Elapsed())
-}
-
-func (s *Session) MostEdited() (string, int) {
-	var maxFile string
-	var maxCount int
-	for f, c := range s.FileEditCount {
-		if c > maxCount {
-			maxFile = f
-			maxCount = c
-		}
-	}
-	return maxFile, maxCount
-}
-
-func (s *Session) ErrorRate() float64 {
-	if len(s.ErrorHistory) == 0 {
-		return 0
-	}
-	errors := 0
-	for _, e := range s.ErrorHistory {
-		if e > 0 {
-			errors++
-		}
-	}
-	return float64(errors) / float64(len(s.ErrorHistory))
-}
-
-func (s *Session) Serialize() []byte {
-	data, _ := json.Marshal(s)
-	return data
-}
-
-func (s *Session) Load(data []byte) {
-	json.Unmarshal(data, s)
-}
 
 // fnvHash returns the FNV-64a hash of s.
 func fnvHash(s string) uint64 {
