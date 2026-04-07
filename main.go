@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
@@ -73,23 +74,17 @@ func cmdStart() {
 	ccPane := findCCPane(gitRoot)
 
 	// Launch watch command in a new tmux split pane.
-	// Use -P -F to get the new pane ID, and "--" to avoid shell word-splitting.
-	args := []string{"split-window", "-h", "-l", "30%", "-d", "-P", "-F", "#{pane_id}"}
+	// Use "--" so tmux execs directly without shell (avoids word-splitting on paths with spaces).
+	args := []string{"split-window", "-h", "-l", "30%", "-d"}
 	if ccPane != "" {
 		args = append(args, "-t", ccPane)
 	}
 	args = append(args, "--", self, "watch", gitRoot)
-	out, err := exec.Command("tmux", args...).Output()
-	if err != nil {
+	if err := exec.Command("tmux", args...).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error creating tmux pane: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Set remain-on-exit so the pane stays visible after trupal stops.
-	newPane := strings.TrimSpace(string(out))
-	if newPane != "" {
-		exec.Command("tmux", "set-option", "-t", newPane, "remain-on-exit", "on").Run()
-	}
+	// No remain-on-exit — the watch process blocks after stop, keeping the pane alive.
 
 	fmt.Printf("trupal started for %s\n", gitRoot)
 }
@@ -146,28 +141,36 @@ func cmdStop() {
 		os.Exit(1)
 	}
 
-	// Send C-c to stop the watcher gracefully. Process blocks at summary screen.
-	exec.Command("tmux", "send-keys", "-t", paneID, "C-c", "").Run()
+	// Send SIGINT to the trupal process in that pane.
+	// Get the pane's PID and signal it.
+	pidOut, pidErr := exec.Command("tmux", "display", "-t", paneID, "-p", "#{pane_pid}").Output()
+	if pidErr == nil {
+		panePid := strings.TrimSpace(string(pidOut))
+		if panePid != "" {
+			exec.Command("kill", "-INT", panePid).Run()
+		}
+	}
 	time.Sleep(500 * time.Millisecond)
 	os.Remove(pidFile)
 
 	if closePane {
-		// Also kill the pane. Safe: we verified this is trupal's pane via pid file.
 		exec.Command("tmux", "kill-pane", "-t", paneID).Run()
-		fmt.Printf("trupal stopped and pane closed\n")
+		fmt.Println("trupal stopped and pane closed")
 	} else {
-		fmt.Printf("trupal stopped (pane stays open for review)\n")
+		fmt.Println("trupal stopped (pane stays open for review)")
 	}
 }
 
 func cmdWatch(gitRoot string) {
-	// Recover from panics — show error in pane instead of crashing.
+	// Recover from panics — show error in pane, wait for keypress.
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "\n\ntrupal crashed: %v\n", r)
 			fmt.Fprintf(os.Stderr, "check .trupal.debug for details\n")
-			// Block forever so the pane stays visible with the error.
-			select {}
+			fmt.Fprintf(os.Stderr, "press ctrl+c to close pane\n")
+			sig := make(chan os.Signal, 1)
+			signal.Notify(sig, os.Interrupt)
+			<-sig
 		}
 	}()
 

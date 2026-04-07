@@ -16,7 +16,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 	defer CloseDebugLog()
 
 	// Handle SIGINT for graceful shutdown.
-	sigCh := make(chan os.Signal, 1)
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt)
 
 	session := NewSession(projectDir)
@@ -299,9 +299,10 @@ func runWatchLoop(projectDir string, cfg Config) {
 			fmt.Printf(" %s%d findings this session%s\n", dim, nFindings, reset)
 			fmt.Printf("\n %slog: .trupal.log%s\n", dim, reset)
 			fmt.Printf(" %sdebug: .trupal.debug%s\n", dim, reset)
-			// Block forever — keep process alive so tmux doesn't show "Pane is dead".
-			// User closes the pane manually (prefix+x or trupal stop --close).
-			select {}
+			fmt.Printf("\n %spress ctrl+c to close pane%s\n", dim, reset)
+			// Wait for second SIGINT to actually exit.
+			<-sigCh
+			return
 		}
 	}
 }
