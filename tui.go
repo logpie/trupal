@@ -80,6 +80,14 @@ func initialModel(project string) model {
 
 func (m model) Init() tea.Cmd { return tickEvery() }
 
+// ProgramOptions returns the tea.ProgramOption list for the trupal TUI.
+func ProgramOptions() []tea.ProgramOption {
+	return []tea.ProgramOption{
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(), // mouse wheel + shift-click for text selection
+	}
+}
+
 func tickEvery() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
@@ -111,6 +119,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "G", "end":
 			m.scrollOffset = 0
 		}
+
+	case tea.MouseMsg:
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.scroll(3)
+		case tea.MouseButtonWheelDown:
+			m.scroll(-3)
+		}
+		// Ignore click/drag — let terminal handle selection via Shift+click
+		return m, nil
 
 	case tickMsg:
 		return m, tickEvery()

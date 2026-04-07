@@ -189,7 +189,7 @@ func cmdWatch(gitRoot string) {
 	}()
 
 	// Start TUI + watcher.
-	p := tea.NewProgram(initialModel(filepath.Base(gitRoot)), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(filepath.Base(gitRoot)), ProgramOptions()...)
 	go runWatchLoop(gitRoot, cfg, p)
 	p.Run() // ignore exit error — expected on SIGINT
 
