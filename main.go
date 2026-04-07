@@ -21,6 +21,8 @@ func main() {
 		cmdStart()
 	case "stop":
 		cmdStop()
+	case "log":
+		cmdLog()
 	case "watch":
 		// Internal: called inside the split pane. Not user-facing.
 		if len(os.Args) < 3 {
@@ -30,7 +32,7 @@ func main() {
 		cmdWatch(os.Args[2])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
-		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop> [project-dir]")
+		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop|log> [project-dir]")
 		os.Exit(1)
 	}
 }
@@ -90,36 +92,21 @@ func cmdStart() {
 }
 
 func cmdStop() {
-	// Check for --close flag.
+	// Parse flags and project dir.
 	closePane := false
+	var projectDir string
 	for _, arg := range os.Args[2:] {
-		if arg == "--close" {
+		switch {
+		case arg == "--close":
 			closePane = true
-		}
-	}
-
-	// Resolve project dir (skip --close in args).
-	projectDir := ""
-	for _, arg := range os.Args[2:] {
-		if arg != "--close" {
+		case projectDir == "":
 			projectDir = arg
-			break
 		}
 	}
-	if projectDir == "" {
-		var err error
-		projectDir, err = os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
+	if projectDir != "" {
+		projectDir, _ = filepath.Abs(projectDir)
 	} else {
-		var err error
-		projectDir, err = filepath.Abs(projectDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
+		projectDir, _ = os.Getwd()
 	}
 
 	gitRoot, err := findGitRoot(projectDir)
@@ -200,6 +187,26 @@ func cmdWatch(gitRoot string) {
 	}()
 
 	runWatchLoop(gitRoot, cfg)
+}
+
+func cmdLog() {
+	projectDir, err := resolveProjectDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving project dir: %v\n", err)
+		os.Exit(1)
+	}
+	gitRoot, err := findGitRoot(projectDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	logPath := filepath.Join(gitRoot, ".trupal.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "no log file found")
+		os.Exit(1)
+	}
+	fmt.Print(string(data))
 }
 
 // resolveProjectDir returns the project directory from args or cwd.
