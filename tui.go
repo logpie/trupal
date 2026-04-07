@@ -13,13 +13,13 @@ import (
 // --- Styles ---
 
 var (
-	sTitle   = lipgloss.NewStyle().Bold(true)
-	sDim     = lipgloss.NewStyle().Faint(true)
-	sWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	sErr     = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	sOk      = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	sCyan    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	sSep     = lipgloss.NewStyle().Faint(true)
+	sTitle = lipgloss.NewStyle().Bold(true)
+	sDim   = lipgloss.NewStyle().Faint(true)
+	sWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	sErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	sOk    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	sCyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	sSep   = lipgloss.NewStyle().Faint(true)
 )
 
 // --- Messages ---
@@ -43,6 +43,8 @@ type brainStatusMsg struct {
 }
 type logLineMsg struct{ line string }
 type tickMsg time.Time
+
+var copySelectedText = CopySelectedToClipboard
 
 // --- Model ---
 
@@ -90,7 +92,7 @@ func (m model) Init() tea.Cmd { return tickEvery() }
 func ProgramOptions() []tea.ProgramOption {
 	return []tea.ProgramOption{
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(), // mouse wheel + shift-click for text selection
+		tea.WithMouseCellMotion(),
 	}
 }
 
@@ -127,31 +129,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		logTop := 3 // header(2) + sep(1)
 		switch {
-		case msg.Button == tea.MouseButtonWheelUp:
-			m.sel.Clear()
+		case msg.Button == tea.MouseButtonWheelUp && m.logRect().Contains(msg.X, msg.Y):
 			m.scroll(3)
-		case msg.Button == tea.MouseButtonWheelDown:
-			m.sel.Clear()
+		case msg.Button == tea.MouseButtonWheelDown && m.logRect().Contains(msg.X, msg.Y):
 			m.scroll(-3)
 		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
-			m.sel.StartDrag(msg.X, msg.Y, logTop, m.scrollOffset)
-		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionMotion:
-			// CellMotion mode: first drag event may arrive as motion (no press).
-			// If drag not started yet, start it now.
-			if m.sel.startLine < 0 {
-				m.sel.StartDrag(msg.X, msg.Y, logTop, m.scrollOffset)
+			point, ok := m.selectionPointAt(msg.X, msg.Y, false)
+			if !ok {
+				m.sel.Clear()
+				return m, nil
 			}
-			m.sel.UpdateDrag(msg.X, msg.Y, m.scrollOffset)
+			m.sel.PrepareDrag(point.Line, point.Col, m.logRect())
+		case msg.Action == tea.MouseActionMotion && (msg.Button == tea.MouseButtonLeft || msg.Button == tea.MouseButtonNone):
+			point, ok := m.selectionPointAt(msg.X, msg.Y, true)
+			if !ok {
+				return m, nil
+			}
+			if !m.sel.Anchor.Valid() {
+				m.sel.PrepareDrag(point.Line, point.Col, m.logRect())
+			}
+			m.sel.HandleDrag(point.Line, point.Col)
 		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease,
 			msg.Button == tea.MouseButtonNone && msg.Action == tea.MouseActionRelease:
-			if m.sel.startLine >= 0 {
-				text := m.sel.FinishDrag(m.lines)
-				if text != "" {
-					return m, func() tea.Msg {
-						CopySelectedToClipboard(text)
-						return SelectionCopiedMsg{Text: text, Time: time.Now()}
+			if m.sel.Anchor.Valid() {
+				if point, ok := m.selectionPointAt(msg.X, msg.Y, true); ok {
+					if m.sel.Active || point.Line != m.sel.Anchor.Line || point.Col != m.sel.Anchor.Col {
+						m.sel.HandleDrag(point.Line, point.Col)
+					}
+				}
+				if m.sel.FinishDrag() {
+					text := m.sel.SelectedText(m.lines, selectionTabWidth)
+					if text != "" {
+						return m, func() tea.Msg {
+							return SelectionCopiedMsg{
+								Text: text,
+								Time: time.Now(),
+								Err:  copySelectedText(text),
+							}
+						}
 					}
 				}
 			}
@@ -241,9 +257,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SelectionCopiedMsg:
-		m.toastMsg = "copied to clipboard"
+		if msg.Err != nil {
+			m.toastMsg = "copy failed"
+		} else {
+			m.toastMsg = "copied to tmux buffer"
+		}
 		m.toastExpiry = time.Now().Add(2 * time.Second)
-		m.sel.Clear()
 		return m, nil
 
 	case logLineMsg:
@@ -262,7 +281,8 @@ func (m *model) log(line string) {
 	} else {
 		m.lines = append(m.lines, ts+"  "+line)
 	}
-	if m.scrollOffset == 0 { /* auto-scroll: already at bottom */ }
+	if m.scrollOffset == 0 { /* auto-scroll: already at bottom */
+	}
 	m.trim()
 }
 
@@ -312,6 +332,70 @@ func (m model) contentW() int {
 	return w
 }
 
+func (m model) logRect() selectionRect {
+	return selectionRect{
+		X: 0,
+		Y: 3,
+		W: m.width,
+		H: m.logH(),
+	}
+}
+
+func (m model) visibleLogRange() (start, end int) {
+	total := len(m.lines)
+	end = total - m.scrollOffset
+	if end > total {
+		end = total
+	}
+	start = end - m.logH()
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	return start, end
+}
+
+func (m model) selectionPointAt(x, y int, clamp bool) (selectionPoint, bool) {
+	rect := m.logRect()
+	if rect.W <= 0 || rect.H <= 0 {
+		return selectionPoint{}, false
+	}
+	if !rect.Contains(x, y) {
+		if !clamp {
+			return selectionPoint{}, false
+		}
+		x, y = rect.Clamp(x, y)
+	}
+
+	start, end := m.visibleLogRange()
+	if end <= start {
+		return selectionPoint{}, false
+	}
+
+	lineIdx := start + (y - rect.Y)
+	if lineIdx < start {
+		lineIdx = start
+	}
+	if lineIdx >= end {
+		lineIdx = end - 1
+	}
+	if lineIdx < 0 || lineIdx >= len(m.lines) {
+		return selectionPoint{}, false
+	}
+
+	relX := x - rect.X
+	if relX < 0 {
+		relX = 0
+	}
+	expanded := ExpandTabs(m.lines[lineIdx], selectionTabWidth)
+	return selectionPoint{
+		Line: lineIdx,
+		Col:  VisualColAtRelativeX(expanded, relX),
+	}, true
+}
+
 // --- View ---
 
 func (m model) View() string {
@@ -347,26 +431,15 @@ func (m model) View() string {
 
 	// ── Log area ──
 	lh := m.logH()
-	total := len(m.lines)
-	end := total - m.scrollOffset
-	start := end - lh
-	if end > total {
-		end = total
-	}
-	if start < 0 {
-		start = 0
-	}
-	if end < start {
-		end = start
-	}
+	start, end := m.visibleLogRange()
 
 	visible := make([]string, 0, lh)
 	if start < end {
 		for i, line := range m.lines[start:end] {
 			absIdx := start + i
 			if m.sel.IsLineSelected(absIdx) {
-				// Highlight selected lines with reverse video
-				line = "\033[7m" + line + "\033[27m"
+				startCol, endCol := m.sel.GetLineSelectionCols(absIdx)
+				line = InjectCharacterRangeBackground(line, startCol, endCol)
 			}
 			visible = append(visible, line)
 		}
