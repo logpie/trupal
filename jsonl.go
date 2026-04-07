@@ -350,6 +350,10 @@ func CheckForNewSession(projectDir, currentPath string) string {
 	return ""
 }
 
+func (w *JSONLWatcher) IsActive() bool {
+	return time.Since(w.lastActive) < 5*time.Minute
+}
+
 // Close stops the JSONL watcher.
 func (w *JSONLWatcher) Close() {
 	w.fsWatcher.Close()
