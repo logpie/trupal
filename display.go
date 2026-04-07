@@ -79,7 +79,7 @@ func LogResolved(f BrainFinding) {
 // LogStatus prints a compact status line when files/build change.
 func LogStatus(state DisplayState) {
 	ClearHeartbeat()
-	parts := []string{}
+	parts := []string{fmt.Sprintf("%s%s%s", dim, filepath.Base(state.ProjectDir), reset)}
 	switch state.CCStatus {
 	case "active":
 		parts = append(parts, fmt.Sprintf("%s●%s cc", green, reset))
@@ -150,19 +150,15 @@ func Heartbeat(ccStatus string, brainThinking bool, brainLastTime time.Time, ela
 
 	line := fmt.Sprintf("%s%s%s %s %s[%s]%s", dim, ts, reset, strings.Join(parts, "  "), dim, elapsed, reset)
 
-	if heartbeatActive {
-		// Move up one line, clear it, print new heartbeat.
-		fmt.Printf("\033[A\033[2K%s\n", line)
-	} else {
-		fmt.Printf("%s\n", line)
-		heartbeatActive = true
-	}
+	// Overwrite current line in place — no newline, no scrollback.
+	fmt.Printf("\r\033[2K%s", line)
+	heartbeatActive = true
 }
 
-// ClearHeartbeat moves up to erase the heartbeat before printing a new event.
+// ClearHeartbeat erases the heartbeat line and moves to a new line for event output.
 func ClearHeartbeat() {
 	if heartbeatActive {
-		fmt.Print("\033[A\033[2K")
+		fmt.Print("\r\033[2K")
 		heartbeatActive = false
 	}
 }
