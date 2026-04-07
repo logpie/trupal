@@ -21,6 +21,11 @@ var (
 	sCyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	sSep   = lipgloss.NewStyle().Faint(true)
 
+	sNudgeWarnBar  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
+	sNudgeWarnText = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58")).Padding(0, 1)
+	sNudgeErrBar   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
+	sNudgeErrText  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("52")).Padding(0, 1)
+
 	sHeaderTitle  = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
 	sHeaderLine   = lipgloss.NewStyle().PaddingLeft(1)
 	sIndicatorGap = lipgloss.NewStyle().PaddingRight(2)
@@ -237,7 +242,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logLabeled(sCyan.Bold(true).Render("i"), msg.finding.Reasoning, m.width)
 		}
 		// Actionable nudge
-		m.logLabeled(label, msg.finding.Nudge, m.width)
+		m.logNudge(label, msg.finding.Nudge, m.width, msg.finding.Severity)
 		m.log("")
 
 	case resolvedMsg:
@@ -309,6 +314,29 @@ func (m *model) logLabeled(label, text string, w int) {
 			m.trim()
 		} else {
 			m.lines = append(m.lines, renderContinuationLine(line))
+			m.trim()
+		}
+	}
+}
+
+func (m *model) logNudge(label, text string, w int, severity string) {
+	textW := logNudgeTextWidth(w)
+	if textW < 14 {
+		textW = 14
+	}
+	lines := wrap(text, textW)
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+
+	ts := time.Now().Format("15:04")
+	for i, line := range lines {
+		body := renderNudgeBody(line, severity)
+		if i == 0 {
+			m.lines = append(m.lines, renderLogLine(ts, label, body))
+			m.trim()
+		} else {
+			m.lines = append(m.lines, renderContinuationLineWithMarker(" ", body))
 			m.trim()
 		}
 	}
@@ -615,6 +643,10 @@ func logTextWidth(total int) int {
 	return total - lipgloss.Width(logPrefix("", ""))
 }
 
+func logNudgeTextWidth(total int) int {
+	return total - lipgloss.Width(logPrefix("", "")) - lipgloss.Width(renderNudgeBody("", "warn"))
+}
+
 func renderLogLine(ts, marker, text string) string {
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
@@ -627,14 +659,35 @@ func renderLogLine(ts, marker, text string) string {
 }
 
 func renderContinuationLine(text string) string {
+	return renderContinuationLineWithMarker("│", text)
+}
+
+func renderContinuationLineWithMarker(marker, text string) string {
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		sLogTimeCell.Render(""),
 		sLogGapCell.Render(""),
-		sLogGutterCell.Render("│"),
+		sLogGutterCell.Render(marker),
 		sLogGapCell.Render(""),
 		text,
 	)
+}
+
+func renderNudgeBody(text, severity string) string {
+	barStyle, textStyle := nudgeStyles(severity)
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		barStyle.Render("▌"),
+		" ",
+		textStyle.Render(text),
+	)
+}
+
+func nudgeStyles(severity string) (lipgloss.Style, lipgloss.Style) {
+	if severity == "error" {
+		return sNudgeErrBar, sNudgeErrText
+	}
+	return sNudgeWarnBar, sNudgeWarnText
 }
 
 func logPrefix(ts, marker string) string {

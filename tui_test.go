@@ -212,6 +212,38 @@ func TestLogLabeledCompactWrap(t *testing.T) {
 	}
 }
 
+func TestLogNudgeCompactWrap(t *testing.T) {
+	m := initialModel("test")
+	m.width = 48
+
+	text := "Return the real parse error here so the next retry doesn't keep masking the root cause."
+	m.logNudge("!", text, m.width, "warn")
+
+	if len(m.lines) < 2 {
+		t.Fatalf("expected wrapped nudge entry, got %d line(s)", len(m.lines))
+	}
+
+	wrapped := wrap(text, logNudgeTextWidth(m.width))
+	if len(wrapped) < 2 {
+		t.Fatalf("expected wrapped nudge content, got %d segment(s)", len(wrapped))
+	}
+
+	for i, line := range m.lines {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Fatalf("line %d exceeds pane width: got %d want <= %d", i, got, m.width)
+		}
+		if !containsStr(line, "▌") {
+			t.Fatalf("expected nudge accent bar in line %d: %q", i, line)
+		}
+	}
+
+	firstIndent := lipgloss.Width(m.lines[0]) - lipgloss.Width(wrapped[0])
+	secondIndent := lipgloss.Width(m.lines[1]) - lipgloss.Width(wrapped[1])
+	if firstIndent != secondIndent {
+		t.Fatalf("wrapped nudge text does not align: first indent=%d second indent=%d", firstIndent, secondIndent)
+	}
+}
+
 func containsStr(s, sub string) bool {
 	return len(s) > 0 && len(sub) > 0 && indexOf(s, sub) >= 0
 }
