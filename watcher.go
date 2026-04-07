@@ -286,9 +286,6 @@ func runWatchLoop(projectDir string, cfg Config) {
 			if result.resp != nil {
 				brainLastMsg = result.resp.Reasoning
 				brainLastTime = time.Now()
-				if len(result.resp.Nudges) > 0 {
-					fmt.Print("\r\033[K") // clear heartbeat before nudges
-				}
 				for _, nudge := range result.resp.Nudges {
 					reasoning := nudge.Reasoning
 					if reasoning == "" {
@@ -446,7 +443,6 @@ func runWatchLoop(projectDir string, cfg Config) {
 		// Log status only when files/build change.
 		sh := statusOnlyHash(state)
 		if sh != lastStatusHash {
-			fmt.Print("\r\033[K") // clear heartbeat line before logging
 			LogStatus(state)
 			lastStatusHash = sh
 		}

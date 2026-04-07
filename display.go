@@ -52,6 +52,7 @@ func LogEvent(format string, args ...interface{}) {
 
 // LogNudge prints a nudge — the main output of trupal.
 func LogNudge(f BrainFinding) {
+	ClearHeartbeat()
 	ts := f.Timestamp.Format("15:04:05")
 	icon := fmt.Sprintf("%s⚠%s", yellow, reset)
 	if f.Severity == "error" {
@@ -77,6 +78,7 @@ func LogResolved(f BrainFinding) {
 
 // LogStatus prints a compact status line when files/build change.
 func LogStatus(state DisplayState) {
+	ClearHeartbeat()
 	parts := []string{}
 	switch state.CCStatus {
 	case "active":
@@ -113,6 +115,7 @@ func LogStatus(state DisplayState) {
 
 // LogTrajectory prints a trajectory warning.
 func LogTrajectory(f Finding) {
+	ClearHeartbeat()
 	ts := time.Now().Format("15:04:05")
 	fmt.Printf("%s%s%s %s▸%s %s\n", dim, ts, reset, yellow, reset, f.Message)
 }
@@ -121,28 +124,55 @@ func LogTrajectory(f Finding) {
 
 // Heartbeat overwrites the last line with live status.
 // Uses \r to return to line start + \033[K to clear the line.
+// heartbeatActive tracks whether we have a heartbeat line to overwrite.
+var heartbeatActive bool
+
 func Heartbeat(ccStatus string, brainThinking bool, brainLastTime time.Time, elapsed string) {
 	ts := time.Now().Format("15:04:05")
 
 	parts := []string{}
-
-	// CC status
 	switch ccStatus {
 	case "active", "thinking":
 		parts = append(parts, fmt.Sprintf("%s● cc%s", green, reset))
 	default:
 		parts = append(parts, fmt.Sprintf("%s○ cc%s", dim, reset))
 	}
-
-	// Brain status
 	if brainThinking {
 		parts = append(parts, fmt.Sprintf("%s◌ analyzing%s", cyan, reset))
 	} else if !brainLastTime.IsZero() {
 		ago := time.Since(brainLastTime).Truncate(time.Second)
-		parts = append(parts, fmt.Sprintf("%s✓ %s ago%s", dim, ago, reset))
+		if ago > 60*time.Second {
+			parts = append(parts, fmt.Sprintf("%s✓ %s%s", dim, shortDuration(ago), reset))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s✓ %ss ago%s", dim, fmt.Sprintf("%d", int(ago.Seconds())), reset))
+		}
 	}
 
-	fmt.Printf("\r\033[K%s%s%s %s %s[%s]%s", dim, ts, reset, strings.Join(parts, "  "), dim, elapsed, reset)
+	line := fmt.Sprintf("%s%s%s %s %s[%s]%s", dim, ts, reset, strings.Join(parts, "  "), dim, elapsed, reset)
+
+	if heartbeatActive {
+		// Move up one line, clear it, print new heartbeat.
+		fmt.Printf("\033[A\033[2K%s\n", line)
+	} else {
+		fmt.Printf("%s\n", line)
+		heartbeatActive = true
+	}
+}
+
+// ClearHeartbeat moves up to erase the heartbeat before printing a new event.
+func ClearHeartbeat() {
+	if heartbeatActive {
+		fmt.Print("\033[A\033[2K")
+		heartbeatActive = false
+	}
+}
+
+func shortDuration(d time.Duration) string {
+	m := int(d.Minutes())
+	if m > 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
 // --- Header and footer ---
