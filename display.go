@@ -124,52 +124,39 @@ func LogTrajectory(f Finding) {
 
 // Heartbeat overwrites the last line with live status.
 // Uses \r to return to line start + \033[K to clear the line.
-// heartbeatActive tracks whether we have a heartbeat line to overwrite.
-var heartbeatActive bool
+// lastHeartbeat tracks when the last heartbeat was printed.
+var lastHeartbeat time.Time
 
+// Heartbeat prints a periodic pulse line (every 30s) showing trupal is alive.
 func Heartbeat(ccStatus string, brainThinking bool, brainLastTime time.Time, elapsed string) {
-	ts := time.Now().Format("15:04:05")
+	if time.Since(lastHeartbeat) < 30*time.Second {
+		return
+	}
+	lastHeartbeat = time.Now()
 
+	ts := time.Now().Format("15:04:05")
 	parts := []string{}
 	switch ccStatus {
 	case "active", "thinking":
-		parts = append(parts, fmt.Sprintf("%s● cc%s", green, reset))
+		parts = append(parts, fmt.Sprintf("%s●%s cc", green, reset))
 	default:
-		parts = append(parts, fmt.Sprintf("%s○ cc%s", dim, reset))
+		parts = append(parts, fmt.Sprintf("%s○%s cc", dim, reset))
 	}
 	if brainThinking {
-		parts = append(parts, fmt.Sprintf("%s◌ analyzing%s", cyan, reset))
+		parts = append(parts, fmt.Sprintf("%s◌%s analyzing", cyan, reset))
 	} else if !brainLastTime.IsZero() {
-		ago := time.Since(brainLastTime).Truncate(time.Second)
-		if ago > 60*time.Second {
-			parts = append(parts, fmt.Sprintf("%s✓ %s%s", dim, shortDuration(ago), reset))
+		ago := int(time.Since(brainLastTime).Seconds())
+		if ago < 60 {
+			parts = append(parts, fmt.Sprintf("brain %ds ago", ago))
 		} else {
-			parts = append(parts, fmt.Sprintf("%s✓ %ss ago%s", dim, fmt.Sprintf("%d", int(ago.Seconds())), reset))
+			parts = append(parts, fmt.Sprintf("brain %dm ago", ago/60))
 		}
 	}
-
-	line := fmt.Sprintf("%s%s%s %s %s[%s]%s", dim, ts, reset, strings.Join(parts, "  "), dim, elapsed, reset)
-
-	// Overwrite current line in place — no newline, no scrollback.
-	fmt.Printf("\r\033[2K%s", line)
-	heartbeatActive = true
+	fmt.Printf("%s%s %s [%s]%s\n", dim, ts, strings.Join(parts, "  "), elapsed, reset)
 }
 
-// ClearHeartbeat erases the heartbeat line and moves to a new line for event output.
-func ClearHeartbeat() {
-	if heartbeatActive {
-		fmt.Print("\r\033[2K")
-		heartbeatActive = false
-	}
-}
-
-func shortDuration(d time.Duration) string {
-	m := int(d.Minutes())
-	if m > 0 {
-		return fmt.Sprintf("%dm", m)
-	}
-	return fmt.Sprintf("%ds", int(d.Seconds()))
-}
+// ClearHeartbeat is a no-op now — heartbeat is just a periodic log line.
+func ClearHeartbeat() {}
 
 // --- Header and footer ---
 
