@@ -211,29 +211,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case nudgeMsg:
 		m.findings++
 		w := m.contentW()
-		m.log("")
-		// Observation (what trupal saw)
-		if msg.finding.Reasoning != "" {
-			for i, line := range wrap(msg.finding.Reasoning, w-2) {
-				if i == 0 {
-					m.log("  " + line)
-				} else {
-					m.raw("  " + line)
-				}
-			}
-		}
-		// Nudge (what CC should do) — yellow arrow
-		icon := sWarn.Render("→")
+		// Label + color based on severity
+		label := sWarn.Render("nudge")
 		if msg.finding.Severity == "error" {
-			icon = sErr.Render("→")
+			label = sErr.Render("nudge")
 		}
-		for i, line := range wrap(msg.finding.Nudge, w-4) {
-			if i == 0 {
-				m.raw("  " + icon + " " + line)
-			} else {
-				m.raw("    " + line)
-			}
+		m.log("")
+		// Observation context
+		if msg.finding.Reasoning != "" {
+			m.logLabeled(sCyan.Render("seen"), msg.finding.Reasoning, w)
 		}
+		// Actionable nudge
+		m.logLabeled(label, msg.finding.Nudge, w)
 		m.log("")
 
 	case resolvedMsg:
@@ -242,27 +231,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.findings = 0
 		}
 		m.resolved++
-		w := m.contentW()
-		for i, line := range wrap(msg.finding.Nudge, w) {
-			if i == 0 {
-				m.log(sOk.Render("✓ ") + sDim.Render(line))
-			} else {
-				m.raw("  " + sDim.Render(line))
-			}
-		}
+		m.logLabeled(sOk.Render("fixed"), sDim.Render(msg.finding.Nudge), m.contentW())
 
 	case observationMsg:
-		w := m.contentW()
-		for i, line := range wrap(msg.text, w-2) {
-			if i == 0 {
-				m.log("  " + line)
-			} else {
-				m.raw("  " + line)
-			}
-		}
+		m.logLabeled(sCyan.Render("seen"), msg.text, m.contentW())
 
 	case trajectoryMsg:
-		m.log("  " + msg.message)
+		m.logLabeled(sWarn.Render("track"), msg.message, m.contentW())
 
 	case brainStatusMsg:
 		if msg.thinking {
@@ -296,6 +271,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // --- Log helpers ---
+
+// logLabeled prints a labeled entry: "HH:MM:SS  label  text with wrapping"
+// Continuation lines align with the text, not the label.
+func (m *model) logLabeled(label, text string, w int) {
+	// "HH:MM:SS  label  text..."
+	// "                 continuation..."
+	prefix := label + "  "
+	textW := w - 16 // timestamp(8) + gap(2) + label(~5) + gap(2)
+	if textW < 15 {
+		textW = 15
+	}
+	lines := wrap(text, textW)
+	for i, line := range lines {
+		if i == 0 {
+			m.log(prefix + line)
+		} else {
+			// Align with text start: 10 spaces (timestamp gap) + label width + 2
+			pad := strings.Repeat(" ", 7)
+			m.raw(pad + line)
+		}
+	}
+}
 
 func (m *model) log(line string) {
 	ts := sDim.Render(time.Now().Format("15:04:05"))
