@@ -340,7 +340,9 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 				brainLastTime = time.Now()
 				p.Send(brainStatusMsg{thinking: false, lastTime: brainLastTime})
 				// Send observations (no finding lifecycle, just display)
+				Debugf("[brain] %d observations, %d nudges", len(result.resp.Observations), len(result.resp.Nudges))
 				for _, obs := range result.resp.Observations {
+					Debugf("[brain] observation: %s", obs)
 					p.Send(observationMsg{text: obs})
 				}
 				for _, nudge := range result.resp.Nudges {
