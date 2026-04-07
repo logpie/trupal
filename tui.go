@@ -10,66 +10,54 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// --- Styles ---
+// --- Styles (pre-defined, reused) ---
 
 var (
 	headerStyle = lipgloss.NewStyle().Bold(true)
 	dimStyle    = lipgloss.NewStyle().Faint(true)
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
-	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green
-	cyanStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan
+	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	okStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	cyanStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	sepStyle    = lipgloss.NewStyle().Faint(true)
 )
 
-// --- Messages (events from the watcher goroutine) ---
+// --- Messages ---
 
 type statusMsg struct {
-	ccStatus  string
-	buildOK   *bool
-	buildErrs int
+	ccStatus   string
+	buildOK    *bool
+	buildErrs  int
 	buildTrend string
-	files     []string
-	newFiles  []string
-	elapsed   string
-	project   string
+	files      []string
+	newFiles   []string
+	elapsed    string
+	project    string
 }
 
-type nudgeMsg struct {
-	finding BrainFinding
-}
-
-type resolvedMsg struct {
-	finding BrainFinding
-}
-
-type trajectoryMsg struct {
-	message string
-}
-
+type nudgeMsg struct{ finding BrainFinding }
+type resolvedMsg struct{ finding BrainFinding }
+type trajectoryMsg struct{ message string }
 type brainStatusMsg struct {
 	thinking bool
 	lastTime time.Time
 }
-
-type logLineMsg struct {
-	line string
-}
-
+type logLineMsg struct{ line string }
 type tickMsg time.Time
 
 // --- Model ---
 
 type model struct {
-	lines        []string // chat log lines
+	lines        []string
 	width        int
 	height       int
-	scrollOffset int    // 0 = bottom (latest), positive = scrolled up
+	scrollOffset int // 0 = bottom, positive = lines scrolled up
 	ccStatus     string
 	brainState   string
 	buildState   string
 	elapsed      string
 	project      string
-	lastFileLine string // dedup repeated file status
+	lastFileLine string
 	quitting     bool
 }
 
@@ -78,19 +66,18 @@ func initialModel(project string) model {
 		project:    project,
 		ccStatus:   "starting",
 		brainState: "starting",
-		buildState: "",
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tickEvery(), tea.ClearScreen, tea.EnableMouseAllMotion)
+	return tea.Batch(tickEvery(), tea.EnableMouseCellMotion)
 }
 
 func tickEvery() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
+
+// --- Update ---
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -106,29 +93,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "up", "k":
-			if m.scrollOffset < len(m.lines)-1 {
-				m.scrollOffset++
-			}
+			m.scrollUp(1)
 		case "down", "j":
-			if m.scrollOffset > 0 {
-				m.scrollOffset--
-			}
+			m.scrollDown(1)
 		case "pgup":
-			m.scrollOffset += 10
-			max := len(m.lines) - 1
-			if max < 0 {
-				max = 0
-			}
-			if m.scrollOffset > max {
-				m.scrollOffset = max
-			}
+			m.scrollUp(10)
 		case "pgdown":
-			m.scrollOffset -= 10
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
+			m.scrollDown(10)
 		case "home", "g":
-			m.scrollOffset = len(m.lines) - 1
+			m.scrollOffset = m.maxScroll()
 		case "end", "G":
 			m.scrollOffset = 0
 		}
@@ -136,19 +109,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonWheelUp {
-			m.scrollOffset += 3
-			max := len(m.lines) - 1
-			if max < 0 {
-				max = 0
-			}
-			if m.scrollOffset > max {
-				m.scrollOffset = max
-			}
+			m.scrollUp(3)
 		} else if msg.Button == tea.MouseButtonWheelDown {
-			m.scrollOffset -= 3
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
+			m.scrollDown(3)
 		}
 		return m, nil
 
@@ -174,7 +137,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.buildState = errStyle.Render(label)
 			}
 		}
-		// Log file changes only if different from last logged.
 		fileLine := ""
 		if len(msg.files) > 0 || len(msg.newFiles) > 0 {
 			parts := []string{}
@@ -187,7 +149,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fileLine = strings.Join(parts, "  ")
 		}
 		if fileLine != "" && fileLine != m.lastFileLine {
-			m.addLine(dimStyle.Render(fileLine))
+			m.appendLog(dimStyle.Render(fileLine))
 			m.lastFileLine = fileLine
 		}
 		return m, nil
@@ -197,42 +159,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.finding.Severity == "error" {
 			icon = errStyle.Render("✗")
 		}
-		m.addLine("")
-		nudgeWidth := m.width - 12
-		if nudgeWidth < 20 {
-			nudgeWidth = 20
-		}
-		for i, line := range wordWrap(msg.finding.Nudge, nudgeWidth) {
+		w := m.contentWidth()
+		m.appendLog("")
+		lines := wordWrap(msg.finding.Nudge, w)
+		for i, line := range lines {
 			if i == 0 {
-				m.addLine(fmt.Sprintf("%s %s", icon, line))
+				m.appendLog(icon + " " + line)
 			} else {
-				m.addContinuation("  " + line)
+				m.appendRaw("  " + line)
 			}
 		}
 		if msg.finding.Reasoning != "" {
-			for _, line := range wordWrap(msg.finding.Reasoning, nudgeWidth) {
-				m.addContinuation("  " + dimStyle.Render(line))
+			for _, line := range wordWrap(msg.finding.Reasoning, w) {
+				m.appendRaw("  " + dimStyle.Render(line))
 			}
 		}
-		m.addLine("")
+		m.appendLog("")
 		return m, nil
 
 	case resolvedMsg:
-		resolveWidth := m.width - 12
-		if resolveWidth < 20 {
-			resolveWidth = 20
-		}
-		for i, line := range wordWrap(msg.finding.Nudge, resolveWidth) {
+		w := m.contentWidth()
+		for i, line := range wordWrap(msg.finding.Nudge, w) {
 			if i == 0 {
-				m.addLine(okStyle.Render("✓") + " " + dimStyle.Render(line))
+				m.appendLog(okStyle.Render("✓") + " " + dimStyle.Render(line))
 			} else {
-				m.addContinuation("  " + dimStyle.Render(line))
+				m.appendRaw("  " + dimStyle.Render(line))
 			}
 		}
 		return m, nil
 
 	case trajectoryMsg:
-		m.addLine(warnStyle.Render("▸") + " " + msg.message)
+		m.appendLog(warnStyle.Render("▸") + " " + msg.message)
 		return m, nil
 
 	case brainStatusMsg:
@@ -241,115 +198,154 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if !msg.lastTime.IsZero() {
 			ago := int(time.Since(msg.lastTime).Seconds())
 			if ago < 60 {
-				m.brainState = fmt.Sprintf("✓ %ds ago", ago)
+				m.brainState = dimStyle.Render(fmt.Sprintf("✓ %ds ago", ago))
 			} else {
-				m.brainState = fmt.Sprintf("✓ %dm ago", ago/60)
+				m.brainState = dimStyle.Render(fmt.Sprintf("✓ %dm ago", ago/60))
 			}
 		}
 		return m, nil
 
 	case logLineMsg:
-		m.addLine(msg.line)
+		m.appendLog(msg.line)
 		return m, nil
 	}
 
 	return m, nil
 }
 
-func (m *model) addLine(line string) {
+// --- Log management ---
+
+// appendLog adds a timestamped line. Auto-scrolls to bottom if at bottom.
+func (m *model) appendLog(line string) {
 	ts := dimStyle.Render(time.Now().Format("15:04:05"))
 	if line == "" {
 		m.lines = append(m.lines, "")
 	} else {
 		m.lines = append(m.lines, ts+" "+line)
 	}
-	// Auto-scroll to bottom if user is at bottom.
+	// Auto-scroll: if user was at bottom, stay at bottom.
 	if m.scrollOffset == 0 {
-		// Already at bottom, stay there.
+		// Already at bottom.
 	}
 	m.trimLines()
 }
 
-// addContinuation adds an indented line without timestamp (for word-wrap continuations).
-func (m *model) addContinuation(line string) {
+// appendRaw adds a continuation line (no timestamp, indented).
+func (m *model) appendRaw(line string) {
 	m.lines = append(m.lines, "         "+line)
 	m.trimLines()
 }
 
 func (m *model) trimLines() {
-	if len(m.lines) > 200 {
-		m.lines = m.lines[len(m.lines)-200:]
-	}
-	// Cap at 200 lines.
-	if len(m.lines) > 200 {
-		m.lines = m.lines[len(m.lines)-200:]
+	if len(m.lines) > 500 {
+		m.lines = m.lines[len(m.lines)-500:]
 	}
 }
+
+func (m *model) scrollUp(n int) {
+	m.scrollOffset += n
+	max := m.maxScroll()
+	if m.scrollOffset > max {
+		m.scrollOffset = max
+	}
+}
+
+func (m *model) scrollDown(n int) {
+	m.scrollOffset -= n
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+}
+
+func (m model) maxScroll() int {
+	logH := m.logHeight()
+	if len(m.lines) <= logH {
+		return 0
+	}
+	return len(m.lines) - logH
+}
+
+func (m model) logHeight() int {
+	h := m.height - 4 // header(1) + sep(1) + sep(1) + footer(1)
+	if h < 1 {
+		return 1
+	}
+	return h
+}
+
+func (m model) contentWidth() int {
+	w := m.width - 12 // timestamp + padding
+	if w < 20 {
+		return 20
+	}
+	return w
+}
+
+// --- View ---
 
 func (m model) View() string {
 	if m.quitting {
 		return ""
 	}
 	if m.width == 0 {
-		return "loading..."
+		return "starting..."
 	}
 
-	// --- Header (fixed, 2 lines) ---
+	// Header
 	ccIcon := dimStyle.Render("○")
 	if m.ccStatus == "active" || m.ccStatus == "thinking" {
 		ccIcon = okStyle.Render("●")
 	}
+	header := lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(
+		fmt.Sprintf(" %s  %s cc  %s  %s",
+			headerStyle.Render("trupal"), ccIcon, m.brainState, m.buildState))
 
-	header := fmt.Sprintf(" %s  %s cc  %s  %s",
-		headerStyle.Render("trupal"),
-		ccIcon,
-		m.brainState,
-		m.buildState,
-	)
-	sep := dimStyle.Render(strings.Repeat("─", m.width))
+	sep := sepStyle.Render(strings.Repeat("─", m.width))
 
-	// --- Footer (fixed, 1 line) ---
-	footer := dimStyle.Render(fmt.Sprintf(" %s · %s", m.project, m.elapsed))
-
-	// --- Log area (scrollable, fills remaining space) ---
-	headerLines := 2 // header + separator
-	footerLines := 2 // separator + footer
-	logHeight := m.height - headerLines - footerLines
-	if logHeight < 1 {
-		logHeight = 1
-	}
-
-	// Window into the log based on scroll offset.
-	total := len(m.lines)
-	end := total - m.scrollOffset
-	if end < 0 {
-		end = 0
-	}
-	start := end - logHeight
-	if start < 0 {
-		start = 0
-	}
-
-	visibleLines := make([]string, 0, logHeight)
-	if start < end && end <= total {
-		visibleLines = append(visibleLines, m.lines[start:end]...)
-	}
-
-	// Pad with empty lines.
-	for len(visibleLines) < logHeight {
-		visibleLines = append(visibleLines, "")
-	}
-
-	// Scroll indicator in footer.
+	// Footer
 	scrollHint := ""
 	if m.scrollOffset > 0 {
 		scrollHint = fmt.Sprintf(" ↑%d", m.scrollOffset)
 	}
+	footer := lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(
+		dimStyle.Render(fmt.Sprintf(" %s · %s%s", m.project, m.elapsed, scrollHint)))
 
-	logContent := strings.Join(visibleLines, "\n")
+	// Log area — windowed view into m.lines
+	logH := m.logHeight()
+	total := len(m.lines)
+	end := total - m.scrollOffset
+	start := end - logH
+	if end > total {
+		end = total
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
 
-	return header + "\n" + sep + "\n" + logContent + "\n" + sep + "\n" + footer + dimStyle.Render(scrollHint)
+	visible := make([]string, 0, logH)
+	if start < end {
+		visible = append(visible, m.lines[start:end]...)
+	}
+
+	// Truncate long lines to pane width to prevent wrapping.
+	for i, line := range visible {
+		visible[i] = lipgloss.NewStyle().Width(m.width).MaxWidth(m.width).Render(line)
+	}
+
+	// Pad to fill log area so footer stays at bottom.
+	for len(visible) < logH {
+		visible = append(visible, "")
+	}
+
+	return header + "\n" + sep + "\n" +
+		strings.Join(visible, "\n") + "\n" +
+		sep + "\n" + footer
 }
+
+// --- Helpers ---
 
 func wordWrap(text string, width int) []string {
 	if width < 10 {
