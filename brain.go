@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -51,12 +54,13 @@ IMPORTANT — you are a STREAMING monitor with memory across turns. Be INCREMENT
 - Only generate nudges for NEW issues you haven't flagged before.
 - If active findings are still unresolved, that's fine — don't repeat them.
 - Every notification is a request to investigate. There is NO fast path.
-- Start with the notification context: edited files, git diff summary, and build status.
+- Start with the notification context: recent session activity, edited files, git diff summary, and build status.
 - ALWAYS read every changed file named in the notification — the FULL file, not just the diff.
 - When reading a file, check for SYSTEMIC issues across the entire file, not just the latest changes:
   race conditions (global maps/slices without mutex), error swallowing, panic misuse,
   cache invalidation gaps, resource leaks, middleware ordering bugs.
-- If the notification mentions verification or testing, ALWAYS read the JSONL tail and confirm the matching tool calls happened.
+- Use the RECENT SESSION ACTIVITY included in the notification for claim/action checks.
+- Do NOT reread the full JSONL file on every notification. Only open the JSONL directly if the notification excerpt is missing critical evidence.
 - Silence means bugs escape. Flag anything you find — even pre-existing bugs that CC didn't introduce.
   CC is responsible for the code they're working in, including what was already there.
 
@@ -135,6 +139,8 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, extraDir
 		return nil, err
 	}
 
+	accessibleDirs := brainAccessibleDirs(projectDir, extraDirs...)
+
 	args := []string{
 		"-p",
 		"--input-format", "stream-json",
@@ -147,11 +153,10 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, extraDir
 		"--no-session-persistence",
 		"--allowed-tools", "Read,Bash,Grep,Glob",
 	}
-	// Allow brain to read files in directories CC is working in.
-	for _, d := range extraDirs {
-		if d != "" && d != projectDir {
-			args = append(args, "--add-dir", d)
-		}
+	// Allow brain to read common cross-project locations plus any dirs learned
+	// from CC's session activity.
+	for _, d := range accessibleDirs {
+		args = append(args, "--add-dir", d)
 	}
 
 	cmd := exec.Command(command, args...)
@@ -186,6 +191,37 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, extraDir
 		scanner: scanner,
 		cfg:     cfg,
 	}, nil
+}
+
+func brainAccessibleDirs(projectDir string, extraDirs ...string) []string {
+	seen := make(map[string]bool)
+	var dirs []string
+
+	add := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return
+		}
+		dir = filepath.Clean(dir)
+		if seen[dir] {
+			return
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		add(homeDir)
+	}
+	add(projectDir)
+	add(os.TempDir())
+
+	for _, dir := range extraDirs {
+		add(dir)
+	}
+
+	sort.Strings(dirs)
+	return dirs
 }
 
 // Notify sends a message to the brain and blocks until the brain responds.

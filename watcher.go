@@ -91,6 +91,31 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 		p.Send(logLineMsg{line: fmt.Sprintf("watching session %s", sessionName)})
 	}
 
+	recentEditedFiles := make([]string, 0, 8)
+	recentSessionEntries := make([]JSONLEntry, 0, 16)
+	extraDirs := make(map[string]bool) // directories CC works in (from JSONL tool calls)
+
+	extraDirSlice := func() []string {
+		dirs := make([]string, 0, len(extraDirs))
+		for d := range extraDirs {
+			dirs = append(dirs, d)
+		}
+		return dirs
+	}
+
+	resetSessionContext := func() {
+		recentEditedFiles = recentEditedFiles[:0]
+		recentSessionEntries = recentSessionEntries[:0]
+		extraDirs = make(map[string]bool)
+	}
+
+	seedSessionContext := func(path string) string {
+		entries := ReadRecentJSONLEntries(path, 40)
+		return absorbJSONLEntries(projectDir, entries, extraDirs, &recentEditedFiles, &recentSessionEntries)
+	}
+
+	initialSessionReason := ""
+
 	// Start JSONL watcher.
 	var jsonlWatcher *JSONLWatcher
 	if jsonlPath != "" {
@@ -99,13 +124,14 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not watch JSONL: %v\n", err)
 		}
+		initialSessionReason = seedSessionContext(jsonlPath)
 	}
 
-	// Start brain (no extra dirs yet — we haven't read JSONL).
+	// Start brain with any dirs/context recovered from the current session tail.
 	var brain *Brain
 	if jsonlPath != "" {
 		var err error
-		brain, err = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+		brain, err = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), extraDirSlice()...)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not start brain: %v\n", err)
 		}
@@ -134,17 +160,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 	restartNeeded := false
 	restartAt := time.Time{}
 	loggedTrajectory := make(map[string]bool)
-	recentEditedFiles := make([]string, 0, 8)
-	extraDirs := make(map[string]bool) // directories CC works in (from JSONL tool calls)
-
-	extraDirSlice := func() []string {
-		dirs := make([]string, 0, len(extraDirs))
-		for d := range extraDirs {
-			dirs = append(dirs, d)
-		}
-		return dirs
-	}
-	pendingTrigger := ""
+	pendingTrigger := initialSessionReason
 	shuttingDown := false
 	interval := time.Duration(cfg.PollInterval) * time.Second
 
@@ -210,60 +226,8 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 				entries := jsonlWatcher.ReadNew()
 				Debugf("[watcher] JSONL event: %d new entries", len(entries))
-				significant := false
-				var summary []string
-				seen := make(map[string]bool)
-				for _, e := range entries {
-					if e.Type == "assistant" && e.HasText {
-						significant = true
-						// Include a snippet of what CC said.
-						if e.TextSnip != "" {
-							snip := e.TextSnip
-							if len(snip) > 100 {
-								snip = snip[:100]
-							}
-							key := "text:" + snip
-							if !seen[key] {
-								seen[key] = true
-								summary = append(summary, fmt.Sprintf("CC said: %q", snip))
-							}
-						}
-					}
-					if e.Type == "assistant" && e.HasTool {
-						for i, tool := range e.ToolNames {
-							file := ""
-							if i < len(e.ToolFiles) {
-								file = filepath.Base(e.ToolFiles[i])
-								// Track directories CC works in.
-								dir := filepath.Dir(e.ToolFiles[i])
-								if dir != "" && dir != "." {
-									extraDirs[dir] = true
-								}
-								if isEditTool(tool) {
-									recentEditedFiles = appendUniqueLimited(recentEditedFiles, displayPath(projectDir, e.ToolFiles[i]), 8)
-								}
-							}
-							key := tool + ":" + file
-							if !seen[key] {
-								seen[key] = true
-								if file != "" {
-									summary = append(summary, fmt.Sprintf("CC used %s on %s", tool, file))
-								} else {
-									summary = append(summary, fmt.Sprintf("CC used %s", tool))
-								}
-							}
-						}
-					}
-					if e.Type == "user" && e.Role == "user" {
-						significant = true
-					}
-				}
-
-				if significant {
-					reason := "CC session updated"
-					if len(summary) > 0 {
-						reason = strings.Join(summary, "; ")
-					}
+				reason := absorbJSONLEntries(projectDir, entries, extraDirs, &recentEditedFiles, &recentSessionEntries)
+				if reason != "" {
 					// Debounce: wait 2s for burst to settle.
 					if debounceTimer != nil {
 						debounceTimer.Stop()
@@ -433,7 +397,10 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 					jsonlWatcher = newWatcher
 					lastJSONLActivity = time.Now()
 					idleNotified = false
+					resetSessionContext()
+					seedReason := seedSessionContext(newPath)
 					pendingTrigger = mergeTriggerReason(pendingTrigger, "CC session switched")
+					pendingTrigger = mergeTriggerReason(pendingTrigger, seedReason)
 					restartNeeded = false
 					restartAt = time.Time{}
 					brainStale = true
@@ -455,12 +422,15 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 				} else {
 					jsonlPath = newPath
 					jsonlWatcher = newWatcher
+					resetSessionContext()
+					seedReason := seedSessionContext(newPath)
 					if triggerBrain {
 						pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
 						triggerBrain = false
 						triggerReason = ""
 					}
 					pendingTrigger = mergeTriggerReason(pendingTrigger, "CC session switched")
+					pendingTrigger = mergeTriggerReason(pendingTrigger, seedReason)
 					restartNeeded = false
 					restartAt = time.Time{}
 					brainStale = true
@@ -513,7 +483,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			triggerBrain = false
 		}
 		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
-			notification := buildBrainNotification(triggerReason, recentEditedFiles, nameStatus, rawDiff, untrackedFiles, buildDisplay)
+			notification := buildBrainNotification(projectDir, triggerReason, recentSessionEntries, recentEditedFiles, nameStatus, rawDiff, untrackedFiles, buildDisplay)
 			Debugf("[watcher] triggering brain: %s", truncate(notification, 200))
 			brainBusy = true
 			brainThinking = true
@@ -705,9 +675,137 @@ func displayPath(projectDir, path string) string {
 	return path
 }
 
-func buildBrainNotification(reason string, editedFiles []string, nameStatus, rawDiff string, untrackedFiles []string, build *BuildDisplay) string {
+func absorbJSONLEntries(projectDir string, entries []JSONLEntry, extraDirs map[string]bool, recentEditedFiles *[]string, recentEntries *[]JSONLEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+
+	significant := false
+	var summary []string
+	seen := make(map[string]bool)
+
+	for _, e := range entries {
+		*recentEntries = appendRecentJSONLEntries(*recentEntries, e, 16)
+
+		if e.Role == "user" && e.TextSnip != "" {
+			significant = true
+			snip := truncate(e.TextSnip, 100)
+			key := "user:" + snip
+			if !seen[key] {
+				seen[key] = true
+				summary = append(summary, fmt.Sprintf("CC asked: %q", snip))
+			}
+		}
+
+		if e.Type == "assistant" && e.HasText && e.TextSnip != "" {
+			significant = true
+			snip := truncate(e.TextSnip, 100)
+			key := "assistant:" + snip
+			if !seen[key] {
+				seen[key] = true
+				summary = append(summary, fmt.Sprintf("CC said: %q", snip))
+			}
+		}
+
+		if e.Type == "assistant" && e.HasTool {
+			significant = true
+			for i, tool := range e.ToolNames {
+				filePath := indexedValue(e.ToolFiles, i)
+				if filePath != "" {
+					dir := filepath.Dir(filePath)
+					if dir != "" && dir != "." {
+						extraDirs[dir] = true
+					}
+					if isEditTool(tool) {
+						*recentEditedFiles = appendUniqueLimited(*recentEditedFiles, displayPath(projectDir, filePath), 8)
+					}
+				}
+
+				detail := indexedValue(e.ToolDetails, i)
+				key := tool + ":" + filePath + ":" + detail
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+
+				switch {
+				case filePath != "":
+					summary = append(summary, fmt.Sprintf("CC used %s on %s", tool, filepath.Base(filePath)))
+				case detail != "":
+					summary = append(summary, fmt.Sprintf("CC used %s (%s)", tool, detail))
+				default:
+					summary = append(summary, fmt.Sprintf("CC used %s", tool))
+				}
+			}
+		}
+	}
+
+	if !significant {
+		return ""
+	}
+	if len(summary) == 0 {
+		return "CC session updated"
+	}
+	return strings.Join(summary, "; ")
+}
+
+func appendRecentJSONLEntries(entries []JSONLEntry, entry JSONLEntry, limit int) []JSONLEntry {
+	entries = append(entries, entry)
+	if limit > 0 && len(entries) > limit {
+		entries = entries[len(entries)-limit:]
+	}
+	return entries
+}
+
+func indexedValue(values []string, idx int) string {
+	if idx < 0 || idx >= len(values) {
+		return ""
+	}
+	return strings.TrimSpace(values[idx])
+}
+
+func summarizeRecentSessionActivity(projectDir string, entries []JSONLEntry) string {
+	if len(entries) == 0 {
+		return "- none captured yet"
+	}
+
+	var lines []string
+	for _, e := range entries {
+		switch {
+		case e.Role == "user" && e.TextSnip != "":
+			lines = append(lines, fmt.Sprintf("- user: %q", truncate(e.TextSnip, 120)))
+		case e.Type == "assistant" && e.HasTool:
+			for i, tool := range e.ToolNames {
+				filePath := indexedValue(e.ToolFiles, i)
+				detail := indexedValue(e.ToolDetails, i)
+				switch {
+				case filePath != "":
+					lines = append(lines, fmt.Sprintf("- tool: %s %s", tool, displayPath(projectDir, filePath)))
+				case detail != "":
+					lines = append(lines, fmt.Sprintf("- tool: %s (%s)", tool, detail))
+				default:
+					lines = append(lines, fmt.Sprintf("- tool: %s", tool))
+				}
+			}
+		case e.Type == "assistant" && e.HasText && e.TextSnip != "":
+			lines = append(lines, fmt.Sprintf("- assistant: %q", truncate(e.TextSnip, 120)))
+		}
+	}
+
+	if len(lines) == 0 {
+		return "- none captured yet"
+	}
+	if len(lines) > 10 {
+		lines = lines[len(lines)-10:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildBrainNotification(projectDir, reason string, recentEntries []JSONLEntry, editedFiles []string, nameStatus, rawDiff string, untrackedFiles []string, build *BuildDisplay) string {
 	var sb strings.Builder
 	sb.WriteString(reason)
+	sb.WriteString("\n\nRECENT SESSION ACTIVITY:\n")
+	sb.WriteString(summarizeRecentSessionActivity(projectDir, recentEntries))
 	sb.WriteString("\n\nRECENT JSONL EDITS:\n")
 	if len(editedFiles) == 0 {
 		sb.WriteString("- none detected from recent Edit/Write tool calls\n")

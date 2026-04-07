@@ -20,12 +20,13 @@ type JSONLEntry struct {
 	SessionID string          `json:"sessionId"`
 	Message   json.RawMessage `json:"message"`
 	// Parsed from message:
-	Role      string   // "user" or "assistant"
-	HasText   bool     // assistant message contains a text block
-	HasTool   bool     // assistant message contains a tool_use block
-	ToolNames []string // names of tools used (e.g. "Edit", "Bash", "Write")
-	ToolFiles []string // file paths from tool inputs (if available)
-	TextSnip  string   // first 200 chars of text content
+	Role        string   // "user" or "assistant"
+	HasText     bool     // message contains a text block
+	HasTool     bool     // assistant message contains a tool_use block
+	ToolNames   []string // names of tools used (e.g. "Edit", "Bash", "Write")
+	ToolFiles   []string // aligned with ToolNames; empty when the tool has no file path
+	ToolDetails []string // aligned with ToolNames; human-readable details (description/command/file)
+	TextSnip    string   // first 200 chars of text content
 }
 
 // JSONLWatcher watches CC's session JSONL file for new entries.
@@ -202,6 +203,47 @@ func (w *JSONLWatcher) ReadNew() []JSONLEntry {
 	return entries
 }
 
+// ReadRecentJSONLEntries parses the file and returns the last maxEntries parsed
+// entries. This is used when attaching to an existing session so TruPal can
+// seed recent context instead of starting with an empty view at EOF.
+func ReadRecentJSONLEntries(path string, maxEntries int) []JSONLEntry {
+	if maxEntries <= 0 {
+		return nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	entries := make([]JSONLEntry, 0, maxEntries)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var entry JSONLEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		classifyEntry(&entry)
+
+		if len(entries) == maxEntries {
+			copy(entries, entries[1:])
+			entries[len(entries)-1] = entry
+			continue
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries
+}
+
 // classifyEntry extracts role and content type flags from the raw message.
 func classifyEntry(e *JSONLEntry) {
 	if e.Message == nil {
@@ -216,6 +258,15 @@ func classifyEntry(e *JSONLEntry) {
 		return
 	}
 	e.Role = msg.Role
+
+	var textContent string
+	if err := json.Unmarshal(msg.Content, &textContent); err == nil {
+		if textContent != "" {
+			e.HasText = true
+			e.TextSnip = truncateText(textContent, 200)
+		}
+		return
+	}
 
 	// Check content for text/tool_use blocks with details.
 	var blocks []struct {
@@ -232,32 +283,65 @@ func classifyEntry(e *JSONLEntry) {
 		if b.Type == "text" {
 			e.HasText = true
 			if e.TextSnip == "" && len(b.Text) > 0 {
-				snip := b.Text
-				if len(snip) > 200 {
-					snip = snip[:200]
-				}
-				e.TextSnip = snip
+				e.TextSnip = truncateText(b.Text, 200)
 			}
 		}
 		if b.Type == "tool_use" {
 			e.HasTool = true
+			filePath, detail := extractToolMetadata(b.Name, b.Input)
 			if b.Name != "" {
 				e.ToolNames = append(e.ToolNames, b.Name)
 			}
-			// Extract file path from tool input.
-			if b.Input != nil {
-				var input struct {
-					FilePath string `json:"file_path"`
-					Command  string `json:"command"`
-				}
-				if json.Unmarshal(b.Input, &input) == nil {
-					if input.FilePath != "" {
-						e.ToolFiles = append(e.ToolFiles, input.FilePath)
-					}
-				}
-			}
+			e.ToolFiles = append(e.ToolFiles, filePath)
+			e.ToolDetails = append(e.ToolDetails, detail)
 		}
 	}
+}
+
+func extractToolMetadata(toolName string, raw json.RawMessage) (string, string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+
+	var input struct {
+		FilePath    string `json:"file_path"`
+		Path        string `json:"path"`
+		Command     string `json:"command"`
+		Description string `json:"description"`
+		Pattern     string `json:"pattern"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return "", ""
+	}
+
+	filePath := strings.TrimSpace(input.FilePath)
+	if filePath == "" {
+		filePath = strings.TrimSpace(input.Path)
+	}
+
+	switch {
+	case strings.TrimSpace(input.Description) != "":
+		return filePath, truncateText(input.Description, 100)
+	case strings.TrimSpace(input.Command) != "":
+		command := strings.ReplaceAll(strings.TrimSpace(input.Command), "\n", " ")
+		return filePath, truncateText(command, 100)
+	case strings.TrimSpace(input.Pattern) != "":
+		return filePath, truncateText(input.Pattern, 100)
+	case filePath != "":
+		return filePath, filepath.Base(filePath)
+	case toolName != "":
+		return "", toolName
+	default:
+		return "", ""
+	}
+}
+
+func truncateText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max]
 }
 
 // DetectCCStatus returns the current CC status: "active", "thinking", or "idle".
