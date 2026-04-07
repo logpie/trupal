@@ -1,0 +1,7 @@
+Good! I can see there's already a scaffold with the User struct and some globals prepared. Let me ask one clarifying question to ensure we're aligned:
+
+**Rate limiting strategy:** You mentioned "simple rate limiting per client IP." Should this:
+- Track requests over a time window (e.g., X requests per minute)?
+- Or just track all hits and return a 429 after exceeding a threshold?
+
+What feels right for a simple implementation—something like 10 requests per minute per IP, or a different strategy?

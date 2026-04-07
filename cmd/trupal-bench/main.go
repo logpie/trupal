@@ -1,0 +1,129 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/yuxuan/trupal/internal/bench"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(1)
+	}
+
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	switch os.Args[1] {
+	case "run":
+		if err := runSingle(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case "run-all":
+		if err := runAll(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	default:
+		usage()
+		os.Exit(1)
+	}
+}
+
+func runSingle(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	codexCmd := fs.String("codex-cmd", "", "optional shell command for Codex baseline audit")
+	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: trupal-bench run [flags] <scenario>")
+	}
+
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		CodexCmd:     *codexCmd,
+		KeepTemp:     *keepTemp,
+	})
+	if err != nil {
+		return err
+	}
+
+	result, err := runner.RunScenario(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	fmt.Println(result.Artifacts.ReportPath)
+	return nil
+}
+
+func runAll(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("run-all", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	codexCmd := fs.String("codex-cmd", "", "optional shell command for Codex baseline audit")
+	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		CodexCmd:     *codexCmd,
+		KeepTemp:     *keepTemp,
+	})
+	if err != nil {
+		return err
+	}
+
+	results, err := runner.RunAll()
+	if err != nil {
+		return err
+	}
+	summaryPath := filepath.Join(*resultsDir, "latest-summary.md")
+	if err := bench.WriteAggregateReport(summaryPath, results); err != nil {
+		return err
+	}
+	fmt.Println(summaryPath)
+	for _, result := range results {
+		fmt.Println(result.Artifacts.ReportPath)
+	}
+	return nil
+}
+
+func findRepoRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	current := wd
+	for {
+		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("could not find repo root from %s", wd)
+		}
+		current = parent
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  trupal-bench run [flags] <scenario>")
+	fmt.Fprintln(os.Stderr, "  trupal-bench run-all [flags]")
+}

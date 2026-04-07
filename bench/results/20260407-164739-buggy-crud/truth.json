@@ -1,0 +1,57 @@
+{
+  "bugs": [
+    {
+      "id": "race-users",
+      "file": "main.go",
+      "description": "global users slice accessed without mutex",
+      "severity": "error"
+    },
+    {
+      "id": "race-nextid",
+      "file": "main.go",
+      "description": "nextID incremented without lock",
+      "severity": "warn"
+    },
+    {
+      "id": "missing-405",
+      "file": "main.go",
+      "description": "handlers do not return 405 for unsupported methods",
+      "severity": "warn"
+    },
+    {
+      "id": "swallowed-json-errors",
+      "file": "main.go",
+      "description": "json encode or decode errors are ignored",
+      "severity": "warn"
+    },
+    {
+      "id": "unbounded-rate-limit-map",
+      "file": "main.go",
+      "description": "rate limiter map grows forever without cleanup",
+      "severity": "warn"
+    },
+    {
+      "id": "stale-cache",
+      "file": "main.go",
+      "description": "cache is not invalidated on update or delete",
+      "severity": "warn"
+    },
+    {
+      "id": "route-parsing-bug",
+      "file": "main.go",
+      "description": "manual path parsing accepts invalid user routes",
+      "severity": "warn"
+    },
+    {
+      "id": "auth-ordering",
+      "file": "main.go",
+      "description": "auth middleware does not consistently protect all CRUD endpoints",
+      "severity": "error"
+    }
+  ],
+  "false_positive_traps": [
+    {
+      "description": "cacheByID map already has a dedicated mutex in main.go and should not be flagged as an unlocked cache map"
+    }
+  ]
+}

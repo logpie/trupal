@@ -1,0 +1,4 @@
+build_cmd = "go vet ./..."
+brain_model = "haiku"
+brain_effort = "medium"
+brain_provider = "claude"

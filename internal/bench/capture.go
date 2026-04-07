@@ -1,0 +1,199 @@
+package bench
+
+import (
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type ArtifactSet struct {
+	RootDir          string
+	PaneCapturePath  string
+	DebugLogPath     string
+	TrupalLogPath    string
+	SessionJSONLPath string
+	ProjectCopyDir   string
+	ClaudeStdoutPath string
+	ClaudeStderrPath string
+	ScenarioYAMLPath string
+	TaskPath         string
+	TruthPath        string
+	ReportPath       string
+	CodexPromptPath  string
+	CodexStdoutPath  string
+	CodexStderrPath  string
+}
+
+func NewArtifactSet(rootDir string) ArtifactSet {
+	return ArtifactSet{
+		RootDir:          rootDir,
+		PaneCapturePath:  filepath.Join(rootDir, "pane.txt"),
+		DebugLogPath:     filepath.Join(rootDir, "trupal.debug"),
+		TrupalLogPath:    filepath.Join(rootDir, "trupal.log"),
+		SessionJSONLPath: filepath.Join(rootDir, "session.jsonl"),
+		ProjectCopyDir:   filepath.Join(rootDir, "project"),
+		ClaudeStdoutPath: filepath.Join(rootDir, "claude.stdout.log"),
+		ClaudeStderrPath: filepath.Join(rootDir, "claude.stderr.log"),
+		ScenarioYAMLPath: filepath.Join(rootDir, "scenario.yaml"),
+		TaskPath:         filepath.Join(rootDir, "task.md"),
+		TruthPath:        filepath.Join(rootDir, "truth.json"),
+		ReportPath:       filepath.Join(rootDir, "report.md"),
+		CodexPromptPath:  filepath.Join(rootDir, "codex-audit-prompt.txt"),
+		CodexStdoutPath:  filepath.Join(rootDir, "codex.stdout.log"),
+		CodexStderrPath:  filepath.Join(rootDir, "codex.stderr.log"),
+	}
+}
+
+func CopyTree(srcDir, dstDir string) error {
+	return filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return os.MkdirAll(dstDir, 0755)
+		}
+
+		if strings.HasPrefix(rel, ".git") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		target := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return copyFile(path, target, info.Mode())
+	})
+}
+
+func CollectArtifacts(projectDir string, artifacts ArtifactSet, sessionJSONL, paneID string) error {
+	if err := os.MkdirAll(artifacts.RootDir, 0755); err != nil {
+		return fmt.Errorf("create artifacts dir: %w", err)
+	}
+
+	if paneID != "" {
+		if err := CaptureTmuxPane(paneID, artifacts.PaneCapturePath); err != nil {
+			return err
+		}
+	}
+
+	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.debug"), artifacts.DebugLogPath); err != nil {
+		return err
+	}
+	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.log"), artifacts.TrupalLogPath); err != nil {
+		return err
+	}
+	if sessionJSONL != "" {
+		if err := copyFileIfExists(sessionJSONL, artifacts.SessionJSONLPath); err != nil {
+			return err
+		}
+	}
+
+	return CopyTree(projectDir, artifacts.ProjectCopyDir)
+}
+
+func CaptureTmuxPane(paneID, dstPath string) error {
+	if strings.TrimSpace(paneID) == "" {
+		return nil
+	}
+	cmd := exec.Command("tmux", "capture-pane", "-p", "-t", paneID)
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("capture tmux pane %s: %w", paneID, err)
+	}
+	return os.WriteFile(dstPath, out, 0644)
+}
+
+func FindLatestClaudeSessionJSONL(projectDir string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+
+	encoded := strings.ReplaceAll(filepath.Clean(projectDir), string(os.PathSeparator), "-")
+	candidates := []string{
+		filepath.Join(homeDir, ".claude", "projects", encoded),
+		filepath.Join(homeDir, ".config", "claude", "projects", encoded),
+	}
+
+	var bestPath string
+	var bestTime time.Time
+	for _, dir := range candidates {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().After(bestTime) {
+				bestTime = info.ModTime()
+				bestPath = filepath.Join(dir, entry.Name())
+			}
+		}
+	}
+
+	return bestPath, nil
+}
+
+func ReadPaneID(pidFile string) (string, error) {
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+func copyFileIfExists(srcPath, dstPath string) error {
+	info, err := os.Stat(srcPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return copyFile(srcPath, dstPath, info.Mode())
+}
+
+func copyFile(srcPath, dstPath string, mode fs.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return err
+	}
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode.Perm())
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, src)
+	return err
+}
