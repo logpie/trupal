@@ -83,8 +83,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 	shuttingDown := false
 	interval := time.Duration(cfg.PollInterval) * time.Second
 
-	var lastStatusHash uint64     // tracks file/build/CC changes only
-	var lastBrainAnalyzing bool   // suppress repeated "analyzing..."
+	var lastStatusHash uint64
 
 	// Main loop ticker.
 	ticker := time.NewTicker(interval)
@@ -291,7 +290,6 @@ func runWatchLoop(projectDir string, cfg Config) {
 					}
 					findings.Resolve(result.resp.ResolvedFindings)
 				}
-				lastBrainAnalyzing = false
 			}
 		case result := <-brainErrCh:
 			brainBusy = false
@@ -393,10 +391,6 @@ func runWatchLoop(projectDir string, cfg Config) {
 		// Trigger brain analysis if needed.
 		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
 			Debugf("[watcher] triggering brain: %s", triggerReason)
-			if !lastBrainAnalyzing {
-				LogBrain("analyzing...")
-				lastBrainAnalyzing = true
-			}
 			brainBusy = true
 			brainThinking = true
 			activeBrain := brain
@@ -573,7 +567,6 @@ func statusOnlyHash(state DisplayState) uint64 {
 			fmt.Fprintf(h, "%d%s", state.Build.ErrorCount, state.Build.Trend)
 		}
 	}
-	h.Write([]byte(state.CCStatus))
 	for _, f := range state.DeletedTests {
 		h.Write([]byte(f))
 	}
