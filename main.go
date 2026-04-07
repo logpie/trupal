@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+
+	tea "github.com/charmbracelet/bubbletea"
 	"strings"
 	"time"
 )
@@ -186,7 +188,12 @@ func cmdWatch(gitRoot string) {
 		_ = os.Remove(pidFile)
 	}()
 
-	runWatchLoop(gitRoot, cfg)
+	// Start TUI + watcher.
+	p := tea.NewProgram(initialModel(filepath.Base(gitRoot)), tea.WithAltScreen())
+	go runWatchLoop(gitRoot, cfg, p)
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "tui error: %v\n", err)
+	}
 }
 
 func cmdLog() {

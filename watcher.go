@@ -7,11 +7,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+
+	tea "github.com/charmbracelet/bubbletea"
 	"strings"
 	"time"
 )
 
-func runWatchLoop(projectDir string, cfg Config) {
+func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 	InitDebugLog(projectDir)
 	defer CloseDebugLog()
 
@@ -30,13 +32,11 @@ func runWatchLoop(projectDir string, cfg Config) {
 	// Find CC's session JSONL.
 	jsonlPath := FindSessionJSONL(projectDir)
 	Debugf("[watcher] JSONL path: %q", jsonlPath)
-	LogHeader(projectDir, cfg)
 	if jsonlPath == "" {
-		LogEvent("no CC session found — waiting...")
+		p.Send(logLineMsg{line: "no CC session found — waiting..."})
 	} else {
-		LogEvent("watching CC session %s", filepath.Base(jsonlPath))
+		p.Send(logLineMsg{line: fmt.Sprintf("watching session %s", filepath.Base(jsonlPath))})
 	}
-	time.Sleep(2 * time.Second)
 
 	// Start JSONL watcher.
 	var jsonlWatcher *JSONLWatcher
@@ -286,6 +286,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			if result.resp != nil {
 				brainLastMsg = result.resp.Reasoning
 				brainLastTime = time.Now()
+				p.Send(brainStatusMsg{thinking: false, lastTime: brainLastTime})
 				for _, nudge := range result.resp.Nudges {
 					reasoning := nudge.Reasoning
 					if reasoning == "" {
@@ -294,7 +295,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 					id := findings.Add(nudge.Severity, nudge.Message, reasoning)
 					for _, f := range findings.Recent(1) {
 						if f.ID == id {
-							LogNudge(f)
+							p.Send(nudgeMsg{finding: f})
 						}
 					}
 				}
@@ -302,7 +303,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 					for _, rid := range result.resp.ResolvedFindings {
 						for _, f := range findings.Recent(100) {
 							if f.ID == rid {
-								LogResolved(f)
+								p.Send(resolvedMsg{finding: f})
 							}
 						}
 					}
@@ -417,6 +418,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			Debugf("[watcher] triggering brain: %s", triggerReason)
 			brainBusy = true
 			brainThinking = true
+			p.Send(brainStatusMsg{thinking: true})
 			activeBrain := brain
 			findingsJSON := findings.ActiveJSON()
 
@@ -449,14 +451,28 @@ func runWatchLoop(projectDir string, cfg Config) {
 		// Log status only when files/build change.
 		sh := statusOnlyHash(state)
 		if sh != lastStatusHash {
-			LogStatus(state)
+			buildOK := (*bool)(nil)
+			if state.Build != nil {
+				v := state.Build.OK
+				buildOK = &v
+			}
+			p.Send(statusMsg{
+				ccStatus:   ccStatus,
+				buildOK:    buildOK,
+				buildErrs:  func() int { if state.Build != nil { return state.Build.ErrorCount }; return 0 }(),
+				buildTrend: func() string { if state.Build != nil { return state.Build.Trend }; return "" }(),
+				files:      changedFiles,
+				newFiles:   untrackedFiles,
+				elapsed:    session.Elapsed(),
+				project:    filepath.Base(projectDir),
+			})
 			lastStatusHash = sh
 		}
 		// Log trajectory signals once.
 		for _, f := range trajectoryFindings {
 			key := f.Message
 			if !loggedTrajectory[key] {
-				LogTrajectory(f)
+				p.Send(trajectoryMsg{message: f.Message})
 				loggedTrajectory[key] = true
 			}
 		}
@@ -467,8 +483,8 @@ func runWatchLoop(projectDir string, cfg Config) {
 			lastLogHash = h
 		}
 
-		// Heartbeat — always updates, shows trupal is alive.
-		Heartbeat(ccStatus, brainThinking, brainLastTime, session.Elapsed())
+		// Send elapsed time update for the TUI footer.
+		p.Send(statusMsg{elapsed: session.Elapsed(), ccStatus: ccStatus, project: filepath.Base(projectDir)})
 
 		// Wait for next tick or signal.
 		select {
@@ -483,7 +499,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			if jsonlWatcher != nil {
 				jsonlWatcher.Close()
 			}
-			LogStopped(session.Elapsed(), findings.Recent(100))
+			p.Send(tea.Quit())
 			// Wait for second SIGINT to actually exit.
 			<-sigCh
 			return
