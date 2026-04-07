@@ -69,11 +69,13 @@ func runWatchLoop(projectDir string, cfg Config) {
 	var debounceTimer *time.Timer
 
 	// Brain state — brainResultCh receives results from the brain goroutine.
-	// All brain state is only written in the main loop (after reading from channel).
+	// brainErrCh receives errors. Main loop is sole owner of brain lifecycle.
 	brainResultCh := make(chan *BrainResponse, 1)
+	brainErrCh := make(chan error, 1)
 	brainBusy := false
 	brainThinking := false
 	brainLastMsg := ""
+	shuttingDown := false
 	interval := time.Duration(cfg.PollInterval) * time.Second
 
 	// Main loop ticker.
@@ -214,11 +216,25 @@ func runWatchLoop(projectDir string, cfg Config) {
 					findings.Resolve(resp.ResolvedFindings)
 				}
 			}
+		case err := <-brainErrCh:
+			brainBusy = false
+			brainThinking = false
+			Debugf("[watcher] brain error: %v", err)
+			// Restart brain unless shutting down.
+			if !shuttingDown && brain != nil {
+				brain.Stop()
+				newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second)
+				if restartErr != nil {
+					Debugf("[watcher] brain restart failed: %v", restartErr)
+				} else {
+					brain = newBrain
+				}
+			}
 		default:
 		}
 
 		// Trigger brain analysis if needed.
-		if triggerBrain && brain != nil && !brainBusy {
+		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
 			Debugf("[watcher] triggering brain: %s", triggerReason)
 			brainBusy = true
 			brainThinking = true
@@ -226,13 +242,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			go func(reason string) {
 				resp, err := brain.Notify(reason)
 				if err != nil {
-					Debugf("[watcher] brain error: %v", err)
-					brain.Stop()
-					newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second)
-					if restartErr == nil {
-						brain = newBrain
-					}
-					brainResultCh <- nil
+					brainErrCh <- err
 					return
 				}
 				brainResultCh <- resp
@@ -243,24 +253,44 @@ func runWatchLoop(projectDir string, cfg Config) {
 		if jsonlPath != "" {
 			if newPath := CheckForNewSession(projectDir, jsonlPath); newPath != "" {
 				Debugf("[watcher] session switch: %s -> %s", filepath.Base(jsonlPath), filepath.Base(newPath))
-				jsonlPath = newPath
-				if jsonlWatcher != nil {
-					jsonlWatcher.Close()
-				}
-				jsonlWatcher, _ = NewJSONLWatcher(jsonlPath)
-				// Restart brain with new session path.
-				if brain != nil && !brainBusy {
-					brain.Stop()
-					brain, _ = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+				newWatcher, err := NewJSONLWatcher(newPath)
+				if err != nil {
+					Debugf("[watcher] failed to watch new session: %v", err)
+				} else {
+					jsonlPath = newPath
+					if jsonlWatcher != nil {
+						jsonlWatcher.Close()
+					}
+					jsonlWatcher = newWatcher
+					if brain != nil && !brainBusy {
+						brain.Stop()
+						newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+						if err != nil {
+							Debugf("[watcher] failed to restart brain: %v", err)
+						} else {
+							brain = newBrain
+						}
+					}
 				}
 			}
 		} else {
 			// No session yet — keep looking.
-			jsonlPath = FindSessionJSONL(projectDir)
-			if jsonlPath != "" {
-				Debugf("[watcher] found CC session: %s", filepath.Base(jsonlPath))
-				jsonlWatcher, _ = NewJSONLWatcher(jsonlPath)
-				brain, _ = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+			newPath := FindSessionJSONL(projectDir)
+			if newPath != "" {
+				Debugf("[watcher] found CC session: %s", filepath.Base(newPath))
+				newWatcher, err := NewJSONLWatcher(newPath)
+				if err != nil {
+					Debugf("[watcher] failed to watch session: %v", err)
+				} else {
+					jsonlPath = newPath
+					jsonlWatcher = newWatcher
+					newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+					if err != nil {
+						Debugf("[watcher] failed to start brain: %v", err)
+					} else {
+						brain = newBrain
+					}
+				}
 			}
 		}
 
@@ -292,6 +322,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 		case <-ticker.C:
 		case <-sigCh:
 			// Graceful shutdown.
+			shuttingDown = true
 			Debugf("[watcher] received SIGINT, shutting down")
 			if brain != nil {
 				brain.Stop()

@@ -96,12 +96,14 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain,
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		stdin.Close()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 	cmd.Stderr = nil
 
 	Debugf("[brain] starting subprocess")
 	if err := cmd.Start(); err != nil {
+		stdin.Close()
 		Debugf("[brain] start failed: %v", err)
 		return nil, fmt.Errorf("start brain: %w", err)
 	}

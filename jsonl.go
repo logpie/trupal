@@ -131,10 +131,7 @@ func (w *JSONLWatcher) watchLoop() {
 			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
 				w.lastActive = time.Now()
-				// Reset offset on truncation/replacement.
-				if event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
-					w.offset = 0
-				}
+				// Signal only — offset resets are handled in ReadNew() to avoid races.
 				select {
 				case w.Events <- struct{}{}:
 				default:
@@ -189,7 +186,12 @@ func (w *JSONLWatcher) ReadNew() []JSONLEntry {
 		entries = append(entries, entry)
 	}
 
-	// Update offset.
+	// Only advance offset if scanner succeeded.
+	if scanner.Err() != nil {
+		Debugf("[jsonl] scanner error: %v", scanner.Err())
+		return entries // don't advance offset — retry next time
+	}
+
 	pos, _ := f.Seek(0, io.SeekCurrent)
 	w.offset = pos
 
