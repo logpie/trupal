@@ -211,13 +211,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.findings++
 		w := m.contentW()
 		m.log("")
-		// Observation (what trupal saw) — dim
+		// Observation (what trupal saw)
 		if msg.finding.Reasoning != "" {
 			for i, line := range wrap(msg.finding.Reasoning, w-2) {
 				if i == 0 {
-					m.log(sDim.Render("  " + line))
+					m.log("  " + line)
 				} else {
-					m.raw(sDim.Render("  " + line))
+					m.raw("  " + line)
 				}
 			}
 		}
