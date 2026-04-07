@@ -217,11 +217,19 @@ func (m *model) addLine(line string) {
 	} else {
 		m.lines = append(m.lines, ts+" "+line)
 	}
+	m.trimLines()
 }
 
 // addContinuation adds an indented line without timestamp (for word-wrap continuations).
 func (m *model) addContinuation(line string) {
-	m.lines = append(m.lines, "         "+line) // 9 spaces = aligned with text after timestamp
+	m.lines = append(m.lines, "         "+line)
+	m.trimLines()
+}
+
+func (m *model) trimLines() {
+	if len(m.lines) > 200 {
+		m.lines = m.lines[len(m.lines)-200:]
+	}
 	// Cap at 200 lines.
 	if len(m.lines) > 200 {
 		m.lines = m.lines[len(m.lines)-200:]
