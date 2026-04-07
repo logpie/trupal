@@ -22,6 +22,23 @@
 - [IMPORTANT] ReadNew doesn't check scanner.Err — advances offset on scan failure. **Fixed**: check scanner.Err() before committing offset.
 - [NOTE] Pipe leak on StartBrain failure — stdin not closed if stdout/start fails. **Fixed**: close stdin on error paths.
 
-## Round 3 — Smoke test
+## Round 3 — Smoke test (pre-Codex MCP)
 
 All fixes verified. Build clean, vet clean, start/stop lifecycle correct, brain responds, no pane death, no window kills.
+
+## Round 4 — Codex MCP review
+
+- [CRITICAL] Session switch while brain busy — stale brain kept analyzing old JSONL. **Fixed by Codex**: brainStale flag, instance reference in result channels, force restart.
+- [IMPORTANT] Debounced triggers dropped when brainBusy — activity lost permanently. **Fixed by Codex**: pendingTrigger + mergeTriggerReason, replayed when brain finishes.
+- [IMPORTANT] Active findings only in brain system prompt at startup — brain can't resolve new findings. **Fixed by Codex**: brain.Notify() now takes (reason, findingsJSON), findings sent every turn.
+- [IMPORTANT] ShouldRunBuild ignores untracked files. **Fixed by Codex**: takes (changedFiles, untrackedFiles, extensions).
+- [IMPORTANT] brain_provider parsed but never used — always calls claude. **Fixed by Codex**: brainCommand() validates provider, Config.Validate() fails fast.
+- [IMPORTANT] runGit silently returns "" on all errors. **Fixed by Codex**: returns (string, error), failures logged via Debugf.
+- [NOTE] .trupal.toml parser is not real TOML — deferred.
+- [NOTE] Rendering inconsistencies with BrainLastMsg/CCStatus — deferred.
+- [REFACTOR] Dead fields/helpers (printLine, wrapPrint, unused struct fields) — deferred.
+
+## Round 5 — Codex re-reviewed fixes
+
+- [IMPORTANT] Config validation after pid file write — stale .trupal.pid on bad config. **Fixed by Codex**: moved validation before pid file creation.
+- APPROVED. No new issues.
