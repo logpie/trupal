@@ -601,9 +601,6 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			if jsonlWatcher != nil {
 				jsonlWatcher.Close()
 			}
-			p.Send(tea.Quit())
-			// Wait for second SIGINT to actually exit.
-			<-sigCh
 			return
 		}
 	}

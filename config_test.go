@@ -4,6 +4,7 @@ import "testing"
 
 func TestConfigValidateNormalizesBrainSettings(t *testing.T) {
 	cfg := Config{
+		PollInterval:  3,
 		BrainProvider: " CLAUDE ",
 		BrainModel:    " SONNET ",
 		BrainEffort:   " HIGH ",
@@ -31,6 +32,7 @@ func TestConfigValidateRejectsInvalidBrainSettings(t *testing.T) {
 		{
 			name: "invalid model",
 			cfg: Config{
+				PollInterval:  3,
 				BrainProvider: "claude",
 				BrainModel:    "invalid",
 				BrainEffort:   "high",
@@ -39,9 +41,44 @@ func TestConfigValidateRejectsInvalidBrainSettings(t *testing.T) {
 		{
 			name: "invalid effort",
 			cfg: Config{
+				PollInterval:  3,
 				BrainProvider: "claude",
 				BrainModel:    "sonnet",
 				BrainEffort:   "turbo",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.cfg.Validate(); err == nil {
+				t.Fatal("expected Validate() to fail")
+			}
+		})
+	}
+}
+
+func TestConfigValidateRejectsInvalidPollInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{
+			name: "too low",
+			cfg: Config{
+				PollInterval:  0,
+				BrainProvider: "claude",
+				BrainModel:    "sonnet",
+				BrainEffort:   "high",
+			},
+		},
+		{
+			name: "too high",
+			cfg: Config{
+				PollInterval:  61,
+				BrainProvider: "claude",
+				BrainModel:    "sonnet",
+				BrainEffort:   "high",
 			},
 		},
 	}

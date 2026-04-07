@@ -173,7 +173,7 @@ func TestMouseMotionWithoutPressStillSelects(t *testing.T) {
 	}
 }
 
-func TestCopySelectedToClipboardReturnsTmuxError(t *testing.T) {
+func TestCopySelectedToClipboardIgnoresTmuxErrorAfterOSC52Write(t *testing.T) {
 	t.Setenv("TMUX", "1")
 
 	wantErr := errors.New("tmux load-buffer failed")
@@ -188,7 +188,7 @@ func TestCopySelectedToClipboardReturnsTmuxError(t *testing.T) {
 		loadTmuxBuffer = prevLoad
 	}()
 
-	if err := CopySelectedToClipboard("hello"); !errors.Is(err, wantErr) {
-		t.Fatalf("expected error %v, got %v", wantErr, err)
+	if err := CopySelectedToClipboard("hello"); err != nil {
+		t.Fatalf("expected nil error after OSC 52 write, got %v", err)
 	}
 }

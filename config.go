@@ -60,7 +60,7 @@ func loadConfig(projectDir string) Config {
 			cfg.BuildExtensions = parseTomlArray(value)
 		case "poll_interval":
 			n, err := strconv.Atoi(value)
-			if err == nil && n > 0 {
+			if err == nil {
 				cfg.PollInterval = n
 			}
 		case "brain_provider":
@@ -103,6 +103,10 @@ func SaveConfig(projectDir string, cfg Config) {
 // Validate normalizes and validates config values that must match runtime support.
 func (cfg *Config) Validate() error {
 	defaults := DefaultConfig()
+
+	if cfg.PollInterval < 1 || cfg.PollInterval > 60 {
+		return fmt.Errorf("poll_interval must be between 1 and 60 seconds")
+	}
 
 	cfg.BrainProvider = strings.ToLower(strings.TrimSpace(cfg.BrainProvider))
 	if cfg.BrainProvider == "" {

@@ -36,17 +36,6 @@ func SanitizeString(s string) string {
 	}, s)
 }
 
-func ValidateConfig(cfg Config) []string {
-	var errors []string
-	if cfg.PollInterval < 1 {
-		errors = append(errors, "poll_interval must be >= 1")
-	}
-	if cfg.PollInterval > 60 {
-		errors = append(errors, "poll_interval too high")
-	}
-	return errors
-}
-
 func NormalizePath(path string) string {
 	path = strings.TrimSpace(path)
 	path = strings.ReplaceAll(path, "\\", "/")
@@ -118,11 +107,4 @@ func SanitizeURL(url string) string {
 func ValidateJSON(data []byte) bool {
 	var v interface{}
 	return json.Unmarshal(data, &v) == nil
-}
-
-func MustValidateConfig(cfg Config) {
-	errs := ValidateConfig(cfg)
-	if len(errs) > 0 {
-		panic(strings.Join(errs, "; "))
-	}
 }

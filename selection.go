@@ -222,9 +222,11 @@ func CopySelectedToClipboard(text string) error {
 	encoded := base64Encode(text)
 	fmt.Fprintf(os.Stderr, "\033]52;c;%s\a", encoded)
 
-	// Also set tmux buffer as fallback.
+	// Also set tmux buffer as an independent copy target.
 	if os.Getenv("TMUX") != "" {
-		return loadTmuxBuffer(text)
+		if err := loadTmuxBuffer(text); err != nil {
+			return nil
+		}
 	}
 
 	return nil
