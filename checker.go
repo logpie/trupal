@@ -20,12 +20,8 @@ func RunBuildCheck(projectDir string, buildCmd string) BuildResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	parts := strings.Fields(buildCmd)
-	if len(parts) == 0 {
-		return BuildResult{OK: true}
-	}
-
-	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+	// Run through shell for proper parsing of quotes, pipes, env vars.
+	cmd := exec.CommandContext(ctx, "sh", "-c", buildCmd)
 	cmd.Dir = projectDir
 
 	var stdout, stderr bytes.Buffer

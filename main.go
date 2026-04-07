@@ -214,8 +214,8 @@ func resolveProjectDir() (string, error) {
 func findGitRoot(dir string) (string, error) {
 	current := dir
 	for {
-		info, err := os.Stat(filepath.Join(current, ".git"))
-		if err == nil && info.IsDir() {
+		// Accept .git as either directory (normal repo) or file (worktree/submodule).
+		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
 			return current, nil
 		}
 		parent := filepath.Dir(current)

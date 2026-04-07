@@ -239,19 +239,26 @@ func runWatchLoop(projectDir string, cfg Config) {
 			}(triggerReason)
 		}
 
-		// Check for new CC session.
+		// Check for new CC session — restart brain + watcher on switch.
 		if jsonlPath != "" {
 			if newPath := CheckForNewSession(projectDir, jsonlPath); newPath != "" {
+				Debugf("[watcher] session switch: %s -> %s", filepath.Base(jsonlPath), filepath.Base(newPath))
 				jsonlPath = newPath
 				if jsonlWatcher != nil {
 					jsonlWatcher.Close()
 				}
 				jsonlWatcher, _ = NewJSONLWatcher(jsonlPath)
+				// Restart brain with new session path.
+				if brain != nil && !brainBusy {
+					brain.Stop()
+					brain, _ = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+				}
 			}
 		} else {
 			// No session yet — keep looking.
 			jsonlPath = FindSessionJSONL(projectDir)
 			if jsonlPath != "" {
+				Debugf("[watcher] found CC session: %s", filepath.Base(jsonlPath))
 				jsonlWatcher, _ = NewJSONLWatcher(jsonlPath)
 				brain, _ = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
 			}

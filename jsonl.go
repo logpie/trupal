@@ -125,10 +125,16 @@ func (w *JSONLWatcher) watchLoop() {
 			if !ok {
 				return
 			}
-			// Only care about writes to our JSONL file.
-			if event.Has(fsnotify.Write) && filepath.Base(event.Name) == filepath.Base(w.Path) {
+			base := filepath.Base(event.Name)
+			if base != filepath.Base(w.Path) {
+				continue
+			}
+			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
 				w.lastActive = time.Now()
-				// Non-blocking send.
+				// Reset offset on truncation/replacement.
+				if event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
+					w.offset = 0
+				}
 				select {
 				case w.Events <- struct{}{}:
 				default:
@@ -149,6 +155,15 @@ func (w *JSONLWatcher) ReadNew() []JSONLEntry {
 		return nil
 	}
 	defer f.Close()
+
+	// Reset offset if file was truncated.
+	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	if info.Size() < w.offset {
+		w.offset = 0
+	}
 
 	if _, err := f.Seek(w.offset, io.SeekStart); err != nil {
 		return nil

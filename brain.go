@@ -7,7 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,10 +30,8 @@ type Brain struct {
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
 	scanner *bufio.Scanner
-	mu      sync.Mutex
-	running bool
+	stopped atomic.Bool
 	cfg     Config
-	prompt  string
 }
 
 // brainSystemPrompt returns the system prompt for the brain, with placeholders filled.
@@ -100,10 +98,9 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain,
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	// Discard stderr.
 	cmd.Stderr = nil
 
-	Debugf("[brain] starting: claude %s", strings.Join(args, " "))
+	Debugf("[brain] starting subprocess")
 	if err := cmd.Start(); err != nil {
 		Debugf("[brain] start failed: %v", err)
 		return nil, fmt.Errorf("start brain: %w", err)
@@ -111,35 +108,28 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain,
 	Debugf("[brain] started (pid %d)", cmd.Process.Pid)
 
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB lines
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
 	return &Brain{
 		cmd:     cmd,
 		stdin:   stdin,
 		stdout:  stdout,
 		scanner: scanner,
-		running: true,
 		cfg:     cfg,
-		prompt:  prompt,
 	}, nil
 }
 
 // Notify sends a message to the brain and blocks until the brain responds.
-// Returns the parsed response or an error.
+// Safe to call from a single goroutine. Stop() can interrupt it by closing stdin.
 func (b *Brain) Notify(message string) (*BrainResponse, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if !b.running {
-		return nil, fmt.Errorf("brain not running")
+	if b.stopped.Load() {
+		return nil, fmt.Errorf("brain stopped")
 	}
 
-	// Send user message.
 	Debugf("[brain] notify: %s", truncate(message, 200))
 	start := time.Now()
 	msg := fmt.Sprintf(`{"type":"user","message":{"role":"user","content":%s}}`, jsonString(message))
 	if _, err := fmt.Fprintln(b.stdin, msg); err != nil {
-		b.running = false
 		Debugf("[brain] write failed: %v", err)
 		return nil, fmt.Errorf("write to brain: %w", err)
 	}
@@ -165,7 +155,6 @@ func (b *Brain) Notify(message string) (*BrainResponse, error) {
 			continue
 		}
 
-		// Collect text content from assistant messages.
 		if event.Type == "assistant" {
 			for _, block := range event.Message.Content {
 				if block.Type == "text" && block.Text != "" {
@@ -174,10 +163,15 @@ func (b *Brain) Notify(message string) (*BrainResponse, error) {
 			}
 		}
 
-		// "result" marks end of turn.
 		if event.Type == "result" {
 			break
 		}
+	}
+
+	// Check scanner error (EOF, broken pipe, etc.)
+	if err := b.scanner.Err(); err != nil {
+		Debugf("[brain] scanner error: %v", err)
+		return nil, fmt.Errorf("brain read error: %w", err)
 	}
 
 	elapsed := time.Since(start)
@@ -188,7 +182,6 @@ func (b *Brain) Notify(message string) (*BrainResponse, error) {
 
 	Debugf("[brain] response received after %s (%d chars)", elapsed, len(lastText))
 
-	// Parse the JSON from the last text block.
 	resp, err := parseBrainJSON(lastText)
 	if err != nil {
 		Debugf("[brain] JSON parse failed, using raw text: %v", err)
@@ -199,15 +192,12 @@ func (b *Brain) Notify(message string) (*BrainResponse, error) {
 }
 
 // parseBrainJSON extracts the BrainResponse JSON from the brain's text output.
-// The brain might wrap it in markdown code fences or include preamble text.
 func parseBrainJSON(text string) (*BrainResponse, error) {
-	// Try direct parse first.
 	var resp BrainResponse
 	if err := json.Unmarshal([]byte(text), &resp); err == nil {
 		return &resp, nil
 	}
 
-	// Try to find JSON object in the text.
 	start := strings.Index(text, "{")
 	end := strings.LastIndex(text, "}")
 	if start >= 0 && end > start {
@@ -219,21 +209,13 @@ func parseBrainJSON(text string) (*BrainResponse, error) {
 	return nil, fmt.Errorf("no valid JSON in brain response")
 }
 
-// truncate shortens s to maxLen with "..." suffix if needed.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-// Stop kills the brain subprocess.
+// Stop kills the brain subprocess. Non-blocking — closes stdin to unblock Notify.
 func (b *Brain) Stop() {
+	if b.stopped.Swap(true) {
+		return // already stopped
+	}
 	Debugf("[brain] stopping")
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.running = false
+	// Close stdin to unblock scanner.Scan() in Notify.
 	if b.stdin != nil {
 		b.stdin.Close()
 	}
@@ -245,9 +227,15 @@ func (b *Brain) Stop() {
 
 // IsRunning returns whether the brain process is alive.
 func (b *Brain) IsRunning() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.running
+	return !b.stopped.Load()
+}
+
+// truncate shortens s to maxLen with "..." suffix if needed.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // jsonString returns s as a JSON-encoded string (with escaping).
