@@ -187,7 +187,7 @@ func (s *Selection) SelectedText(lines []string, tabWidth int) string {
 
 	selected := make([]string, 0, end.Line-start.Line+1)
 	for lineIdx := start.Line; lineIdx <= end.Line; lineIdx++ {
-		expanded := ExpandTabs(lines[lineIdx], tabWidth)
+		expanded := selectionDisplayLine(lines[lineIdx], tabWidth)
 		switch {
 		case start.Line == end.Line:
 			selected = append(selected, VisualSubstring(expanded, start.Col, end.Col+1))
@@ -201,6 +201,10 @@ func (s *Selection) SelectedText(lines []string, tabWidth int) string {
 	}
 
 	return strings.Join(selected, "\n")
+}
+
+func selectionDisplayLine(line string, tabWidth int) string {
+	return ExpandTabs(line, tabWidth)
 }
 
 func (s *Selection) normalized() (selectionPoint, selectionPoint) {

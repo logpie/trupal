@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestSelectionPointAtUsesVisibleWindow(t *testing.T) {
@@ -45,6 +47,41 @@ func TestSelectionPointAtUsesScrollOffset(t *testing.T) {
 	}
 	if point.Line != 6 {
 		t.Fatalf("expected first visible line to map to absolute line 6, got %d", point.Line)
+	}
+}
+
+func TestSelectionPointAtUsesVisibleRangeWhenContentShort(t *testing.T) {
+	m := initialModel("test")
+	m.width = 40
+	m.height = 15 // logH = 9
+	m.lines = []string{"first", "second"}
+
+	point, ok := m.selectionPointAt(0, 3, false)
+	if !ok {
+		t.Fatal("expected first visible line to map")
+	}
+	if point.Line != 0 {
+		t.Fatalf("expected row 0 to map to line 0, got %d", point.Line)
+	}
+
+	point, ok = m.selectionPointAt(0, 4, false)
+	if !ok {
+		t.Fatal("expected second visible line to map")
+	}
+	if point.Line != 1 {
+		t.Fatalf("expected row 1 to map to line 1, got %d", point.Line)
+	}
+
+	if _, ok := m.selectionPointAt(0, 5, false); ok {
+		t.Fatal("expected blank viewport rows to be non-selectable")
+	}
+
+	point, ok = m.selectionPointAt(0, 5, true)
+	if !ok {
+		t.Fatal("expected clamped blank-row selection to succeed")
+	}
+	if point.Line != 1 {
+		t.Fatalf("expected clamped blank-row selection to snap to last visible line, got %d", point.Line)
 	}
 }
 
@@ -298,6 +335,43 @@ func TestMouseDragAutoScrollsAboveViewport(t *testing.T) {
 	_ = cmd()
 	if copied != "line07\nl" {
 		t.Fatalf("expected copied text %q, got %q", "line07\nl", copied)
+	}
+}
+
+func TestSelectionPointAtAndSelectedTextHandleANSIAndTabs(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.logStyled("!", "prefix\talpha", 80, sWarn)
+
+	lineIdx := len(m.lines) - 1
+	line := selectionDisplayLine(m.lines[lineIdx], selectionTabWidth)
+	startCol := strings.Index(ansi.Strip(line), "alpha")
+	if startCol < 0 {
+		t.Fatalf("expected alpha in rendered line: %q", ansi.Strip(line))
+	}
+
+	point, ok := m.selectionPointAt(startCol, 3, false)
+	if !ok {
+		t.Fatal("expected selection point for styled line")
+	}
+	if point.Line != lineIdx {
+		t.Fatalf("expected line %d, got %d", lineIdx, point.Line)
+	}
+	if point.Col != startCol {
+		t.Fatalf("expected col %d, got %d", startCol, point.Col)
+	}
+
+	m.sel.Start = selectionPoint{Line: lineIdx, Col: startCol}
+	m.sel.End = selectionPoint{Line: lineIdx, Col: startCol + len("alpha") - 1}
+	text := m.sel.SelectedText(m.lines, selectionTabWidth)
+	if text != "alpha" {
+		t.Fatalf("expected copied text %q, got %q", "alpha", text)
+	}
+
+	view := m.View()
+	if !strings.Contains(view, selectionBgANSI+"a") {
+		t.Fatalf("expected highlighted alpha in view, got %q", view)
 	}
 }
 

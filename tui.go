@@ -464,19 +464,32 @@ func (m model) selectionPointAt(x, y int, clamp bool) (selectionPoint, bool) {
 		return selectionPoint{}, false
 	}
 
-	lineIdx := len(m.lines) - m.logH() - m.scrollOffset + (y - rect.Y)
-	if lineIdx < 0 {
-		lineIdx = 0
+	start, end := m.visibleLogRange()
+	visibleCount := end - start
+	if visibleCount <= 0 {
+		return selectionPoint{}, false
 	}
-	if lineIdx >= len(m.lines) {
-		lineIdx = len(m.lines) - 1
+
+	row := y - rect.Y
+	if row < 0 {
+		if !clamp {
+			return selectionPoint{}, false
+		}
+		row = 0
 	}
+	if row >= visibleCount {
+		if !clamp {
+			return selectionPoint{}, false
+		}
+		row = visibleCount - 1
+	}
+	lineIdx := start + row
 
 	relX := x - rect.X
 	if relX < 0 {
 		relX = 0
 	}
-	expanded := ExpandTabs(m.lines[lineIdx], selectionTabWidth)
+	expanded := selectionDisplayLine(m.lines[lineIdx], selectionTabWidth)
 	return selectionPoint{
 		Line: lineIdx,
 		Col:  VisualColAtRelativeX(expanded, relX),
@@ -536,6 +549,7 @@ func (m model) View() string {
 	if start < end {
 		for i, line := range m.lines[start:end] {
 			absIdx := start + i
+			line = selectionDisplayLine(line, selectionTabWidth)
 			if m.sel.IsLineSelected(absIdx) {
 				startCol, endCol := m.sel.GetLineSelectionCols(absIdx)
 				line = InjectCharacterRangeBackground(line, startCol, endCol)
