@@ -42,3 +42,20 @@ All fixes verified. Build clean, vet clean, start/stop lifecycle correct, brain 
 
 - [IMPORTANT] Config validation after pid file write — stale .trupal.pid on bad config. **Fixed by Codex**: moved validation before pid file creation.
 - APPROVED. No new issues.
+
+## Round 6 — Codex MCP UI review (2026-04-07)
+
+- [CRITICAL] Ctrl+C quits TUI but doesn't stop watcher goroutine — **Fixed by Codex**: cancel channel from cmdWatch, watcher checks in select
+- [IMPORTANT] Header shows stale build/file state — **Fixed by Codex**: clear buildState when nil, assign fileLine unconditionally
+- [IMPORTANT] Brain spinner stuck after errors/session switch — **Fixed by Codex**: send thinking:false on all cleanup paths
+- [IMPORTANT] Brain restart blocks main loop 5s — **Fixed by Codex**: async restart with deadline
+- [IMPORTANT] Clipboard copy always returns nil — **Fixed by Codex**: injectable loadTmuxBuffer, real error returned
+- [IMPORTANT] Config.Validate() incomplete — **Fixed by Codex**: validates model, effort, poll_interval
+- [REFACTOR] Deleted scheduler.go (unused), GetOrLoadConfig (contradicts real loader)
+
+## Round 7 — Codex re-reviewed
+
+- [IMPORTANT] SIGINT handler blocks on second signal — **Fixed by Codex**: clean return, cmdWatch owns blocking
+- [IMPORTANT] PollInterval not validated — **Fixed by Codex**: added to Config.Validate() (1-60)
+- [NOTE] Clipboard false failure — **Fixed by Codex**: OSC 52 fire-and-forget, tmux best-effort
+- APPROVED. No new issues.
