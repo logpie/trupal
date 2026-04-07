@@ -92,18 +92,14 @@ Respond with JSON only:
   "resolved_findings": ["<finding_id>"]
 }
 
-Not every observation needs a nudge. Report what you see. Only add a nudge when there's a specific action CC should take.
-
-Examples:
-- Observation only: {"observations": ["CC has edited watcher.go 4 times this session"], "nudges": [], "resolved_findings": []}
-- Observation + nudge: {"observations": ["CC deleted test files"], "nudges": [{"severity": "error", "message": "Hey, you deleted the test file — was that intentional?", "reasoning": "test_auth.py removed"}], "resolved_findings": []}
-- Nothing: {"observations": [], "nudges": [], "resolved_findings": []}
+Observations are for things worth the human's attention — patterns, risks, notable decisions.
+NOT for: routine activity ("CC read a file"), internal state ("JSONL flushed"), timestamps.
+Max 2 observations per response. If nothing notable, return empty.
 
 Rules:
-- Reasoning: 1 sentence explaining what you checked. This is shown to the human as context below the nudge.
-  Do NOT include internal thinking like "Need nudges" or "Checking JSONL" — only what helps the human understand the finding.
-- Each nudge gets its OWN reasoning. Do not repeat the same reasoning for multiple nudges.
-- Nudge: conversational, under 100 chars, addressed to CC.
+- Observations: 1 sentence each. Only notable patterns or risks.
+- Nudges: conversational, addressed to CC. Include reasoning (1 sentence) for context.
+- Most responses should be empty — silence means everything looks fine.
 - High precision only. Don't nag about style.
 - If nothing important, respond with empty nudges immediately.`, jsonlPath, projectDir, findingsJSON)
 }

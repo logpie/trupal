@@ -278,10 +278,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // The indent is 14 chars (6 timestamp + 2 gap + ~5 label + 1 gap).
 // Text wraps at pane width minus indent.
 func (m *model) logLabeled(label, text string, w int) {
-	// First line: "HH:MM  label  text..."
-	// Continuation: "             text..."  (13 chars indent = aligned with text)
-	contIndent := "             " // 13 chars
-	textW := w - 13
+	// "HH:MM  label  first line..."
+	// "       continuation..."
+	//  ^5+2   ^7 = continuation indent
+	textW := w - 8 // leave room for "HH:MM  " + a bit
 	if textW < 20 {
 		textW = 20
 	}
@@ -290,8 +290,7 @@ func (m *model) logLabeled(label, text string, w int) {
 		if i == 0 {
 			m.log(label + "  " + line)
 		} else {
-			// Append directly — don't use raw() which adds its own indent
-			m.lines = append(m.lines, contIndent+line)
+			m.lines = append(m.lines, "       "+line)
 			m.trim()
 		}
 	}
