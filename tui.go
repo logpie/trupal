@@ -272,30 +272,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // --- Log helpers ---
 
-// logLabeled prints a labeled entry: "HH:MM:SS  label  text with wrapping"
-// Continuation lines align with the text, not the label.
+// logLabeled prints "HH:MM  label  text" with wrapped continuation lines.
+// Layout: "HH:MM  label  first line of text"
+//         "              continuation line"
+// The indent is 14 chars (6 timestamp + 2 gap + ~5 label + 1 gap).
+// Text wraps at pane width minus indent.
 func (m *model) logLabeled(label, text string, w int) {
-	// "HH:MM:SS  label  text..."
-	// "                 continuation..."
-	prefix := label + "  "
-	textW := w - 16 // timestamp(8) + gap(2) + label(~5) + gap(2)
-	if textW < 15 {
-		textW = 15
+	indent := "       " // 7 chars = aligns with after "HH:MM  "
+	textW := w - 7      // text starts after indent
+	if textW < 20 {
+		textW = 20
 	}
 	lines := wrap(text, textW)
 	for i, line := range lines {
 		if i == 0 {
-			m.log(prefix + line)
+			m.log(label + "  " + line)
 		} else {
-			// Align with text start: 10 spaces (timestamp gap) + label width + 2
-			pad := strings.Repeat(" ", 7)
-			m.raw(pad + line)
+			m.raw(indent + line)
 		}
 	}
 }
 
 func (m *model) log(line string) {
-	ts := sDim.Render(time.Now().Format("15:04:05"))
+	ts := sDim.Render(time.Now().Format("15:04"))
 	if line == "" {
 		m.lines = append(m.lines, "")
 	} else {
