@@ -152,8 +152,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			icon = errStyle.Render("✗")
 		}
 		m.addLine("")
-		// Word-wrap nudge to pane width.
-		nudgeWidth := m.width - 8 // leave room for timestamp + icon
+		nudgeWidth := m.width - 12
 		if nudgeWidth < 20 {
 			nudgeWidth = 20
 		}
@@ -161,20 +160,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if i == 0 {
 				m.addLine(fmt.Sprintf("%s %s", icon, line))
 			} else {
-				m.addLine("  " + line)
+				m.addContinuation("  " + line)
 			}
 		}
-		// Reasoning word-wrapped too.
 		if msg.finding.Reasoning != "" {
 			for _, line := range wordWrap(msg.finding.Reasoning, nudgeWidth) {
-				m.addLine("  " + dimStyle.Render(line))
+				m.addContinuation("  " + dimStyle.Render(line))
 			}
 		}
 		m.addLine("")
 		return m, nil
 
 	case resolvedMsg:
-		m.addLine(okStyle.Render("✓") + " " + dimStyle.Render(msg.finding.Nudge))
+		resolveWidth := m.width - 12
+		if resolveWidth < 20 {
+			resolveWidth = 20
+		}
+		for i, line := range wordWrap(msg.finding.Nudge, resolveWidth) {
+			if i == 0 {
+				m.addLine(okStyle.Render("✓") + " " + dimStyle.Render(line))
+			} else {
+				m.addContinuation("  " + dimStyle.Render(line))
+			}
+		}
 		return m, nil
 
 	case trajectoryMsg:
@@ -203,12 +211,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) addLine(line string) {
-	ts := dimStyle.Render(time.Now().Format("15:04"))
+	ts := dimStyle.Render(time.Now().Format("15:04:05"))
 	if line == "" {
 		m.lines = append(m.lines, "")
 	} else {
 		m.lines = append(m.lines, ts+" "+line)
 	}
+}
+
+// addContinuation adds an indented line without timestamp (for word-wrap continuations).
+func (m *model) addContinuation(line string) {
+	m.lines = append(m.lines, "         "+line) // 9 spaces = aligned with text after timestamp
 	// Cap at 200 lines.
 	if len(m.lines) > 200 {
 		m.lines = m.lines[len(m.lines)-200:]
@@ -238,7 +251,7 @@ func (m model) View() string {
 	sep := dimStyle.Render(strings.Repeat("─", m.width))
 
 	// --- Footer (fixed, 1 line) ---
-	footer := dimStyle.Render(fmt.Sprintf(" %s  session: %s", m.project, m.elapsed))
+	footer := dimStyle.Render(fmt.Sprintf(" %s · %s", m.project, m.elapsed))
 
 	// --- Log area (scrollable, fills remaining space) ---
 	headerLines := 2 // header + separator
