@@ -83,7 +83,7 @@ func initialModel(project string) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tickEvery(), tea.ClearScreen)
+	return tea.Batch(tickEvery(), tea.ClearScreen, tea.EnableMouseAllMotion)
 }
 
 func tickEvery() tea.Cmd {
@@ -131,6 +131,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollOffset = len(m.lines) - 1
 		case "end", "G":
 			m.scrollOffset = 0
+		}
+		return m, nil
+
+	case tea.MouseMsg:
+		if msg.Button == tea.MouseButtonWheelUp {
+			m.scrollOffset += 3
+			max := len(m.lines) - 1
+			if max < 0 {
+				max = 0
+			}
+			if m.scrollOffset > max {
+				m.scrollOffset = max
+			}
+		} else if msg.Button == tea.MouseButtonWheelDown {
+			m.scrollOffset -= 3
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
 		}
 		return m, nil
 
