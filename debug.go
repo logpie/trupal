@@ -22,7 +22,9 @@ func InitDebugLog(projectDir string) {
 	if err != nil {
 		return
 	}
+	debugLog.mu.Lock()
 	debugLog.file = f
+	debugLog.mu.Unlock()
 	Debugf("trupal debug log started for %s", projectDir)
 }
 
@@ -36,6 +38,8 @@ func CloseDebugLog() {
 }
 
 func DebugEnabled() bool {
+	debugLog.mu.Lock()
+	defer debugLog.mu.Unlock()
 	return debugLog.file != nil
 }
 

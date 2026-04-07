@@ -331,8 +331,14 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 			if brainStale {
 				break
 			}
-			if result.brain != brain {
+			if result.brain != brain && brain != nil {
 				Debugf("[watcher] ignoring brain result from stale instance")
+				break
+			}
+			if brain == nil && result.resp == nil {
+				// This is a restart delivery — adopt the new brain.
+				brain = result.brain
+				Debugf("[watcher] brain restarted successfully")
 				break
 			}
 			if result.resp != nil {
@@ -377,12 +383,14 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 			if !shuttingDown && brain != nil {
 				brain.Stop()
 				brain = nil
-				newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second, extraDirSlice()...)
-				if restartErr != nil {
-					Debugf("[watcher] brain restart failed: %v", restartErr)
-				} else {
-					brain = newBrain
-				}
+				go func() {
+					newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second, extraDirSlice()...)
+					if restartErr != nil {
+						Debugf("[watcher] brain restart failed: %v", restartErr)
+						return
+					}
+					brainResultCh <- brainResult{brain: newBrain}
+				}()
 			}
 		default:
 		}
@@ -665,6 +673,7 @@ func statusOnlyHash(state DisplayState) uint64 {
 	for _, f := range state.DeletedTests {
 		h.Write([]byte(f))
 	}
+	h.Write([]byte(state.CCStatus))
 	return h.Sum64()
 }
 

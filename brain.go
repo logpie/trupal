@@ -235,7 +235,8 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	elapsed := time.Since(start)
 	if lastText == "" {
 		Debugf("[brain] no response after %s", elapsed)
-		return &BrainResponse{Reasoning: "(no response from brain)"}, nil
+		// If scanner hit EOF without a "result" event, the subprocess likely died.
+		return nil, fmt.Errorf("brain exited unexpectedly (no response after %s)", elapsed)
 	}
 
 	Debugf("[brain] response received after %s (%d chars)", elapsed, len(lastText))
