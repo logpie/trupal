@@ -63,6 +63,7 @@ type brainStatusMsg struct {
 	thinking bool
 	lastTime time.Time
 }
+type brainCostMsg struct{ stats BrainStats }
 type logLineMsg struct{ line string }
 type tickMsg time.Time
 
@@ -103,6 +104,7 @@ type brainIndicatorState struct {
 	thinking bool
 	lastTime time.Time
 	tick     int
+	stats    BrainStats
 }
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -279,6 +281,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case brainCostMsg:
+		m.brain.stats = msg.stats
+
 	case SelectionCopiedMsg:
 		if msg.Err != nil {
 			m.toastMsg = "⚠ copy failed"
@@ -314,6 +319,13 @@ func (m model) brainIndicator() string {
 		return sOk.Render("●") + sDim.Render(fmt.Sprintf(" %dm ago", ago/60))
 	}
 	return sDim.Render("starting")
+}
+
+func formatCostUSD(cost float64) string {
+	if cost == 0 {
+		return "$0.00"
+	}
+	return fmt.Sprintf("$%.4f", cost)
 }
 
 // --- Log helpers ---
@@ -520,6 +532,7 @@ func (m model) View() string {
 		indicators = append(indicators, sDim.Render("○")+" cc")
 	}
 	indicators = append(indicators, m.brainIndicator())
+	indicators = append(indicators, sDim.Render(formatCostUSD(m.brain.stats.TotalCostUSD)))
 	if m.buildState != "" {
 		indicators = append(indicators, m.buildState)
 	}

@@ -286,6 +286,19 @@ func TestBrainStatusFinishedShowsRelativeAge(t *testing.T) {
 	}
 }
 
+func TestBrainCostDisplaysInHeader(t *testing.T) {
+	m := initialModel("test")
+	m.width = 60
+	m.height = 15
+
+	newM, _ := m.Update(brainCostMsg{stats: BrainStats{TotalCostUSD: 0.0123}})
+	m = newM.(model)
+
+	if !containsStr(m.View(), "$0.0123") {
+		t.Fatalf("expected brain cost in header, got %q", m.View())
+	}
+}
+
 func TestStatusMsgClearsBuildAndFileState(t *testing.T) {
 	m := initialModel("test")
 

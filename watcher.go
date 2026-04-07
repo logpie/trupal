@@ -26,6 +26,7 @@ type DisplayState struct {
 	BrainThinking      bool
 	BrainLastMsg       string
 	BrainLastTime      time.Time
+	BrainStats         BrainStats
 	CCStatus           string
 }
 
@@ -53,6 +54,9 @@ func WriteLog(logPath string, state DisplayState) {
 	if len(state.ChangedFiles) > 0 {
 		fmt.Fprintf(f, " mod:%s", strings.Join(state.ChangedFiles, ","))
 	}
+	if state.BrainStats.TotalCostUSD > 0 {
+		fmt.Fprintf(f, " brain:$%.4f", state.BrainStats.TotalCostUSD)
+	}
 	for _, bf := range state.BrainFindings {
 		if bf.Status == "shown" {
 			fmt.Fprintf(f, "\n  ⚠ %s", bf.Nudge)
@@ -75,6 +79,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 	logPath := filepath.Join(projectDir, ".trupal.log")
 	var lastLogHash uint64
 	var brainLastTime time.Time
+	brainStats := BrainStats{}
 
 	os.WriteFile(logPath, nil, 0644)
 
@@ -131,11 +136,12 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 	var brain *Brain
 	if jsonlPath != "" {
 		var err error
-		brain, err = StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), extraDirSlice()...)
+		brain, err = StartBrain(cfg, projectDir, jsonlPath, brainStats, extraDirSlice()...)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not start brain: %v\n", err)
 		}
 	}
+	p.Send(brainCostMsg{stats: brainStats})
 
 	// Debounce channel: AfterFunc sends the reason here; loop reads it next iteration.
 	debounceCh := make(chan string, 1)
@@ -303,6 +309,10 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 		case result := <-brainResultCh:
 			brainBusy = false
 			brainThinking = false
+			if result.brain != nil {
+				brainStats = result.brain.Stats()
+				p.Send(brainCostMsg{stats: brainStats})
+			}
 			if brainStale {
 				break
 			}
@@ -362,11 +372,14 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			clearBrainState()
 			// Restart brain unless shutting down.
 			if !shuttingDown && brain != nil {
+				brainStats = brain.Stats()
+				p.Send(brainCostMsg{stats: brainStats})
 				brain.Stop()
 				brain = nil
 				restartDirs := extraDirSlice()
+				restartStats := brainStats
 				go func() {
-					newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second, restartDirs...)
+					newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, restartStats, 5*time.Second, restartDirs...)
 					if restartErr != nil {
 						Debugf("[watcher] brain restart failed: %v", restartErr)
 						return
@@ -406,6 +419,8 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 					brainStale = true
 					clearBrainState()
 					if brain != nil {
+						brainStats = brain.Stats()
+						p.Send(brainCostMsg{stats: brainStats})
 						brain.Stop()
 						brain = nil
 					}
@@ -441,7 +456,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 		if brainStale && !brainBusy && !shuttingDown && jsonlPath != "" {
 			clearBrainState()
-			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), extraDirSlice()...)
+			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, brainStats, extraDirSlice()...)
 			if err != nil {
 				Debugf("[watcher] failed to start brain for current session: %v", err)
 			} else {
@@ -452,7 +467,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 		if restartNeeded && !brainBusy && !brainStale && !shuttingDown && jsonlPath != "" && brain == nil && !time.Now().Before(restartAt) {
 			clearBrainState()
-			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), extraDirSlice()...)
+			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, brainStats, extraDirSlice()...)
 			if err != nil {
 				Debugf("[watcher] brain restart failed: %v", err)
 				restartAt = time.Now().Add(5 * time.Second)
@@ -514,6 +529,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			BrainThinking:      brainThinking,
 			BrainLastMsg:       brainLastMsg,
 			BrainLastTime:      brainLastTime,
+			BrainStats:         brainStats,
 			CCStatus:           ccStatus,
 		}
 
@@ -1000,6 +1016,7 @@ func stateHash(state DisplayState) uint64 {
 		h.Write([]byte(f.ID))
 		h.Write([]byte(f.Status))
 	}
+	fmt.Fprintf(h, "%.4f", state.BrainStats.TotalCostUSD)
 	h.Write([]byte(fmt.Sprintf("%v", state.BrainThinking)))
 	h.Write([]byte(state.BrainLastMsg))
 	h.Write([]byte(state.CCStatus))

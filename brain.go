@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -20,6 +21,8 @@ type BrainResponse struct {
 	Observations     []string     `json:"observations"`
 	Nudges           []BrainNudge `json:"nudges"`
 	ResolvedFindings []string     `json:"resolved_findings"`
+	Usage            BrainUsage   `json:"usage"`
+	TotalCostUSD     float64      `json:"total_cost_usd"`
 }
 
 // BrainNudge is a single nudge from the brain.
@@ -27,6 +30,31 @@ type BrainNudge struct {
 	Severity  string `json:"severity"`
 	Message   string `json:"message"`
 	Reasoning string `json:"reasoning,omitempty"` // per-nudge context
+}
+
+// BrainUsage is per-turn token usage reported by the brain subprocess.
+type BrainUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
+// BrainStats is the cumulative token and cost usage for the current trupal session.
+type BrainStats struct {
+	TotalInputTokens         int
+	TotalOutputTokens        int
+	TotalCacheCreationTokens int
+	TotalCacheReadTokens     int
+	TotalCostUSD             float64
+}
+
+func (s *BrainStats) addTurn(usage BrainUsage, costUSD float64) {
+	s.TotalInputTokens += usage.InputTokens
+	s.TotalOutputTokens += usage.OutputTokens
+	s.TotalCacheCreationTokens += usage.CacheCreationInputTokens
+	s.TotalCacheReadTokens += usage.CacheReadInputTokens
+	s.TotalCostUSD += costUSD
 }
 
 // Brain manages the CC subprocess.
@@ -37,17 +65,16 @@ type Brain struct {
 	scanner *bufio.Scanner
 	stopped atomic.Bool
 	cfg     Config
+	statsMu sync.Mutex
+	stats   BrainStats
 }
 
-// brainSystemPrompt returns the system prompt for the brain, with placeholders filled.
-func brainSystemPrompt(projectDir, jsonlPath, findingsJSON string) string {
+// brainSystemPrompt returns the static system prompt for the brain.
+func brainSystemPrompt(projectDir, jsonlPath string) string {
 	return fmt.Sprintf(`You are TruPal, a continuous verification agent watching a Claude Code session.
 
 CC's session JSONL: %s
 Project directory: %s
-
-ACTIVE FINDINGS (unresolved):
-%s
 
 IMPORTANT — you are a STREAMING monitor with memory across turns. Be INCREMENTAL:
 - Each notification includes ACTIVE FINDINGS you already flagged. Do NOT re-flag them.
@@ -110,7 +137,7 @@ Rules:
 - Observations: 1 sentence each. Only notable patterns or risks.
 - Nudges: conversational, addressed to CC. Include reasoning (1 sentence) for context.
 - Focus on real correctness and verification risks, not style nits.
-- After you investigate, if nothing important is wrong, return empty nudges.`, jsonlPath, projectDir, findingsJSON)
+- After you investigate, if nothing important is wrong, return empty nudges.`, jsonlPath, projectDir)
 }
 
 func brainCommand(provider string) (string, error) {
@@ -132,8 +159,8 @@ func brainNotifyMessage(reason, findingsJSON string) string {
 
 // StartBrain spawns the CC subprocess. extraDirs are additional directories
 // the brain can access (from CC's tool calls to files outside projectDir).
-func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, extraDirs ...string) (*Brain, error) {
-	prompt := brainSystemPrompt(projectDir, jsonlPath, findingsJSON)
+func StartBrain(cfg Config, projectDir, jsonlPath string, initialStats BrainStats, extraDirs ...string) (*Brain, error) {
+	prompt := brainSystemPrompt(projectDir, jsonlPath)
 	command, err := brainCommand(cfg.BrainProvider)
 	if err != nil {
 		return nil, err
@@ -190,6 +217,7 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, extraDir
 		stdout:  stdout,
 		scanner: scanner,
 		cfg:     cfg,
+		stats:   initialStats,
 	}, nil
 }
 
@@ -242,6 +270,9 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 
 	// Read response lines until we see a "result" type (end of turn).
 	var lastText string
+	var usage BrainUsage
+	var totalCostUSD float64
+	sawResult := false
 	for b.scanner.Scan() {
 		line := b.scanner.Text()
 		if line == "" {
@@ -249,8 +280,10 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 		}
 
 		var event struct {
-			Type    string `json:"type"`
-			Message struct {
+			Type         string     `json:"type"`
+			Usage        BrainUsage `json:"usage"`
+			TotalCostUSD float64    `json:"total_cost_usd"`
+			Message      struct {
 				Content []struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
@@ -270,6 +303,9 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 		}
 
 		if event.Type == "result" {
+			usage = event.Usage
+			totalCostUSD = event.TotalCostUSD
+			sawResult = true
 			break
 		}
 	}
@@ -292,10 +328,31 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	resp, err := parseBrainJSON(lastText)
 	if err != nil {
 		Debugf("[brain] JSON parse failed, using raw text: %v", err)
-		return &BrainResponse{Reasoning: lastText}, nil
+		resp = &BrainResponse{Reasoning: lastText}
+	}
+	resp.Usage = usage
+	resp.TotalCostUSD = totalCostUSD
+	if sawResult {
+		b.statsMu.Lock()
+		b.stats.addTurn(usage, totalCostUSD)
+		b.statsMu.Unlock()
+		Debugf("[brain] usage: in=%d out=%d cache_read=%d cache_create=%d cost=$%.4f",
+			usage.InputTokens,
+			usage.OutputTokens,
+			usage.CacheReadInputTokens,
+			usage.CacheCreationInputTokens,
+			totalCostUSD,
+		)
 	}
 	Debugf("[brain] %d nudges, %d resolved, reasoning: %s", len(resp.Nudges), len(resp.ResolvedFindings), truncate(resp.Reasoning, 100))
 	return resp, nil
+}
+
+// Stats returns a snapshot of cumulative brain usage for the current trupal session.
+func (b *Brain) Stats() BrainStats {
+	b.statsMu.Lock()
+	defer b.statsMu.Unlock()
+	return b.stats
 }
 
 // parseBrainJSON extracts the BrainResponse JSON from the brain's text output.
@@ -352,7 +409,7 @@ func jsonString(s string) string {
 }
 
 // RestartBrain stops the current brain and starts a new one after a delay.
-func RestartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, delay time.Duration, extraDirs ...string) (*Brain, error) {
+func RestartBrain(cfg Config, projectDir, jsonlPath string, stats BrainStats, delay time.Duration, extraDirs ...string) (*Brain, error) {
 	time.Sleep(delay)
-	return StartBrain(cfg, projectDir, jsonlPath, findingsJSON, extraDirs...)
+	return StartBrain(cfg, projectDir, jsonlPath, stats, extraDirs...)
 }
