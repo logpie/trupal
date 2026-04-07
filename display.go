@@ -3,9 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -32,7 +30,7 @@ type DisplayState struct {
 	BrainFindings      []BrainFinding
 	BrainThinking      bool
 	BrainLastMsg       string
-	BrainLastTime      time.Time // when brain last responded
+	BrainLastTime      time.Time
 	CCStatus           string
 }
 
@@ -43,192 +41,142 @@ type BuildDisplay struct {
 	Trend      string
 }
 
-// getPaneWidth returns the width of this process's tmux pane.
-func getPaneWidth() int {
-	paneID := os.Getenv("TMUX_PANE")
-	if paneID == "" {
-		return 45
-	}
-	out, err := exec.Command("tmux", "display", "-t", paneID, "-p", "#{pane_width}").Output()
-	if err != nil {
-		return 45
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil || n < 20 {
-		return 45
-	}
-	return n
+// --- Chat-style log rendering ---
+// No screen clearing. No alt screen. Just append timestamped lines.
+// The display acts like `tail -f` — new events at bottom, scroll up for history.
+
+// LogEvent prints a single timestamped event line to stdout.
+func LogEvent(format string, args ...interface{}) {
+	ts := time.Now().Format("15:04:05")
+	msg := fmt.Sprintf(format, args...)
+	fmt.Printf("%s%s%s %s\n", dim, ts, reset, msg)
 }
 
-// EnterAltScreen switches to the alternate screen buffer (no scrollback).
-func EnterAltScreen() {
-	fmt.Print("\033[?1049h")
+// LogBrain prints a brain status/assessment line.
+func LogBrain(msg string) {
+	ts := time.Now().Format("15:04:05")
+	fmt.Printf("%s%s%s %s•%s %s\n", dim, ts, reset, dim, reset, msg)
 }
 
-// LeaveAltScreen switches back to the normal screen buffer.
-func LeaveAltScreen() {
-	fmt.Print("\033[?1049l")
+// LogNudge prints a nudge finding — conversational, prominent.
+func LogNudge(f BrainFinding) {
+	ts := f.Timestamp.Format("15:04:05")
+	severity := fmt.Sprintf("%s⚠%s", yellow, reset)
+	if f.Severity == "error" {
+		severity = fmt.Sprintf("%s✗%s", red, reset)
+	}
+
+	// Nudge as the main message (conversational).
+	fmt.Printf("%s%s%s %s %s\n", dim, ts, reset, severity, f.Nudge)
+
+	// Reasoning as context underneath (dim, indented).
+	if f.Reasoning != "" {
+		for _, line := range strings.Split(f.Reasoning, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				fmt.Printf("         %s%s%s\n", dim, line, reset)
+			}
+		}
+	}
 }
 
-// Render redraws the status frame in place on the alternate screen.
-func Render(state DisplayState) {
-	fmt.Print("\033[H\033[2J")
-	w := getPaneWidth()
-	sep := strings.Repeat("─", w-2)
+// LogResolved prints when a finding is resolved.
+func LogResolved(f BrainFinding) {
+	ts := time.Now().Format("15:04:05")
+	fmt.Printf("%s%s%s %s✓%s %s%s%s\n", dim, ts, reset, green, reset, dim, f.Nudge, reset)
+}
 
-	// ── Header: always shows trupal is alive ──
-	now := time.Now().Format("15:04:05")
-	fmt.Printf(" %strupal%s %s%s%s\n", bold, reset, dim, now, reset)
-	fmt.Printf(" %s%s%s\n", dim, sep, reset)
+// LogStatus prints a compact status line (CC + build + files).
+func LogStatus(state DisplayState) {
+	parts := []string{}
 
-	// ── Status line: CC + brain + build ──
-	ccLabel := ccStatusLabel(state.CCStatus)
-	brainLabel := brainStatusLabel(state.BrainThinking, state.BrainLastTime)
-	fmt.Printf(" %s  %s\n", ccLabel, brainLabel)
+	// CC status.
+	switch state.CCStatus {
+	case "active":
+		parts = append(parts, fmt.Sprintf("%s●%s cc", green, reset))
+	case "thinking":
+		parts = append(parts, fmt.Sprintf("%s●%s cc:thinking", yellow, reset))
+	default:
+		parts = append(parts, fmt.Sprintf("%s○%s cc:idle", dim, reset))
+	}
 
+	// Build.
 	if state.Build != nil {
-		renderBuild(state.Build)
+		if state.Build.OK {
+			parts = append(parts, fmt.Sprintf("%s✓%s build", green, reset))
+		} else {
+			label := fmt.Sprintf("%d err", state.Build.ErrorCount)
+			if state.Build.Trend != "" {
+				label += " (" + state.Build.Trend + ")"
+			}
+			parts = append(parts, fmt.Sprintf("%s✗%s %s", red, reset, label))
+		}
 	}
 
-	// ── Files ──
+	// Files.
 	nMod := len(state.ChangedFiles)
 	nNew := len(state.UntrackedFiles)
-	if nMod > 0 || nNew > 0 {
-		parts := []string{}
-		if nMod > 0 {
-			names := baseNames(state.ChangedFiles, 4)
-			parts = append(parts, fmt.Sprintf("%d mod: %s", nMod, strings.Join(names, " ")))
-		}
-		if nNew > 0 {
-			names := baseNames(state.UntrackedFiles, 3)
-			parts = append(parts, fmt.Sprintf("%d new: %s", nNew, strings.Join(names, " ")))
-		}
-		for _, p := range parts {
-			fmt.Printf(" %s%s%s\n", dim, p, reset)
-		}
+	if nMod > 0 {
+		names := baseNames(state.ChangedFiles, 3)
+		parts = append(parts, fmt.Sprintf("%d mod: %s", nMod, strings.Join(names, " ")))
+	}
+	if nNew > 0 {
+		names := baseNames(state.UntrackedFiles, 2)
+		parts = append(parts, fmt.Sprintf("%d new: %s", nNew, strings.Join(names, " ")))
 	}
 
-	// ── Trajectory ──
-	for _, f := range state.TrajectoryFindings {
-		fmt.Printf(" %s▸ %s%s\n", yellow, f.Message, reset)
+	ts := time.Now().Format("15:04:05")
+	fmt.Printf("%s%s%s %s\n", dim, ts, reset, strings.Join(parts, "  "))
+}
+
+// LogTrajectory prints trajectory warnings.
+func LogTrajectory(f Finding) {
+	ts := time.Now().Format("15:04:05")
+	fmt.Printf("%s%s%s %s▸%s %s\n", dim, ts, reset, yellow, reset, f.Message)
+}
+
+// LogHeader prints the startup banner.
+func LogHeader(projectDir string, cfg Config) {
+	fmt.Printf("\n %strupal%s %s— watching %s%s\n", bold, reset, dim, filepath.Base(projectDir), reset)
+	if cfg.BuildCmd != "" {
+		fmt.Printf(" %sbuild: %s%s\n", dim, cfg.BuildCmd, reset)
 	}
-	for _, dt := range state.DeletedTests {
-		fmt.Printf(" %s▸ deleted %s%s\n", yellow, filepath.Base(dt), reset)
-	}
-
-	// ── Brain section ──
-	// Always show: active findings persist until resolved, plus brain's latest status.
-	activeFindings := 0
-	resolvedFindings := 0
-	for _, f := range state.BrainFindings {
-		if f.Status == "shown" {
-			activeFindings++
-		} else {
-			resolvedFindings++
-		}
-	}
-
-	hasBrainContent := len(state.BrainFindings) > 0 || state.BrainLastMsg != ""
-	if hasBrainContent {
-		fmt.Println()
-		fmt.Printf(" %s%s%s\n", dim, sep, reset)
-
-		// Active findings first (yellow — needs attention).
-		for _, f := range state.BrainFindings {
-			if f.Status == "shown" {
-				renderFinding(f, w)
-			}
-		}
-
-		// Resolved findings (dimmed — addressed).
-		if resolvedFindings > 0 {
-			for _, f := range state.BrainFindings {
-				if f.Status == "resolved" {
-					renderFinding(f, w)
-				}
-			}
-		}
-
-		// Brain's latest assessment (dim, below findings).
-		if state.BrainLastMsg != "" {
-			fmt.Println()
-			lines := wordWrap("brain: "+state.BrainLastMsg, w-2)
-			for _, line := range lines {
-				fmt.Printf(" %s%s%s\n", dim, line, reset)
-			}
-		}
-	}
-
-	// ── Footer: session duration ──
+	fmt.Printf(" %sbrain: %s/%s (effort: %s)%s\n", dim, cfg.BrainProvider, cfg.BrainModel, cfg.BrainEffort, reset)
+	fmt.Printf(" %s%s%s\n", dim, strings.Repeat("─", 50), reset)
 	fmt.Println()
-	fmt.Printf(" %ssession: %s%s\n", dim, state.Elapsed, reset)
 }
 
-func ccStatusLabel(status string) string {
-	switch status {
-	case "active":
-		return fmt.Sprintf("%s●%s cc:active", green, reset)
-	case "thinking":
-		return fmt.Sprintf("%s●%s cc:thinking", yellow, reset)
-	default:
-		return fmt.Sprintf("%s○%s cc:idle", dim, reset)
-	}
-}
+// LogStopped prints the stop summary.
+func LogStopped(elapsed string, findings []BrainFinding) {
+	fmt.Println()
+	fmt.Printf(" %strupal stopped%s  %s%s%s\n", bold, reset, dim, elapsed, reset)
 
-func brainStatusLabel(thinking bool, lastTime time.Time) string {
-	if thinking {
-		return fmt.Sprintf("%s◌%s brain:analyzing", cyan, reset)
-	}
-	if lastTime.IsZero() {
-		return fmt.Sprintf("%s○%s brain:starting", dim, reset)
-	}
-	ago := time.Since(lastTime).Truncate(time.Second)
-	return fmt.Sprintf("%s●%s brain:%s ago", dim, reset, ago)
-}
-
-func renderBuild(b *BuildDisplay) {
-	if b.OK {
-		fmt.Printf(" %s✓ build clean%s\n", green, reset)
-		return
-	}
-	label := fmt.Sprintf("%d errors", b.ErrorCount)
-	if b.Trend != "" {
-		label += " (" + b.Trend + ")"
-	}
-	fmt.Printf(" %s✗ %s%s\n", red, label, reset)
-}
-
-func renderFinding(f BrainFinding, w int) {
-	ts := f.Timestamp.Format("15:04")
-
-	statusTag := ""
-	if f.Status == "resolved" {
-		statusTag = " ✓"
+	active := 0
+	resolved := 0
+	for _, f := range findings {
+		if f.Status == "shown" {
+			active++
+		} else if f.Status == "resolved" {
+			resolved++
+		}
 	}
 
-	// Reasoning in dim.
-	if f.Reasoning != "" {
-		lines := wordWrap(f.Reasoning, w-len(ts)-4)
-		for i, line := range lines {
-			if i == 0 {
-				fmt.Printf(" %s%s%s%s %s%s\n", dim, ts, statusTag, reset, dim+line, reset)
-			} else {
-				fmt.Printf(" %s%s%s\n", dim, strings.Repeat(" ", len(ts)+2)+line, reset)
+	if len(findings) > 0 {
+		fmt.Printf(" %sfindings: %d active, %d resolved%s\n", dim, active, resolved, reset)
+		for _, f := range findings {
+			status := fmt.Sprintf("%s●%s", yellow, reset)
+			if f.Status == "resolved" {
+				status = fmt.Sprintf("%s✓%s", green, reset)
 			}
+			ts := f.Timestamp.Format("15:04")
+			fmt.Printf(" %s %s%s%s %s\n", status, dim, ts, reset, f.Nudge)
 		}
+	} else {
+		fmt.Printf(" %sno findings this session%s\n", dim, reset)
 	}
 
-	// Nudge in yellow.
-	if f.Nudge != "" {
-		color := yellow
-		if f.Status == "resolved" {
-			color = dim
-		}
-		lines := wordWrap("→ "+f.Nudge, w-4)
-		for _, line := range lines {
-			fmt.Printf("   %s%s%s\n", color, line, reset)
-		}
-	}
+	fmt.Printf("\n %slog: .trupal.log  debug: .trupal.debug%s\n", dim, reset)
+	fmt.Printf(" %spress ctrl+c to close pane%s\n", dim, reset)
 }
 
 // baseNames returns base filenames, truncated to max count.
@@ -244,32 +192,6 @@ func baseNames(files []string, max int) []string {
 	return result
 }
 
-// wordWrap breaks text into lines that fit within width.
-func wordWrap(text string, width int) []string {
-	if width < 10 {
-		width = 10
-	}
-	text = strings.ReplaceAll(text, "\n", " ")
-
-	var lines []string
-	for len(text) > 0 {
-		if len(text) <= width {
-			lines = append(lines, text)
-			break
-		}
-		cut := width
-		for cut > 0 && text[cut] != ' ' {
-			cut--
-		}
-		if cut == 0 {
-			cut = width
-		}
-		lines = append(lines, text[:cut])
-		text = strings.TrimLeft(text[cut:], " ")
-	}
-	return lines
-}
-
 // WriteLog appends a plain-text summary to the log file.
 func WriteLog(logPath string, state DisplayState) {
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -279,38 +201,20 @@ func WriteLog(logPath string, state DisplayState) {
 	defer f.Close()
 
 	ts := time.Now().Format("15:04:05")
-	fmt.Fprintf(f, "─── %s (session: %s) ───\n", ts, state.Elapsed)
-
-	if state.CCStatus != "" {
-		fmt.Fprintf(f, "  cc: %s\n", state.CCStatus)
-	}
-	if len(state.ChangedFiles) > 0 {
-		fmt.Fprintf(f, "  modified: %s\n", strings.Join(state.ChangedFiles, ", "))
-	}
-	if len(state.UntrackedFiles) > 0 {
-		fmt.Fprintf(f, "  new: %s\n", strings.Join(state.UntrackedFiles, ", "))
-	}
+	fmt.Fprintf(f, "%s cc:%s", ts, state.CCStatus)
 	if state.Build != nil {
 		if state.Build.OK {
-			fmt.Fprintf(f, "  build: clean\n")
+			fmt.Fprintf(f, " build:clean")
 		} else {
-			trend := ""
-			if state.Build.Trend != "" {
-				trend = " (" + state.Build.Trend + ")"
-			}
-			fmt.Fprintf(f, "  build: %d errors%s\n", state.Build.ErrorCount, trend)
+			fmt.Fprintf(f, " build:%d-err", state.Build.ErrorCount)
 		}
 	}
-	for _, finding := range state.TrajectoryFindings {
-		fmt.Fprintf(f, "  ▸ %s\n", finding.Message)
-	}
-	for _, dt := range state.DeletedTests {
-		fmt.Fprintf(f, "  ▸ deleted test: %s\n", dt)
+	if len(state.ChangedFiles) > 0 {
+		fmt.Fprintf(f, " mod:%s", strings.Join(state.ChangedFiles, ","))
 	}
 	for _, bf := range state.BrainFindings {
-		fmt.Fprintf(f, "  brain [%s] %s\n", bf.Status, bf.Reasoning)
-		if bf.Nudge != "" {
-			fmt.Fprintf(f, "    → %s\n", bf.Nudge)
+		if bf.Status == "shown" {
+			fmt.Fprintf(f, "\n  ⚠ %s", bf.Nudge)
 		}
 	}
 	fmt.Fprintf(f, "\n")

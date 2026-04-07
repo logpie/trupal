@@ -30,23 +30,13 @@ func runWatchLoop(projectDir string, cfg Config) {
 	// Find CC's session JSONL.
 	jsonlPath := FindSessionJSONL(projectDir)
 	Debugf("[watcher] JSONL path: %q", jsonlPath)
+	LogHeader(projectDir, cfg)
 	if jsonlPath == "" {
-		fmt.Printf("project: %s\n", shortenPath(projectDir))
-		fmt.Println("no CC session found — waiting...")
+		LogEvent("no CC session found — waiting...")
 	} else {
-		fmt.Printf("project: %s\n", shortenPath(projectDir))
-		fmt.Printf("session: %s\n", filepath.Base(jsonlPath))
+		LogEvent("watching CC session %s", filepath.Base(jsonlPath))
 	}
-
-	if cfg.BuildCmd != "" {
-		fmt.Printf("build: %s\n", cfg.BuildCmd)
-	}
-	fmt.Printf("brain: %s/%s (effort: %s)\n", cfg.BrainProvider, cfg.BrainModel, cfg.BrainEffort)
-	fmt.Println("starting in 3s...")
-	time.Sleep(3 * time.Second)
-
-	// Switch to alternate screen — no scrollback pollution.
-	EnterAltScreen()
+	time.Sleep(2 * time.Second)
 
 	// Start JSONL watcher.
 	var jsonlWatcher *JSONLWatcher
@@ -88,9 +78,13 @@ func runWatchLoop(projectDir string, cfg Config) {
 	brainStale := false
 	brainThinking := false
 	brainLastMsg := ""
+	loggedTrajectory := make(map[string]bool)
 	pendingTrigger := ""
 	shuttingDown := false
 	interval := time.Duration(cfg.PollInterval) * time.Second
+
+	var lastStatusHash uint64     // tracks file/build/CC changes only
+	var lastBrainAnalyzing bool   // suppress repeated "analyzing..."
 
 	// Main loop ticker.
 	ticker := time.NewTicker(interval)
@@ -280,11 +274,24 @@ func runWatchLoop(projectDir string, cfg Config) {
 				brainLastMsg = result.resp.Reasoning
 				brainLastTime = time.Now()
 				for _, nudge := range result.resp.Nudges {
-					findings.Add(nudge.Severity, nudge.Message, result.resp.Reasoning)
+					id := findings.Add(nudge.Severity, nudge.Message, result.resp.Reasoning)
+					for _, f := range findings.Recent(1) {
+						if f.ID == id {
+							LogNudge(f)
+						}
+					}
 				}
 				if len(result.resp.ResolvedFindings) > 0 {
+					for _, rid := range result.resp.ResolvedFindings {
+						for _, f := range findings.Recent(100) {
+							if f.ID == rid {
+								LogResolved(f)
+							}
+						}
+					}
 					findings.Resolve(result.resp.ResolvedFindings)
 				}
+				lastBrainAnalyzing = false
 			}
 		case result := <-brainErrCh:
 			brainBusy = false
@@ -386,6 +393,10 @@ func runWatchLoop(projectDir string, cfg Config) {
 		// Trigger brain analysis if needed.
 		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
 			Debugf("[watcher] triggering brain: %s", triggerReason)
+			if !lastBrainAnalyzing {
+				LogBrain("analyzing...")
+				lastBrainAnalyzing = true
+			}
 			brainBusy = true
 			brainThinking = true
 			activeBrain := brain
@@ -417,8 +428,21 @@ func runWatchLoop(projectDir string, cfg Config) {
 			CCStatus:           ccStatus,
 		}
 
-		Render(state)
-
+		// Log status only when files/build/CC change (not brain).
+		sh := statusOnlyHash(state)
+		if sh != lastStatusHash {
+			LogStatus(state)
+			lastStatusHash = sh
+		}
+		// Log trajectory signals once.
+		for _, f := range trajectoryFindings {
+			key := f.Message
+			if !loggedTrajectory[key] {
+				LogTrajectory(f)
+				loggedTrajectory[key] = true
+			}
+		}
+		// Write full state to log file on any change.
 		h := stateHash(state)
 		if h != lastLogHash {
 			WriteLog(logPath, state)
@@ -438,39 +462,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			if jsonlWatcher != nil {
 				jsonlWatcher.Close()
 			}
-			LeaveAltScreen()
-			fmt.Printf(" %strupal stopped%s  %s%s%s\n", bold, reset, dim, session.Elapsed(), reset)
-			fmt.Println()
-
-			// Session recap: show all findings.
-			allFindings := findings.Recent(100)
-			active := 0
-			resolved := 0
-			for _, f := range allFindings {
-				if f.Status == "shown" {
-					active++
-				} else if f.Status == "resolved" {
-					resolved++
-				}
-			}
-			if len(allFindings) > 0 {
-				fmt.Printf(" %sfindings: %d active, %d resolved%s\n", dim, active, resolved, reset)
-				fmt.Println()
-				for _, f := range allFindings {
-					status := fmt.Sprintf("%s●%s", yellow, reset)
-					if f.Status == "resolved" {
-						status = fmt.Sprintf("%s✓%s", green, reset)
-					}
-					ts := f.Timestamp.Format("15:04")
-					fmt.Printf(" %s %s%s%s %s\n", status, dim, ts, reset, f.Nudge)
-				}
-			} else {
-				fmt.Printf(" %sno findings this session%s\n", dim, reset)
-			}
-
-			fmt.Printf("\n %slog: .trupal.log%s\n", dim, reset)
-			fmt.Printf(" %sdebug: .trupal.debug%s\n", dim, reset)
-			fmt.Printf("\n %spress ctrl+c to close pane%s\n", dim, reset)
+			LogStopped(session.Elapsed(), findings.Recent(100))
 			// Wait for second SIGINT to actually exit.
 			<-sigCh
 			return
@@ -564,8 +556,32 @@ func buildTrend(history []int, buildOK bool) string {
 	return ""
 }
 
-// stateHash returns a hash of the meaningful display state (excluding elapsed time).
-// Used to deduplicate log entries.
+// statusOnlyHash hashes files/build/CC status — excludes brain state.
+// Used to dedup status line logging.
+func statusOnlyHash(state DisplayState) uint64 {
+	h := fnv.New64a()
+	for _, f := range state.ChangedFiles {
+		h.Write([]byte(f))
+	}
+	for _, f := range state.UntrackedFiles {
+		h.Write([]byte(f))
+	}
+	if state.Build != nil {
+		if state.Build.OK {
+			h.Write([]byte("ok"))
+		} else {
+			fmt.Fprintf(h, "%d%s", state.Build.ErrorCount, state.Build.Trend)
+		}
+	}
+	h.Write([]byte(state.CCStatus))
+	for _, f := range state.DeletedTests {
+		h.Write([]byte(f))
+	}
+	return h.Sum64()
+}
+
+// stateHash returns a hash of the full display state (excluding elapsed time).
+// Used to deduplicate log file entries.
 func stateHash(state DisplayState) uint64 {
 	h := fnv.New64a()
 	for _, f := range state.ChangedFiles {
