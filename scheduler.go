@@ -52,6 +52,21 @@ func (s *Scheduler) Remove(id string) {
 	}
 }
 
+func (s *Scheduler) Pause(id string) {
+	t, ok := s.tasks[id]
+	if ok {
+		close(t.stop)
+	}
+}
+
+func (s *Scheduler) Resume(id string) {
+	t, ok := s.tasks[id]
+	if ok {
+		t.stop = make(chan struct{})
+		go s.run(t)
+	}
+}
+
 func (s *Scheduler) StopAll() {
 	for id, t := range s.tasks {
 		close(t.stop)
@@ -77,4 +92,18 @@ func (s *Scheduler) List() []string {
 func (s *Scheduler) IsRunning(id string) bool {
 	_, ok := s.tasks[id]
 	return ok
+}
+
+func (s *Scheduler) Reschedule(id string, interval time.Duration) {
+	t, ok := s.tasks[id]
+	if ok {
+		close(t.stop)
+		t.Interval = interval
+		t.stop = make(chan struct{})
+		go s.run(t)
+	}
+}
+
+func (s *Scheduler) Count() int {
+	return len(s.tasks)
 }

@@ -477,6 +477,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 			brainBusy = true
 			brainThinking = true
 			p.Send(brainStatusMsg{thinking: true})
+			p.Send(logLineMsg{line: sDim.Render("analyzing...")})
 			activeBrain := brain
 			findingsJSON := findings.ActiveJSON()
 
