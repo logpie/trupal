@@ -60,9 +60,19 @@ func getPaneWidth() int {
 	return n
 }
 
-// Render redraws the status frame in place (no scrollback pollution).
+// EnterAltScreen switches to the alternate screen buffer (no scrollback).
+func EnterAltScreen() {
+	fmt.Print("\033[?1049h")
+}
+
+// LeaveAltScreen switches back to the normal screen buffer.
+func LeaveAltScreen() {
+	fmt.Print("\033[?1049l")
+}
+
+// Render redraws the status frame in place on the alternate screen.
 func Render(state DisplayState) {
-	fmt.Print("\033[H\033[J")
+	fmt.Print("\033[H\033[2J")
 	w := getPaneWidth()
 	sep := strings.Repeat("─", w-2)
 

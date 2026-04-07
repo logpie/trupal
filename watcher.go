@@ -45,6 +45,9 @@ func runWatchLoop(projectDir string, cfg Config) {
 	fmt.Println("starting in 3s...")
 	time.Sleep(3 * time.Second)
 
+	// Switch to alternate screen — no scrollback pollution.
+	EnterAltScreen()
+
 	// Start JSONL watcher.
 	var jsonlWatcher *JSONLWatcher
 	if jsonlPath != "" {
@@ -435,7 +438,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			if jsonlWatcher != nil {
 				jsonlWatcher.Close()
 			}
-			fmt.Print("\033[2J\033[H")
+			LeaveAltScreen()
 			fmt.Printf(" %strupal stopped%s\n", bold, reset)
 			fmt.Printf(" %ssession: %s%s\n", dim, session.Elapsed(), reset)
 			nFindings := len(findings.Recent(100))

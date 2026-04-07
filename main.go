@@ -152,6 +152,7 @@ func cmdWatch(gitRoot string) {
 	// Recover from panics — show error in pane, wait for keypress.
 	defer func() {
 		if r := recover(); r != nil {
+			LeaveAltScreen()
 			fmt.Fprintf(os.Stderr, "\n\ntrupal crashed: %v\n", r)
 			fmt.Fprintf(os.Stderr, "check .trupal.debug for details\n")
 			fmt.Fprintf(os.Stderr, "press ctrl+c to close pane\n")
