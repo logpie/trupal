@@ -244,8 +244,8 @@ func (m model) maxScroll() int {
 }
 
 func (m model) logH() int {
-	// header(2) + sep(1) + log + sep(1) + footer(1) = 5 chrome lines
-	h := m.height - 5
+	// header(2) + sep(1) + log + sep(1) + footer(1) = 6 chrome lines (including newlines)
+	h := m.height - 6
 	if h < 1 {
 		return 1
 	}

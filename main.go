@@ -191,9 +191,15 @@ func cmdWatch(gitRoot string) {
 	// Start TUI + watcher.
 	p := tea.NewProgram(initialModel(filepath.Base(gitRoot)), tea.WithAltScreen())
 	go runWatchLoop(gitRoot, cfg, p)
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "tui error: %v\n", err)
-	}
+	p.Run() // ignore exit error — expected on SIGINT
+
+	// After TUI exits, show stop summary in normal terminal and block.
+	fmt.Printf("\n trupal stopped (%s)\n", cfg.String())
+	fmt.Printf(" log: .trupal.log  debug: .trupal.debug\n")
+	fmt.Printf(" press ctrl+c to close\n")
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	<-sig
 }
 
 func cmdLog() {

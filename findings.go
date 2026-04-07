@@ -62,6 +62,41 @@ func (fs *FindingStore) Count() (active, resolved int) {
 	return
 }
 
+func (fs *FindingStore) GetByID(id string) *BrainFinding {
+	for _, f := range fs.findings {
+		if f.ID == id {
+			return &f
+		}
+	}
+	return nil
+}
+
+func (fs *FindingStore) RemoveOlderThan(age time.Duration) int {
+	cutoff := time.Now().Add(-age)
+	removed := 0
+	var keep []BrainFinding
+	for _, f := range fs.findings {
+		if f.Timestamp.Before(cutoff) {
+			removed++
+		} else {
+			keep = append(keep, f)
+		}
+	}
+	fs.findings = keep
+	return removed
+}
+
+func (fs *FindingStore) Export() []byte {
+	data, _ := json.Marshal(fs.findings)
+	return data
+}
+
+func (fs *FindingStore) Import(data []byte) {
+	var imported []BrainFinding
+	json.Unmarshal(data, &imported)
+	fs.findings = append(fs.findings, imported...)
+}
+
 func (fs *FindingStore) Clear() {
 	fs.mu.Lock()
 	fs.findings = nil
