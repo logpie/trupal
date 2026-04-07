@@ -15,7 +15,7 @@ import (
 var (
 	sTitle = lipgloss.NewStyle().Bold(true)
 	sDim   = lipgloss.NewStyle().Faint(true)
-	sWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	sWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	sErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	sOk    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	sCyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
@@ -256,11 +256,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resolved++
 		// Short resolved message — don't repeat the full nudge text
-		short := msg.finding.Nudge
-		if len(short) > 40 {
-			short = short[:37] + "..."
-		}
-		m.logStyled(sOk.Render("✓"), sDim.Render("resolved: "+short), m.width, lipgloss.NewStyle())
+		short := truncateRunes(msg.finding.Nudge, 40)
+		m.logStyled(sOk.Render("✓"), "resolved: "+short, m.width, sDim)
 
 	case observationMsg:
 		m.logStyled(sCyan.Bold(true).Render("i"), msg.text, m.width, lipgloss.NewStyle())
@@ -731,6 +728,21 @@ func truncateWidth(text string, width int) string {
 		out.WriteRune(r)
 	}
 	return out.String() + "…"
+}
+
+func truncateRunes(text string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
 }
 
 func joinWidth(parts []string, sep string) int {
