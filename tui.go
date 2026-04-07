@@ -135,6 +135,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Button == tea.MouseButtonWheelDown && m.logRect().Contains(msg.X, msg.Y):
 			m.scroll(-3)
 		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
+			Debugf("[sel] press x=%d y=%d", msg.X, msg.Y)
 			point, ok := m.selectionPointAt(msg.X, msg.Y, false)
 			if !ok {
 				m.sel.Clear()
@@ -147,11 +148,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if !m.sel.Anchor.Valid() {
+				Debugf("[sel] motion-start x=%d y=%d line=%d col=%d", msg.X, msg.Y, point.Line, point.Col)
 				m.sel.PrepareDrag(point.Line, point.Col, m.logRect())
 			}
 			m.sel.HandleDrag(point.Line, point.Col)
-		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease,
-			msg.Button == tea.MouseButtonNone && msg.Action == tea.MouseActionRelease:
+		case msg.Action == tea.MouseActionRelease:
+			Debugf("[sel] release btn=%d anchor=%v active=%v", msg.Button, m.sel.Anchor.Valid(), m.sel.Active)
 			if m.sel.Anchor.Valid() {
 				if point, ok := m.selectionPointAt(msg.X, msg.Y, true); ok {
 					if m.sel.Active || point.Line != m.sel.Anchor.Line || point.Col != m.sel.Anchor.Col {
@@ -160,6 +162,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if m.sel.FinishDrag() {
 					text := m.sel.SelectedText(m.lines, selectionTabWidth)
+					Debugf("[sel] copied %d chars", len(text))
 					if text != "" {
 						return m, func() tea.Msg {
 							return SelectionCopiedMsg{
@@ -258,11 +261,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SelectionCopiedMsg:
 		if msg.Err != nil {
-			m.toastMsg = "copy failed"
+			m.toastMsg = "⚠ copy failed"
+			Debugf("[sel] copy failed: %v", msg.Err)
 		} else {
-			m.toastMsg = "copied to tmux buffer"
+			m.toastMsg = "✓ copied! paste with prefix+]"
+			Debugf("[sel] copied to tmux buffer: %d chars", len(msg.Text))
 		}
-		m.toastExpiry = time.Now().Add(2 * time.Second)
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+		m.sel.Clear()
 		return m, nil
 
 	case logLineMsg:
