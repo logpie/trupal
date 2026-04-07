@@ -439,10 +439,35 @@ func runWatchLoop(projectDir string, cfg Config) {
 				jsonlWatcher.Close()
 			}
 			LeaveAltScreen()
-			fmt.Printf(" %strupal stopped%s\n", bold, reset)
-			fmt.Printf(" %ssession: %s%s\n", dim, session.Elapsed(), reset)
-			nFindings := len(findings.Recent(100))
-			fmt.Printf(" %s%d findings this session%s\n", dim, nFindings, reset)
+			fmt.Printf(" %strupal stopped%s  %s%s%s\n", bold, reset, dim, session.Elapsed(), reset)
+			fmt.Println()
+
+			// Session recap: show all findings.
+			allFindings := findings.Recent(100)
+			active := 0
+			resolved := 0
+			for _, f := range allFindings {
+				if f.Status == "shown" {
+					active++
+				} else if f.Status == "resolved" {
+					resolved++
+				}
+			}
+			if len(allFindings) > 0 {
+				fmt.Printf(" %sfindings: %d active, %d resolved%s\n", dim, active, resolved, reset)
+				fmt.Println()
+				for _, f := range allFindings {
+					status := fmt.Sprintf("%s●%s", yellow, reset)
+					if f.Status == "resolved" {
+						status = fmt.Sprintf("%s✓%s", green, reset)
+					}
+					ts := f.Timestamp.Format("15:04")
+					fmt.Printf(" %s %s%s%s %s\n", status, dim, ts, reset, f.Nudge)
+				}
+			} else {
+				fmt.Printf(" %sno findings this session%s\n", dim, reset)
+			}
+
 			fmt.Printf("\n %slog: .trupal.log%s\n", dim, reset)
 			fmt.Printf(" %sdebug: .trupal.debug%s\n", dim, reset)
 			fmt.Printf("\n %spress ctrl+c to close pane%s\n", dim, reset)

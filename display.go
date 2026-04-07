@@ -117,19 +117,42 @@ func Render(state DisplayState) {
 	}
 
 	// ── Brain section ──
+	// Always show: active findings persist until resolved, plus brain's latest status.
+	activeFindings := 0
+	resolvedFindings := 0
+	for _, f := range state.BrainFindings {
+		if f.Status == "shown" {
+			activeFindings++
+		} else {
+			resolvedFindings++
+		}
+	}
+
 	hasBrainContent := len(state.BrainFindings) > 0 || state.BrainLastMsg != ""
 	if hasBrainContent {
 		fmt.Println()
 		fmt.Printf(" %s%s%s\n", dim, sep, reset)
 
-		// Show findings.
+		// Active findings first (yellow — needs attention).
 		for _, f := range state.BrainFindings {
-			renderFinding(f, w)
+			if f.Status == "shown" {
+				renderFinding(f, w)
+			}
 		}
 
-		// Show latest brain message if no findings.
-		if len(state.BrainFindings) == 0 && state.BrainLastMsg != "" {
-			lines := wordWrap(state.BrainLastMsg, w-2)
+		// Resolved findings (dimmed — addressed).
+		if resolvedFindings > 0 {
+			for _, f := range state.BrainFindings {
+				if f.Status == "resolved" {
+					renderFinding(f, w)
+				}
+			}
+		}
+
+		// Brain's latest assessment (dim, below findings).
+		if state.BrainLastMsg != "" {
+			fmt.Println()
+			lines := wordWrap("brain: "+state.BrainLastMsg, w-2)
 			for _, line := range lines {
 				fmt.Printf(" %s%s%s\n", dim, line, reset)
 			}
