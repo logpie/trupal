@@ -65,8 +65,8 @@ func WriteLog(logPath string, state DisplayState) {
 	fmt.Fprintf(f, "\n")
 }
 
-func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan struct{}) {
-	InitDebugLog(projectDir)
+func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cancelCh <-chan struct{}) {
+	InitDebugLog(repoRoot)
 	defer CloseDebugLog()
 
 	// Handle SIGINT for graceful shutdown.
@@ -74,9 +74,9 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
 
-	session := NewSession(projectDir)
+	session := NewSession(repoRoot)
 	findings := NewFindingStore()
-	logPath := filepath.Join(projectDir, ".trupal.log")
+	logPath := filepath.Join(repoRoot, ".trupal.log")
 	var lastLogHash uint64
 	var brainLastTime time.Time
 	brainStats := BrainStats{}
@@ -84,7 +84,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 	os.WriteFile(logPath, nil, 0644)
 
 	// Find CC's session JSONL.
-	jsonlPath := FindSessionJSONL(projectDir)
+	jsonlPath := FindSessionJSONL(sessionDir)
 	Debugf("[watcher] JSONL path: %q", jsonlPath)
 	if jsonlPath == "" {
 		p.Send(logLineMsg{line: "no CC session found — waiting..."})
@@ -116,7 +116,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 	seedSessionContext := func(path string) string {
 		entries := ReadRecentJSONLEntries(path, 40)
-		return absorbJSONLEntries(projectDir, entries, extraDirs, &recentEditedFiles, &recentSessionEntries)
+		return absorbJSONLEntries(repoRoot, entries, extraDirs, &recentEditedFiles, &recentSessionEntries)
 	}
 
 	initialSessionReason := ""
@@ -136,7 +136,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 	var brain *Brain
 	if jsonlPath != "" {
 		var err error
-		brain, err = StartBrain(cfg, projectDir, jsonlPath, brainStats, extraDirSlice()...)
+		brain, err = StartBrain(cfg, repoRoot, jsonlPath, brainStats, extraDirSlice()...)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not start brain: %v\n", err)
 		}
@@ -232,7 +232,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 				entries := jsonlWatcher.ReadNew()
 				Debugf("[watcher] JSONL event: %d new entries", len(entries))
-				reason := absorbJSONLEntries(projectDir, entries, extraDirs, &recentEditedFiles, &recentSessionEntries)
+				reason := absorbJSONLEntries(repoRoot, entries, extraDirs, &recentEditedFiles, &recentSessionEntries)
 				if reason != "" {
 					// Debounce: wait 2s for burst to settle.
 					if debounceTimer != nil {
@@ -257,10 +257,10 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 		}
 
 		// Git poll cycle.
-		changedFiles := gitDiffNameOnly(projectDir)
-		rawDiff := gitDiff(projectDir)
-		nameStatus := gitDiffNameStatus(projectDir)
-		untrackedFiles := gitUntrackedFiles(projectDir)
+		changedFiles := gitDiffNameOnly(repoRoot)
+		rawDiff := gitDiff(repoRoot)
+		nameStatus := gitDiffNameStatus(repoRoot)
+		untrackedFiles := gitUntrackedFiles(repoRoot)
 
 		fileDiffs := splitDiffByFile(rawDiff)
 		session.UpdateFileEdits(fileDiffs)
@@ -270,7 +270,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 		if cfg.BuildCmd != "" &&
 			(len(changedFiles) > 0 || len(untrackedFiles) > 0) &&
 			ShouldRunBuild(changedFiles, untrackedFiles, cfg.BuildExtensions) {
-			result := RunBuildCheck(projectDir, cfg.BuildCmd)
+			result := RunBuildCheck(repoRoot, cfg.BuildCmd)
 			session.AppendErrorCount(result.ErrorCount)
 
 			trend := buildTrend(session.ErrorHistory, result.OK)
@@ -379,7 +379,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 				restartDirs := extraDirSlice()
 				restartStats := brainStats
 				go func() {
-					newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, restartStats, 5*time.Second, restartDirs...)
+					newBrain, restartErr := RestartBrain(cfg, repoRoot, jsonlPath, restartStats, 5*time.Second, restartDirs...)
 					if restartErr != nil {
 						Debugf("[watcher] brain restart failed: %v", restartErr)
 						return
@@ -392,7 +392,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 		// Check for new CC session — invalidate the current brain on switch.
 		if jsonlPath != "" {
-			if newPath := CheckForNewSession(projectDir, jsonlPath); newPath != "" {
+			if newPath := CheckForNewSession(sessionDir, jsonlPath); newPath != "" {
 				Debugf("[watcher] session switch: %s -> %s", filepath.Base(jsonlPath), filepath.Base(newPath))
 				newWatcher, err := NewJSONLWatcher(newPath)
 				if err != nil {
@@ -428,7 +428,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			}
 		} else {
 			// No session yet — keep looking.
-			newPath := FindSessionJSONL(projectDir)
+			newPath := FindSessionJSONL(sessionDir)
 			if newPath != "" {
 				Debugf("[watcher] found CC session: %s", filepath.Base(newPath))
 				newWatcher, err := NewJSONLWatcher(newPath)
@@ -456,7 +456,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 		if brainStale && !brainBusy && !shuttingDown && jsonlPath != "" {
 			clearBrainState()
-			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, brainStats, extraDirSlice()...)
+			newBrain, err := StartBrain(cfg, repoRoot, jsonlPath, brainStats, extraDirSlice()...)
 			if err != nil {
 				Debugf("[watcher] failed to start brain for current session: %v", err)
 			} else {
@@ -467,7 +467,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 		if restartNeeded && !brainBusy && !brainStale && !shuttingDown && jsonlPath != "" && brain == nil && !time.Now().Before(restartAt) {
 			clearBrainState()
-			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, brainStats, extraDirSlice()...)
+			newBrain, err := StartBrain(cfg, repoRoot, jsonlPath, brainStats, extraDirSlice()...)
 			if err != nil {
 				Debugf("[watcher] brain restart failed: %v", err)
 				restartAt = time.Now().Add(5 * time.Second)
@@ -498,7 +498,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			triggerBrain = false
 		}
 		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
-			notification := buildBrainNotification(projectDir, triggerReason, recentSessionEntries, recentEditedFiles, nameStatus, rawDiff, untrackedFiles, buildDisplay)
+			notification := buildBrainNotification(repoRoot, triggerReason, recentSessionEntries, recentEditedFiles, nameStatus, rawDiff, untrackedFiles, buildDisplay)
 			Debugf("[watcher] triggering brain: %s", truncate(notification, 200))
 			brainBusy = true
 			brainThinking = true
@@ -518,7 +518,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 
 		// Build display state.
 		state := DisplayState{
-			ProjectDir:         shortenPath(projectDir),
+			ProjectDir:         shortenPath(repoRoot),
 			Elapsed:            session.Elapsed(),
 			ChangedFiles:       changedFiles,
 			UntrackedFiles:     untrackedFiles,
@@ -556,7 +556,7 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan
 			files:    changedFiles,
 			newFiles: untrackedFiles,
 			elapsed:  session.Elapsed(),
-			project:  filepath.Base(projectDir),
+			project:  filepath.Base(repoRoot),
 		})
 		// Log trajectory signals once.
 		for _, f := range trajectoryFindings {

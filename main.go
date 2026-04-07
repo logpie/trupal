@@ -27,11 +27,11 @@ func main() {
 		cmdLog()
 	case "watch":
 		// Internal: called inside the split pane. Not user-facing.
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "internal error: watch requires git root")
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "internal error: watch requires session dir and git root")
 			os.Exit(1)
 		}
-		cmdWatch(os.Args[2])
+		cmdWatch(os.Args[2], os.Args[3])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop|log> [project-dir]")
@@ -46,19 +46,7 @@ func cmdStart() {
 		os.Exit(1)
 	}
 
-	// Resolve project dir (cwd or first arg after "start")
-	projectDir, err := resolveProjectDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error resolving project dir: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Find git root
-	gitRoot, err := findGitRoot(projectDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	sessionDir, gitRoot := resolveStartTarget()
 
 	// Check if already running
 	pidFile := filepath.Join(gitRoot, ".trupal.pid")
@@ -75,7 +63,7 @@ func cmdStart() {
 	}
 
 	// Find CC's pane to split alongside it (match by project dir).
-	ccPane := findCCPane(gitRoot)
+	ccPane := findCCPane(sessionDir)
 
 	// Launch watch command in a new tmux split pane.
 	// Use "--" so tmux execs directly without shell (avoids word-splitting on paths with spaces).
@@ -83,7 +71,7 @@ func cmdStart() {
 	if ccPane != "" {
 		args = append(args, "-t", ccPane)
 	}
-	args = append(args, "--", self, "watch", gitRoot)
+	args = append(args, "--", self, "watch", sessionDir, gitRoot)
 	if err := exec.Command("tmux", args...).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error creating tmux pane: %v\n", err)
 		os.Exit(1)
@@ -150,7 +138,7 @@ func cmdStop() {
 	}
 }
 
-func cmdWatch(gitRoot string) {
+func cmdWatch(sessionDir, gitRoot string) {
 	// Recover from panics — show error in pane, wait for keypress.
 	defer func() {
 		if r := recover(); r != nil {
@@ -191,7 +179,7 @@ func cmdWatch(gitRoot string) {
 	// Start TUI + watcher.
 	p := tea.NewProgram(initialModel(filepath.Base(gitRoot)), ProgramOptions()...)
 	watchCancel := make(chan struct{})
-	go runWatchLoop(gitRoot, cfg, p, watchCancel)
+	go runWatchLoop(sessionDir, gitRoot, cfg, p, watchCancel)
 	p.Run() // ignore exit error — expected on SIGINT
 	close(watchCancel)
 
@@ -205,16 +193,7 @@ func cmdWatch(gitRoot string) {
 }
 
 func cmdLog() {
-	projectDir, err := resolveProjectDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error resolving project dir: %v\n", err)
-		os.Exit(1)
-	}
-	gitRoot, err := findGitRoot(projectDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	_, gitRoot := resolveStartTarget()
 	logPath := filepath.Join(gitRoot, ".trupal.log")
 	data, err := os.ReadFile(logPath)
 	if err != nil {
@@ -222,6 +201,22 @@ func cmdLog() {
 		os.Exit(1)
 	}
 	fmt.Print(string(data))
+}
+
+// resolveStartTarget returns the user's requested start dir plus the enclosing git root.
+func resolveStartTarget() (sessionDir, repoRoot string) {
+	var err error
+	sessionDir, err = resolveProjectDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving project dir: %v\n", err)
+		os.Exit(1)
+	}
+	repoRoot, err = findGitRoot(sessionDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	return sessionDir, repoRoot
 }
 
 // resolveProjectDir returns the project directory from args or cwd.

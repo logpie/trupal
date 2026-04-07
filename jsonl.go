@@ -48,42 +48,47 @@ func FindSessionJSONL(projectDir string) string {
 		return ""
 	}
 
-	// CC encodes project path: /home/user/work/project → -home-user-work-project
-	encoded := strings.ReplaceAll(projectDir, string(os.PathSeparator), "-")
-	if strings.HasPrefix(encoded, "-") {
-		// keep the leading dash
-	}
-
-	// Check both legacy and XDG paths.
-	candidates := []string{
-		filepath.Join(homeDir, ".claude", "projects", encoded),
-		filepath.Join(homeDir, ".config", "claude", "projects", encoded),
-	}
-
 	var bestFile string
 	var bestTime time.Time
 
-	for _, dir := range candidates {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
+	for _, targetDir := range sessionSearchDirs(projectDir) {
+		encoded := strings.ReplaceAll(targetDir, string(os.PathSeparator), "-")
+		candidates := []string{
+			filepath.Join(homeDir, ".claude", "projects", encoded),
+			filepath.Join(homeDir, ".config", "claude", "projects", encoded),
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-				continue
-			}
-			info, err := e.Info()
+
+		for _, dir := range candidates {
+			entries, err := os.ReadDir(dir)
 			if err != nil {
 				continue
 			}
-			if info.ModTime().After(bestTime) {
-				bestTime = info.ModTime()
-				bestFile = filepath.Join(dir, e.Name())
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+					continue
+				}
+				info, err := e.Info()
+				if err != nil {
+					continue
+				}
+				if info.ModTime().After(bestTime) {
+					bestTime = info.ModTime()
+					bestFile = filepath.Join(dir, e.Name())
+				}
 			}
 		}
 	}
 
 	return bestFile
+}
+
+func sessionSearchDirs(projectDir string) []string {
+	projectDir = filepath.Clean(projectDir)
+	dirs := []string{projectDir}
+	if gitRoot, err := findGitRoot(projectDir); err == nil && gitRoot != projectDir {
+		dirs = append(dirs, gitRoot)
+	}
+	return dirs
 }
 
 // NewJSONLWatcher creates a watcher for the given JSONL file.

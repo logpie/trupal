@@ -3,7 +3,9 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestClassifyEntryKeepsToolMetadataAligned(t *testing.T) {
@@ -59,5 +61,39 @@ func TestReadRecentJSONLEntriesSeedsExistingSessionContext(t *testing.T) {
 	}
 	if got := entries[1].TextSnip; got != "done" {
 		t.Fatalf("expected final assistant text snippet, got %q", got)
+	}
+}
+
+func TestFindSessionJSONLFallsBackToGitRootForSubdirStarts(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	repoRoot := filepath.Join(homeDir, "work", "project")
+	sessionDir := filepath.Join(repoRoot, "src")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(src) error = %v", err)
+	}
+
+	encodedRepoRoot := strings.ReplaceAll(repoRoot, string(os.PathSeparator), "-")
+	claudeDir := filepath.Join(homeDir, ".claude", "projects", encodedRepoRoot)
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(claudeDir) error = %v", err)
+	}
+
+	jsonlPath := filepath.Join(claudeDir, "root-session.jsonl")
+	if err := os.WriteFile(jsonlPath, []byte("{}\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(root session) error = %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(jsonlPath, now, now); err != nil {
+		t.Fatalf("Chtimes(root session) error = %v", err)
+	}
+
+	got := FindSessionJSONL(sessionDir)
+	if got != jsonlPath {
+		t.Fatalf("FindSessionJSONL(%q) = %q, want %q", sessionDir, got, jsonlPath)
 	}
 }
