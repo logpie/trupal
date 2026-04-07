@@ -18,7 +18,6 @@ const (
 	cyan   = "\033[36m"
 )
 
-// DisplayState holds all the information needed to render one frame.
 type DisplayState struct {
 	ProjectDir         string
 	Elapsed            string
@@ -34,69 +33,95 @@ type DisplayState struct {
 	CCStatus           string
 }
 
-// BuildDisplay carries build result info for rendering.
 type BuildDisplay struct {
 	OK         bool
 	ErrorCount int
 	Trend      string
 }
 
-// --- Chat log: append-only events ---
+// --- Simple chat log: print timestamped lines, nothing fancy ---
 
-// LogEvent prints a timestamped event.
-func LogEvent(format string, args ...interface{}) {
-	ts := time.Now().Format("15:04:05")
-	msg := fmt.Sprintf(format, args...)
-	fmt.Printf("%s%s%s %s\n", dim, ts, reset, msg)
+func ts() string {
+	return fmt.Sprintf("%s%s%s", dim, time.Now().Format("15:04"), reset)
 }
 
-// LogNudge prints a nudge — the main output of trupal.
+func LogHeader(projectDir string, cfg Config) {
+	fmt.Printf("\n %strupal%s %s— %s%s\n", bold, reset, dim, filepath.Base(projectDir), reset)
+	fmt.Printf(" %sbrain: %s/%s%s\n", dim, cfg.BrainProvider, cfg.BrainModel, reset)
+	fmt.Printf(" %s%s%s\n\n", dim, strings.Repeat("─", 40), reset)
+}
+
+func LogEvent(format string, args ...interface{}) {
+	fmt.Printf("%s %s\n", ts(), fmt.Sprintf(format, args...))
+}
+
 func LogNudge(f BrainFinding) {
-	ClearHeartbeat()
-	ts := f.Timestamp.Format("15:04:05")
 	icon := fmt.Sprintf("%s⚠%s", yellow, reset)
 	if f.Severity == "error" {
 		icon = fmt.Sprintf("%s✗%s", red, reset)
 	}
-	fmt.Printf("\n%s%s%s %s %s\n", dim, ts, reset, icon, f.Nudge)
+	fmt.Printf("\n%s %s %s\n", ts(), icon, f.Nudge)
 	if f.Reasoning != "" {
 		for _, line := range strings.Split(f.Reasoning, "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" {
-				fmt.Printf("         %s%s%s\n", dim, line, reset)
+				fmt.Printf("       %s%s%s\n", dim, line, reset)
 			}
 		}
 	}
 	fmt.Println()
 }
 
-// LogResolved prints when a finding is resolved.
 func LogResolved(f BrainFinding) {
-	ts := time.Now().Format("15:04:05")
-	fmt.Printf("%s%s%s %s✓ resolved:%s %s%s%s\n", dim, ts, reset, green, reset, dim, f.Nudge, reset)
+	fmt.Printf("%s %s✓%s %s%s%s\n", ts(), green, reset, dim, f.Nudge, reset)
 }
 
-// LogStatus prints a compact status line when files/build change.
-func LogStatus(state DisplayState) {
-	ClearHeartbeat()
-	parts := []string{fmt.Sprintf("%s%s%s", dim, filepath.Base(state.ProjectDir), reset)}
-	switch state.CCStatus {
-	case "active":
-		parts = append(parts, fmt.Sprintf("%s●%s cc", green, reset))
-	case "thinking":
-		parts = append(parts, fmt.Sprintf("%s●%s cc:thinking", yellow, reset))
-	default:
-		parts = append(parts, fmt.Sprintf("%s○%s cc", dim, reset))
+func LogTrajectory(f Finding) {
+	fmt.Printf("%s %s▸%s %s\n", ts(), yellow, reset, f.Message)
+}
+
+func LogStopped(elapsed string, findings []BrainFinding) {
+	fmt.Printf("\n %strupal stopped%s %s(%s)%s\n", bold, reset, dim, elapsed, reset)
+	active, resolved := 0, 0
+	for _, f := range findings {
+		if f.Status == "shown" {
+			active++
+		} else if f.Status == "resolved" {
+			resolved++
+		}
 	}
+	if len(findings) > 0 {
+		fmt.Printf(" %s%d findings (%d active, %d resolved)%s\n", dim, len(findings), active, resolved, reset)
+		for _, f := range findings {
+			icon := fmt.Sprintf("%s●%s", yellow, reset)
+			if f.Status == "resolved" {
+				icon = fmt.Sprintf("%s✓%s", green, reset)
+			}
+			fmt.Printf(" %s %s\n", icon, f.Nudge)
+		}
+	} else {
+		fmt.Printf(" %sno findings%s\n", dim, reset)
+	}
+	fmt.Printf(" %slog: .trupal.log%s\n", dim, reset)
+	fmt.Printf(" %spress ctrl+c to close%s\n", dim, reset)
+}
+
+// Heartbeat and ClearHeartbeat are no-ops — we only print when something happens.
+func Heartbeat(ccStatus string, brainThinking bool, brainLastTime time.Time, elapsed string) {}
+func ClearHeartbeat() {}
+
+// LogStatus prints when files/build change.
+func LogStatus(state DisplayState) {
+	parts := []string{filepath.Base(state.ProjectDir)}
 	if state.Build != nil {
 		if state.Build.OK {
-			parts = append(parts, fmt.Sprintf("%s✓%s build", green, reset))
+			parts = append(parts, fmt.Sprintf("%s✓%s", green, reset))
 		} else {
-			label := fmt.Sprintf("%d err", state.Build.ErrorCount)
+			label := fmt.Sprintf("%s✗ %d err%s", red, state.Build.ErrorCount, reset)
 			if state.Build.Trend != "" {
 				label += " (" + state.Build.Trend + ")"
 			}
-			parts = append(parts, fmt.Sprintf("%s✗%s %s", red, reset, label))
+			parts = append(parts, label)
 		}
 	}
 	nMod := len(state.ChangedFiles)
@@ -109,93 +134,7 @@ func LogStatus(state DisplayState) {
 		names := baseNames(state.UntrackedFiles, 2)
 		parts = append(parts, fmt.Sprintf("%d new: %s", nNew, strings.Join(names, " ")))
 	}
-	ts := time.Now().Format("15:04:05")
-	fmt.Printf("%s%s%s %s\n", dim, ts, reset, strings.Join(parts, "  "))
-}
-
-// LogTrajectory prints a trajectory warning.
-func LogTrajectory(f Finding) {
-	ClearHeartbeat()
-	ts := time.Now().Format("15:04:05")
-	fmt.Printf("%s%s%s %s▸%s %s\n", dim, ts, reset, yellow, reset, f.Message)
-}
-
-// --- Heartbeat: single line that overwrites in place ---
-
-// Heartbeat overwrites the last line with live status.
-// Uses \r to return to line start + \033[K to clear the line.
-// lastHeartbeat tracks when the last heartbeat was printed.
-var lastHeartbeat time.Time
-
-// Heartbeat prints a periodic pulse line (every 30s) showing trupal is alive.
-func Heartbeat(ccStatus string, brainThinking bool, brainLastTime time.Time, elapsed string) {
-	if time.Since(lastHeartbeat) < 30*time.Second {
-		return
-	}
-	lastHeartbeat = time.Now()
-
-	ts := time.Now().Format("15:04:05")
-	parts := []string{}
-	switch ccStatus {
-	case "active", "thinking":
-		parts = append(parts, fmt.Sprintf("%s●%s cc", green, reset))
-	default:
-		parts = append(parts, fmt.Sprintf("%s○%s cc", dim, reset))
-	}
-	if brainThinking {
-		parts = append(parts, fmt.Sprintf("%s◌%s analyzing", cyan, reset))
-	} else if !brainLastTime.IsZero() {
-		ago := int(time.Since(brainLastTime).Seconds())
-		if ago < 60 {
-			parts = append(parts, fmt.Sprintf("brain %ds ago", ago))
-		} else {
-			parts = append(parts, fmt.Sprintf("brain %dm ago", ago/60))
-		}
-	}
-	fmt.Printf("%s%s %s [%s]%s\n", dim, ts, strings.Join(parts, "  "), elapsed, reset)
-}
-
-// ClearHeartbeat is a no-op now — heartbeat is just a periodic log line.
-func ClearHeartbeat() {}
-
-// --- Header and footer ---
-
-func LogHeader(projectDir string, cfg Config) {
-	fmt.Printf("\n %strupal%s %s— %s%s\n", bold, reset, dim, filepath.Base(projectDir), reset)
-	if cfg.BuildCmd != "" {
-		fmt.Printf(" %sbuild: %s%s\n", dim, cfg.BuildCmd, reset)
-	}
-	fmt.Printf(" %sbrain: %s/%s (effort: %s)%s\n", dim, cfg.BrainProvider, cfg.BrainModel, cfg.BrainEffort, reset)
-	fmt.Printf(" %s%s%s\n\n", dim, strings.Repeat("─", 50), reset)
-}
-
-func LogStopped(elapsed string, findings []BrainFinding) {
-	fmt.Println()
-	fmt.Printf(" %strupal stopped%s  %s%s%s\n", bold, reset, dim, elapsed, reset)
-	active := 0
-	resolved := 0
-	for _, f := range findings {
-		if f.Status == "shown" {
-			active++
-		} else if f.Status == "resolved" {
-			resolved++
-		}
-	}
-	if len(findings) > 0 {
-		fmt.Printf(" %sfindings: %d active, %d resolved%s\n", dim, active, resolved, reset)
-		for _, f := range findings {
-			icon := fmt.Sprintf("%s●%s", yellow, reset)
-			if f.Status == "resolved" {
-				icon = fmt.Sprintf("%s✓%s", green, reset)
-			}
-			ts := f.Timestamp.Format("15:04")
-			fmt.Printf(" %s %s%s%s %s\n", icon, dim, ts, reset, f.Nudge)
-		}
-	} else {
-		fmt.Printf(" %sno findings this session%s\n", dim, reset)
-	}
-	fmt.Printf("\n %slog: .trupal.log  debug: .trupal.debug%s\n", dim, reset)
-	fmt.Printf(" %spress ctrl+c to close pane%s\n", dim, reset)
+	fmt.Printf("%s %s%s%s\n", ts(), dim, strings.Join(parts, "  "), reset)
 }
 
 func baseNames(files []string, max int) []string {
@@ -210,18 +149,17 @@ func baseNames(files []string, max int) []string {
 	return result
 }
 
-// WriteLog appends to the log file.
 func WriteLog(logPath string, state DisplayState) {
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	ts := time.Now().Format("15:04:05")
-	fmt.Fprintf(f, "%s cc:%s", ts, state.CCStatus)
+	t := time.Now().Format("15:04:05")
+	fmt.Fprintf(f, "%s cc:%s", t, state.CCStatus)
 	if state.Build != nil {
 		if state.Build.OK {
-			fmt.Fprintf(f, " build:clean")
+			fmt.Fprintf(f, " build:ok")
 		} else {
 			fmt.Fprintf(f, " build:%d-err", state.Build.ErrorCount)
 		}
