@@ -78,7 +78,10 @@ func initialModel(project string) model {
 	}
 }
 
-func (m model) Init() tea.Cmd { return tickEvery() }
+func (m model) Init() tea.Cmd {
+	// Mouse wheel scrolling. Hold Shift to select text.
+	return tea.Batch(tickEvery(), tea.EnableMouseCellMotion)
+}
 
 func tickEvery() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -111,6 +114,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "G", "end":
 			m.scrollOffset = 0
 		}
+
+	case tea.MouseMsg:
+		if msg.Button == tea.MouseButtonWheelUp {
+			m.scroll(3)
+		} else if msg.Button == tea.MouseButtonWheelDown {
+			m.scroll(-3)
+		}
+		return m, nil
 
 	case tickMsg:
 		return m, tickEvery()
