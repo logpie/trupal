@@ -194,6 +194,10 @@ func cmdWatch(gitRoot string) {
 
 	// Load config and run watch loop
 	cfg := loadConfig(gitRoot)
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	runWatchLoop(gitRoot, cfg)
 }
 
@@ -259,4 +263,3 @@ func getTmuxPaneID() (string, error) {
 	}
 	return paneID, nil
 }
-

@@ -45,6 +45,7 @@ ACTIVE FINDINGS (unresolved):
 %s
 
 IMPORTANT — you are a STREAMING monitor. You will receive multiple notifications over time. You have memory of previous turns. Be INCREMENTAL:
+- Each notification includes the latest ACTIVE FINDINGS. Treat the notify message as the source of truth.
 - Do NOT re-read the entire JSONL every turn. You remember what you saw before.
 - Only read the TAIL of the JSONL (last ~50 lines) to see what's NEW since your last check.
 - Only use tools when you need to verify something specific — don't investigate everything.
@@ -70,9 +71,29 @@ Rules:
 - If nothing important, say so in 5 words and move on.`, jsonlPath, projectDir, findingsJSON)
 }
 
+func brainCommand(provider string) (string, error) {
+	switch provider {
+	case "", "claude":
+		return "claude", nil
+	default:
+		return "", fmt.Errorf("unsupported brain_provider %q (supported: claude)", provider)
+	}
+}
+
+func brainNotifyMessage(reason, findingsJSON string) string {
+	if findingsJSON == "" {
+		findingsJSON = "[]"
+	}
+	return fmt.Sprintf("NOTIFICATION: %s\n\nACTIVE FINDINGS (unresolved):\n%s", reason, findingsJSON)
+}
+
 // StartBrain spawns the CC subprocess.
 func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain, error) {
 	prompt := brainSystemPrompt(projectDir, jsonlPath, findingsJSON)
+	command, err := brainCommand(cfg.BrainProvider)
+	if err != nil {
+		return nil, err
+	}
 
 	args := []string{
 		"-p",
@@ -87,7 +108,7 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain,
 		"--allowed-tools", "Read,Bash,Grep,Glob",
 	}
 
-	cmd := exec.Command("claude", args...)
+	cmd := exec.Command(command, args...)
 	cmd.Dir = projectDir
 
 	stdin, err := cmd.StdinPipe()
@@ -123,11 +144,12 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain,
 
 // Notify sends a message to the brain and blocks until the brain responds.
 // Safe to call from a single goroutine. Stop() can interrupt it by closing stdin.
-func (b *Brain) Notify(message string) (*BrainResponse, error) {
+func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	if b.stopped.Load() {
 		return nil, fmt.Errorf("brain stopped")
 	}
 
+	message := brainNotifyMessage(reason, findingsJSON)
 	Debugf("[brain] notify: %s", truncate(message, 200))
 	start := time.Now()
 	msg := fmt.Sprintf(`{"type":"user","message":{"role":"user","content":%s}}`, jsonString(message))

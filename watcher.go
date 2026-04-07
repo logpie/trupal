@@ -70,11 +70,21 @@ func runWatchLoop(projectDir string, cfg Config) {
 
 	// Brain state — brainResultCh receives results from the brain goroutine.
 	// brainErrCh receives errors. Main loop is sole owner of brain lifecycle.
-	brainResultCh := make(chan *BrainResponse, 1)
-	brainErrCh := make(chan error, 1)
+	type brainResult struct {
+		brain *Brain
+		resp  *BrainResponse
+	}
+	type brainErr struct {
+		brain *Brain
+		err   error
+	}
+	brainResultCh := make(chan brainResult, 1)
+	brainErrCh := make(chan brainErr, 1)
 	brainBusy := false
+	brainStale := false
 	brainThinking := false
 	brainLastMsg := ""
+	pendingTrigger := ""
 	shuttingDown := false
 	interval := time.Duration(cfg.PollInterval) * time.Second
 
@@ -86,17 +96,42 @@ func runWatchLoop(projectDir string, cfg Config) {
 	lastJSONLActivity := time.Now()
 	idleNotified := false
 
+	mergeTriggerReason := func(current, next string) string {
+		switch {
+		case next == "":
+			return current
+		case current == "":
+			return next
+		case strings.Contains(current, next):
+			return current
+		default:
+			return current + " | " + next
+		}
+	}
+
 	for {
 		triggerBrain := false
 		triggerReason := ""
+		queueTrigger := func(reason string) {
+			if reason == "" {
+				return
+			}
+			if brainBusy {
+				pendingTrigger = mergeTriggerReason(pendingTrigger, reason)
+				return
+			}
+			if !triggerBrain {
+				triggerBrain = true
+				triggerReason = reason
+				return
+			}
+			triggerReason = mergeTriggerReason(triggerReason, reason)
+		}
 
 		// Drain any pending debounce signal.
 		select {
 		case reason := <-debounceCh:
-			if !brainBusy {
-				triggerBrain = true
-				triggerReason = reason
-			}
+			queueTrigger(reason)
 		default:
 		}
 
@@ -124,7 +159,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 					}
 				}
 
-				if significant && !brainBusy {
+				if significant {
 					reason := "CC session updated"
 					if len(summary) > 0 {
 						reason = strings.Join(summary, "; ")
@@ -147,10 +182,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 
 		// Check for idle (60s since last JSONL activity).
 		if jsonlWatcher != nil && !idleNotified && time.Since(lastJSONLActivity) > 60*time.Second {
-			if !brainBusy {
-				triggerBrain = true
-				triggerReason = "CC has been idle for 60s — good time for a session review"
-			}
+			queueTrigger("CC has been idle for 60s — good time for a session review")
 			idleNotified = true
 		}
 
@@ -165,7 +197,9 @@ func runWatchLoop(projectDir string, cfg Config) {
 
 		// Build check.
 		var buildDisplay *BuildDisplay
-		if cfg.BuildCmd != "" && len(changedFiles) > 0 && ShouldRunBuild(changedFiles, cfg.BuildExtensions) {
+		if cfg.BuildCmd != "" &&
+			(len(changedFiles) > 0 || len(untrackedFiles) > 0) &&
+			ShouldRunBuild(changedFiles, untrackedFiles, cfg.BuildExtensions) {
 			result := RunBuildCheck(projectDir, cfg.BuildCmd)
 			session.AppendErrorCount(result.ErrorCount)
 
@@ -177,12 +211,11 @@ func runWatchLoop(projectDir string, cfg Config) {
 			}
 
 			// Build status changed → trigger brain.
-			if !brainBusy && len(session.ErrorHistory) >= 2 {
+			if len(session.ErrorHistory) >= 2 {
 				prev := session.ErrorHistory[len(session.ErrorHistory)-2]
 				curr := result.ErrorCount
 				if (prev == 0 && curr > 0) || (prev > 0 && curr == 0) {
-					triggerBrain = true
-					triggerReason = fmt.Sprintf("build status changed: %d → %d errors", prev, curr)
+					queueTrigger(fmt.Sprintf("build status changed: %d → %d errors", prev, curr))
 				}
 			}
 		}
@@ -191,9 +224,8 @@ func runWatchLoop(projectDir string, cfg Config) {
 		trajectoryFindings := session.EvalTrajectory()
 
 		// Trajectory signal → trigger brain.
-		if !brainBusy && len(trajectoryFindings) > 0 && !triggerBrain {
-			triggerBrain = true
-			triggerReason = "trajectory signal: " + trajectoryFindings[0].Message
+		if len(trajectoryFindings) > 0 {
+			queueTrigger("trajectory signal: " + trajectoryFindings[0].Message)
 		}
 
 		// CC status.
@@ -204,25 +236,40 @@ func runWatchLoop(projectDir string, cfg Config) {
 
 		// Drain brain results (non-blocking).
 		select {
-		case resp := <-brainResultCh:
+		case result := <-brainResultCh:
 			brainBusy = false
 			brainThinking = false
-			if resp != nil {
-				brainLastMsg = resp.Reasoning
-				for _, nudge := range resp.Nudges {
-					findings.Add(nudge.Severity, nudge.Message, resp.Reasoning)
+			if brainStale {
+				break
+			}
+			if result.brain != brain {
+				Debugf("[watcher] ignoring brain result from stale instance")
+				break
+			}
+			if result.resp != nil {
+				brainLastMsg = result.resp.Reasoning
+				for _, nudge := range result.resp.Nudges {
+					findings.Add(nudge.Severity, nudge.Message, result.resp.Reasoning)
 				}
-				if len(resp.ResolvedFindings) > 0 {
-					findings.Resolve(resp.ResolvedFindings)
+				if len(result.resp.ResolvedFindings) > 0 {
+					findings.Resolve(result.resp.ResolvedFindings)
 				}
 			}
-		case err := <-brainErrCh:
+		case result := <-brainErrCh:
 			brainBusy = false
 			brainThinking = false
-			Debugf("[watcher] brain error: %v", err)
+			if brainStale {
+				break
+			}
+			if result.brain != brain {
+				Debugf("[watcher] ignoring brain error from stale instance: %v", result.err)
+				break
+			}
+			Debugf("[watcher] brain error: %v", result.err)
 			// Restart brain unless shutting down.
 			if !shuttingDown && brain != nil {
 				brain.Stop()
+				brain = nil
 				newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second)
 				if restartErr != nil {
 					Debugf("[watcher] brain restart failed: %v", restartErr)
@@ -233,23 +280,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 		default:
 		}
 
-		// Trigger brain analysis if needed.
-		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
-			Debugf("[watcher] triggering brain: %s", triggerReason)
-			brainBusy = true
-			brainThinking = true
-
-			go func(reason string) {
-				resp, err := brain.Notify(reason)
-				if err != nil {
-					brainErrCh <- err
-					return
-				}
-				brainResultCh <- resp
-			}(triggerReason)
-		}
-
-		// Check for new CC session — restart brain + watcher on switch.
+		// Check for new CC session — invalidate the current brain on switch.
 		if jsonlPath != "" {
 			if newPath := CheckForNewSession(projectDir, jsonlPath); newPath != "" {
 				Debugf("[watcher] session switch: %s -> %s", filepath.Base(jsonlPath), filepath.Base(newPath))
@@ -257,19 +288,23 @@ func runWatchLoop(projectDir string, cfg Config) {
 				if err != nil {
 					Debugf("[watcher] failed to watch new session: %v", err)
 				} else {
-					jsonlPath = newPath
 					if jsonlWatcher != nil {
 						jsonlWatcher.Close()
 					}
+					if triggerBrain {
+						pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
+						triggerBrain = false
+						triggerReason = ""
+					}
+					jsonlPath = newPath
 					jsonlWatcher = newWatcher
-					if brain != nil && !brainBusy {
+					lastJSONLActivity = time.Now()
+					idleNotified = false
+					pendingTrigger = mergeTriggerReason(pendingTrigger, "CC session switched")
+					brainStale = true
+					if brain != nil {
 						brain.Stop()
-						newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
-						if err != nil {
-							Debugf("[watcher] failed to restart brain: %v", err)
-						} else {
-							brain = newBrain
-						}
+						brain = nil
 					}
 				}
 			}
@@ -284,14 +319,55 @@ func runWatchLoop(projectDir string, cfg Config) {
 				} else {
 					jsonlPath = newPath
 					jsonlWatcher = newWatcher
-					newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
-					if err != nil {
-						Debugf("[watcher] failed to start brain: %v", err)
-					} else {
-						brain = newBrain
+					if triggerBrain {
+						pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
+						triggerBrain = false
+						triggerReason = ""
 					}
+					pendingTrigger = mergeTriggerReason(pendingTrigger, "CC session switched")
+					brainStale = true
 				}
 			}
+		}
+
+		if brainStale && !brainBusy && !shuttingDown && jsonlPath != "" {
+			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+			if err != nil {
+				Debugf("[watcher] failed to start brain for current session: %v", err)
+			} else {
+				brain = newBrain
+				brainStale = false
+			}
+		}
+
+		if !brainBusy && pendingTrigger != "" && !triggerBrain {
+			triggerBrain = true
+			triggerReason = pendingTrigger
+			pendingTrigger = ""
+		}
+
+		if triggerBrain && brain == nil && !shuttingDown {
+			pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
+			triggerBrain = false
+			triggerReason = ""
+		}
+
+		// Trigger brain analysis if needed.
+		if triggerBrain && brain != nil && !brainBusy && !shuttingDown {
+			Debugf("[watcher] triggering brain: %s", triggerReason)
+			brainBusy = true
+			brainThinking = true
+			activeBrain := brain
+			findingsJSON := findings.ActiveJSON()
+
+			go func(brain *Brain, reason, findingsJSON string) {
+				resp, err := brain.Notify(reason, findingsJSON)
+				if err != nil {
+					brainErrCh <- brainErr{brain: brain, err: err}
+					return
+				}
+				brainResultCh <- brainResult{brain: brain, resp: resp}
+			}(activeBrain, triggerReason, findingsJSON)
 		}
 
 		// Build display state.
@@ -465,8 +541,13 @@ func stateHash(state DisplayState) uint64 {
 // gitDiffNameOnly returns the list of changed files relative to HEAD using
 // "git diff --name-only HEAD".
 func gitDiffNameOnly(projectDir string) []string {
-	out := runGit(projectDir, "diff", "--name-only", "HEAD")
-	if out == "" {
+	out, err := runGit(projectDir, "diff", "--name-only", "HEAD")
+	if isUnbornHeadError(err) {
+		Debugf("[watcher] git diff --name-only HEAD: unborn HEAD, retrying with --cached")
+		out, err = runGit(projectDir, "diff", "--name-only", "--cached")
+	}
+	if err != nil {
+		Debugf("[watcher] git diff --name-only failed: %v", err)
 		return nil
 	}
 	var files []string
@@ -481,8 +562,9 @@ func gitDiffNameOnly(projectDir string) []string {
 
 // gitUntrackedFiles returns untracked files (not in .gitignore), excluding trupal's own files.
 func gitUntrackedFiles(projectDir string) []string {
-	out := runGit(projectDir, "ls-files", "--others", "--exclude-standard")
-	if out == "" {
+	out, err := runGit(projectDir, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		Debugf("[watcher] git ls-files --others failed: %v", err)
 		return nil
 	}
 	var files []string
@@ -498,24 +580,55 @@ func gitUntrackedFiles(projectDir string) []string {
 
 // gitDiffNameStatus returns the output of "git diff --name-status HEAD".
 func gitDiffNameStatus(projectDir string) string {
-	return runGit(projectDir, "diff", "--name-status", "HEAD")
+	out, err := runGit(projectDir, "diff", "--name-status", "HEAD")
+	if isUnbornHeadError(err) {
+		Debugf("[watcher] git diff --name-status HEAD: unborn HEAD, retrying with --cached")
+		out, err = runGit(projectDir, "diff", "--name-status", "--cached")
+	}
+	if err != nil {
+		Debugf("[watcher] git diff --name-status failed: %v", err)
+		return ""
+	}
+	return out
 }
 
 // gitDiff returns the full unified diff output of "git diff HEAD".
 func gitDiff(projectDir string) string {
-	return runGit(projectDir, "diff", "HEAD")
+	out, err := runGit(projectDir, "diff", "HEAD")
+	if isUnbornHeadError(err) {
+		Debugf("[watcher] git diff HEAD: unborn HEAD, retrying with --cached")
+		out, err = runGit(projectDir, "diff", "--cached")
+	}
+	if err != nil {
+		Debugf("[watcher] git diff failed: %v", err)
+		return ""
+	}
+	return out
+}
+
+func isUnbornHeadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "bad revision 'HEAD'") ||
+		strings.Contains(msg, "ambiguous argument 'HEAD'") ||
+		strings.Contains(msg, "unknown revision or path not in the working tree")
 }
 
 // runGit executes a git command in projectDir and returns its combined output.
-// On error, an empty string is returned silently.
-func runGit(projectDir string, args ...string) string {
+func runGit(projectDir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = projectDir
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return ""
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
 	}
-	return string(out)
+	return string(out), nil
 }
 
 // shortenPath replaces the user's home directory prefix with "~".

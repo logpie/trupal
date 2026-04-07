@@ -49,15 +49,17 @@ func RunBuildCheck(projectDir string, buildCmd string) BuildResult {
 	return BuildResult{OK: false, ErrorCount: errorCount, Output: combined}
 }
 
-// ShouldRunBuild checks if any changed file matches the configured build extensions.
-func ShouldRunBuild(changedFiles []string, extensions []string) bool {
+// ShouldRunBuild checks if any changed or untracked file matches the configured build extensions.
+func ShouldRunBuild(changedFiles, untrackedFiles []string, extensions []string) bool {
 	if len(extensions) == 0 {
 		return true
 	}
-	for _, f := range changedFiles {
-		for _, ext := range extensions {
-			if strings.HasSuffix(f, ext) {
-				return true
+	for _, files := range [][]string{changedFiles, untrackedFiles} {
+		for _, f := range files {
+			for _, ext := range extensions {
+				if strings.HasSuffix(f, ext) {
+					return true
+				}
 			}
 		}
 	}

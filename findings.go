@@ -11,7 +11,7 @@ import (
 type BrainFinding struct {
 	ID        string    `json:"id"`
 	Timestamp time.Time `json:"timestamp"`
-	Severity  string    `json:"severity"`  // "warn" or "error"
+	Severity  string    `json:"severity"` // "warn" or "error"
 	Nudge     string    `json:"nudge"`
 	Reasoning string    `json:"reasoning"`
 	Status    string    `json:"status"` // "new" / "shown" / "resolved" / "waived"
@@ -80,8 +80,9 @@ func (fs *FindingStore) Active() []BrainFinding {
 
 // activeJSON is the internal (unlocked) version used by ActiveJSON.
 type activeJSONEntry struct {
-	ID    string `json:"id"`
-	Nudge string `json:"nudge"`
+	ID       string `json:"id"`
+	Severity string `json:"severity"`
+	Nudge    string `json:"nudge"`
 }
 
 // ActiveJSON returns active findings as a compact JSON array of {id, nudge} objects
@@ -93,7 +94,11 @@ func (fs *FindingStore) ActiveJSON() string {
 	var entries []activeJSONEntry
 	for _, f := range fs.findings {
 		if f.Status == "shown" {
-			entries = append(entries, activeJSONEntry{ID: f.ID, Nudge: f.Nudge})
+			entries = append(entries, activeJSONEntry{
+				ID:       f.ID,
+				Severity: f.Severity,
+				Nudge:    f.Nudge,
+			})
 		}
 	}
 	if len(entries) == 0 {

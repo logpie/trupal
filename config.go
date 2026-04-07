@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,7 +14,7 @@ type Config struct {
 	BuildCmd        string
 	BuildExtensions []string
 	PollInterval    int
-	BrainProvider   string // "claude" or "codex"
+	BrainProvider   string // currently only "claude"
 	BrainModel      string // e.g. "sonnet", "opus", "haiku"
 	BrainEffort     string // "low", "medium", "high", "max"
 }
@@ -63,7 +64,7 @@ func loadConfig(projectDir string) Config {
 				cfg.PollInterval = n
 			}
 		case "brain_provider":
-			cfg.BrainProvider = value
+			cfg.BrainProvider = strings.ToLower(strings.TrimSpace(value))
 		case "brain_model":
 			cfg.BrainModel = value
 		case "brain_effort":
@@ -72,6 +73,21 @@ func loadConfig(projectDir string) Config {
 	}
 
 	return cfg
+}
+
+// Validate normalizes and validates config values that must match runtime support.
+func (cfg *Config) Validate() error {
+	cfg.BrainProvider = strings.ToLower(strings.TrimSpace(cfg.BrainProvider))
+	if cfg.BrainProvider == "" {
+		cfg.BrainProvider = DefaultConfig().BrainProvider
+	}
+
+	switch cfg.BrainProvider {
+	case "claude":
+		return nil
+	default:
+		return fmt.Errorf("unsupported brain_provider %q (supported: claude)", cfg.BrainProvider)
+	}
 }
 
 // parseTomlLine splits a line on the first '=' and returns the trimmed key and
