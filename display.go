@@ -124,22 +124,25 @@ func LogTrajectory(f Finding) {
 func Heartbeat(ccStatus string, brainThinking bool, brainLastTime time.Time, elapsed string) {
 	ts := time.Now().Format("15:04:05")
 
-	cc := fmt.Sprintf("%s○%s", dim, reset)
-	if ccStatus == "active" || ccStatus == "thinking" {
-		cc = fmt.Sprintf("%s●%s", green, reset)
+	parts := []string{}
+
+	// CC status
+	switch ccStatus {
+	case "active", "thinking":
+		parts = append(parts, fmt.Sprintf("%s● cc%s", green, reset))
+	default:
+		parts = append(parts, fmt.Sprintf("%s○ cc%s", dim, reset))
 	}
 
-	brain := ""
+	// Brain status
 	if brainThinking {
-		brain = fmt.Sprintf(" %s◌ brain%s", cyan, reset)
+		parts = append(parts, fmt.Sprintf("%s◌ analyzing%s", cyan, reset))
 	} else if !brainLastTime.IsZero() {
 		ago := time.Since(brainLastTime).Truncate(time.Second)
-		if ago < 60*time.Second {
-			brain = fmt.Sprintf(" %sbrain:%s ago%s", dim, ago, reset)
-		}
+		parts = append(parts, fmt.Sprintf("%s✓ %s ago%s", dim, ago, reset))
 	}
 
-	fmt.Printf("\r\033[K%s%s%s %s%s %s[%s]%s", dim, ts, reset, cc, brain, dim, elapsed, reset)
+	fmt.Printf("\r\033[K%s%s%s %s %s[%s]%s", dim, ts, reset, strings.Join(parts, "  "), dim, elapsed, reset)
 }
 
 // --- Header and footer ---
