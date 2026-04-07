@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"unicode"
 )
@@ -126,22 +125,4 @@ func MustValidateConfig(cfg Config) {
 	if len(errs) > 0 {
 		panic(strings.Join(errs, "; "))
 	}
-}
-
-var configCache Config
-var configLoaded bool
-
-func GetOrLoadConfig(path string) Config {
-	if configLoaded {
-		return configCache
-	}
-	data, _ := os.ReadFile(path)
-	json.Unmarshal(data, &configCache)
-	configLoaded = true
-	return configCache
-}
-
-func ResetConfigCache() {
-	configCache = Config{}
-	configLoaded = false
 }

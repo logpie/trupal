@@ -225,7 +225,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.project != "" {
 			m.project = msg.project
 		}
-		if msg.buildOK != nil {
+		if msg.buildOK == nil {
+			m.buildState = ""
+		} else {
 			if *msg.buildOK {
 				m.buildState = sOk.Render("✓") + " build"
 			} else {
@@ -237,10 +239,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Update footer files (shown in footer, not logged to chat).
-		fl := filesLine(msg.files, msg.newFiles)
-		if fl != "" {
-			m.fileLine = fl
-		}
+		m.fileLine = filesLine(msg.files, msg.newFiles)
 
 	case nudgeMsg:
 		m.findings++

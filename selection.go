@@ -22,6 +22,11 @@ const (
 )
 
 var ansiResetRe = regexp.MustCompile(`\x1b\[0?m`)
+var loadTmuxBuffer = func(text string) error {
+	loadCmd := exec.Command("tmux", "load-buffer", "-")
+	loadCmd.Stdin = strings.NewReader(text)
+	return loadCmd.Run()
+}
 
 // Selection tracks drag selection state in the log viewport.
 type Selection struct {
@@ -219,9 +224,7 @@ func CopySelectedToClipboard(text string) error {
 
 	// Also set tmux buffer as fallback.
 	if os.Getenv("TMUX") != "" {
-		loadCmd := exec.Command("tmux", "load-buffer", "-")
-		loadCmd.Stdin = strings.NewReader(text)
-		loadCmd.Run()
+		return loadTmuxBuffer(text)
 	}
 
 	return nil

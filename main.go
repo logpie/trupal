@@ -190,8 +190,10 @@ func cmdWatch(gitRoot string) {
 
 	// Start TUI + watcher.
 	p := tea.NewProgram(initialModel(filepath.Base(gitRoot)), ProgramOptions()...)
-	go runWatchLoop(gitRoot, cfg, p)
+	watchCancel := make(chan struct{})
+	go runWatchLoop(gitRoot, cfg, p, watchCancel)
 	p.Run() // ignore exit error — expected on SIGINT
+	close(watchCancel)
 
 	// After TUI exits, show stop summary in normal terminal and block.
 	fmt.Printf("\n trupal stopped (%s)\n", cfg.String())

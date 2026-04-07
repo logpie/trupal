@@ -286,6 +286,37 @@ func TestBrainStatusFinishedShowsRelativeAge(t *testing.T) {
 	}
 }
 
+func TestStatusMsgClearsBuildAndFileState(t *testing.T) {
+	m := initialModel("test")
+
+	buildOK := true
+	newM, _ := m.Update(statusMsg{
+		buildOK:  &buildOK,
+		files:    []string{"a.go"},
+		newFiles: []string{"b.go"},
+	})
+	m = newM.(model)
+	if m.buildState == "" {
+		t.Fatal("expected build state to be set")
+	}
+	if m.fileLine == "" {
+		t.Fatal("expected file line to be set")
+	}
+
+	newM, _ = m.Update(statusMsg{
+		buildOK:  nil,
+		files:    nil,
+		newFiles: nil,
+	})
+	m = newM.(model)
+	if m.buildState != "" {
+		t.Fatalf("expected build state to clear, got %q", m.buildState)
+	}
+	if m.fileLine != "" {
+		t.Fatalf("expected file line to clear, got %q", m.fileLine)
+	}
+}
+
 func containsStr(s, sub string) bool {
 	return len(s) > 0 && len(sub) > 0 && indexOf(s, sub) >= 0
 }

@@ -61,13 +61,14 @@ func WriteLog(logPath string, state DisplayState) {
 	fmt.Fprintf(f, "\n")
 }
 
-func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
+func runWatchLoop(projectDir string, cfg Config, p *tea.Program, cancelCh <-chan struct{}) {
 	InitDebugLog(projectDir)
 	defer CloseDebugLog()
 
 	// Handle SIGINT for graceful shutdown.
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
 
 	session := NewSession(projectDir)
 	findings := NewFindingStore()
@@ -130,6 +131,8 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 	brainStale := false
 	brainThinking := false
 	brainLastMsg := ""
+	restartNeeded := false
+	restartAt := time.Time{}
 	loggedTrajectory := make(map[string]bool)
 	extraDirs := make(map[string]bool) // directories CC works in (from JSONL tool calls)
 
@@ -143,8 +146,6 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 	pendingTrigger := ""
 	shuttingDown := false
 	interval := time.Duration(cfg.PollInterval) * time.Second
-
-	var lastStatusHash uint64
 
 	// Main loop ticker.
 	ticker := time.NewTicker(interval)
@@ -165,6 +166,12 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 		default:
 			return current + " | " + next
 		}
+	}
+
+	clearBrainState := func() {
+		brainBusy = false
+		brainThinking = false
+		p.Send(brainStatusMsg{thinking: false})
 	}
 
 	for {
@@ -379,16 +386,13 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 				break
 			}
 			Debugf("[watcher] brain error: %v", result.err)
+			clearBrainState()
 			// Restart brain unless shutting down.
 			if !shuttingDown && brain != nil {
 				brain.Stop()
 				brain = nil
-				newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second, extraDirSlice()...)
-				if restartErr != nil {
-					Debugf("[watcher] brain restart failed: %v", restartErr)
-				} else {
-					brain = newBrain
-				}
+				restartNeeded = true
+				restartAt = time.Now().Add(5 * time.Second)
 			}
 		default:
 		}
@@ -414,7 +418,10 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 					lastJSONLActivity = time.Now()
 					idleNotified = false
 					pendingTrigger = mergeTriggerReason(pendingTrigger, "CC session switched")
+					restartNeeded = false
+					restartAt = time.Time{}
 					brainStale = true
+					clearBrainState()
 					if brain != nil {
 						brain.Stop()
 						brain = nil
@@ -438,18 +445,35 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 						triggerReason = ""
 					}
 					pendingTrigger = mergeTriggerReason(pendingTrigger, "CC session switched")
+					restartNeeded = false
+					restartAt = time.Time{}
 					brainStale = true
+					clearBrainState()
 				}
 			}
 		}
 
 		if brainStale && !brainBusy && !shuttingDown && jsonlPath != "" {
+			clearBrainState()
 			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), extraDirSlice()...)
 			if err != nil {
 				Debugf("[watcher] failed to start brain for current session: %v", err)
 			} else {
 				brain = newBrain
 				brainStale = false
+			}
+		}
+
+		if restartNeeded && !brainBusy && !brainStale && !shuttingDown && jsonlPath != "" && brain == nil && !time.Now().Before(restartAt) {
+			clearBrainState()
+			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), extraDirSlice()...)
+			if err != nil {
+				Debugf("[watcher] brain restart failed: %v", err)
+				restartAt = time.Now().Add(5 * time.Second)
+			} else {
+				brain = newBrain
+				restartNeeded = false
+				restartAt = time.Time{}
 			}
 		}
 
@@ -506,36 +530,31 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 			CCStatus:           ccStatus,
 		}
 
-		// Log status only when files/build change.
-		sh := statusOnlyHash(state)
-		if sh != lastStatusHash {
-			buildOK := (*bool)(nil)
-			if state.Build != nil {
-				v := state.Build.OK
-				buildOK = &v
-			}
-			p.Send(statusMsg{
-				ccStatus: ccStatus,
-				buildOK:  buildOK,
-				buildErrs: func() int {
-					if state.Build != nil {
-						return state.Build.ErrorCount
-					}
-					return 0
-				}(),
-				buildTrend: func() string {
-					if state.Build != nil {
-						return state.Build.Trend
-					}
-					return ""
-				}(),
-				files:    changedFiles,
-				newFiles: untrackedFiles,
-				elapsed:  session.Elapsed(),
-				project:  filepath.Base(projectDir),
-			})
-			lastStatusHash = sh
+		buildOK := (*bool)(nil)
+		if state.Build != nil {
+			v := state.Build.OK
+			buildOK = &v
 		}
+		p.Send(statusMsg{
+			ccStatus: ccStatus,
+			buildOK:  buildOK,
+			buildErrs: func() int {
+				if state.Build != nil {
+					return state.Build.ErrorCount
+				}
+				return 0
+			}(),
+			buildTrend: func() string {
+				if state.Build != nil {
+					return state.Build.Trend
+				}
+				return ""
+			}(),
+			files:    changedFiles,
+			newFiles: untrackedFiles,
+			elapsed:  session.Elapsed(),
+			project:  filepath.Base(projectDir),
+		})
 		// Log trajectory signals once.
 		for _, f := range trajectoryFindings {
 			key := f.Message
@@ -551,16 +570,31 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 			lastLogHash = h
 		}
 
-		// Send elapsed time update for the TUI footer.
-		p.Send(statusMsg{elapsed: session.Elapsed(), ccStatus: ccStatus, project: filepath.Base(projectDir)})
-
 		// Wait for next tick or signal.
 		select {
 		case <-ticker.C:
+		case <-cancelCh:
+			shuttingDown = true
+			Debugf("[watcher] watcher canceled after TUI exit")
+			clearBrainState()
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			if brain != nil {
+				brain.Stop()
+			}
+			if jsonlWatcher != nil {
+				jsonlWatcher.Close()
+			}
+			return
 		case <-sigCh:
 			// Graceful shutdown.
 			shuttingDown = true
 			Debugf("[watcher] received SIGINT, shutting down")
+			clearBrainState()
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
 			if brain != nil {
 				brain.Stop()
 			}

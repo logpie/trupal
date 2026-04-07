@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -169,5 +170,25 @@ func TestMouseMotionWithoutPressStillSelects(t *testing.T) {
 	_ = cmd()
 	if copied != "line11\nline12" {
 		t.Fatalf("expected copied text %q, got %q", "line11\nline12", copied)
+	}
+}
+
+func TestCopySelectedToClipboardReturnsTmuxError(t *testing.T) {
+	t.Setenv("TMUX", "1")
+
+	wantErr := errors.New("tmux load-buffer failed")
+	prevLoad := loadTmuxBuffer
+	loadTmuxBuffer = func(text string) error {
+		if text != "hello" {
+			t.Fatalf("unexpected text %q", text)
+		}
+		return wantErr
+	}
+	defer func() {
+		loadTmuxBuffer = prevLoad
+	}()
+
+	if err := CopySelectedToClipboard("hello"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected error %v, got %v", wantErr, err)
 	}
 }

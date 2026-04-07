@@ -102,13 +102,29 @@ func SaveConfig(projectDir string, cfg Config) {
 
 // Validate normalizes and validates config values that must match runtime support.
 func (cfg *Config) Validate() error {
+	defaults := DefaultConfig()
+
 	cfg.BrainProvider = strings.ToLower(strings.TrimSpace(cfg.BrainProvider))
 	if cfg.BrainProvider == "" {
-		cfg.BrainProvider = DefaultConfig().BrainProvider
+		cfg.BrainProvider = defaults.BrainProvider
+	}
+	cfg.BrainModel = strings.ToLower(strings.TrimSpace(cfg.BrainModel))
+	if cfg.BrainModel == "" {
+		cfg.BrainModel = defaults.BrainModel
+	}
+	cfg.BrainEffort = strings.ToLower(strings.TrimSpace(cfg.BrainEffort))
+	if cfg.BrainEffort == "" {
+		cfg.BrainEffort = defaults.BrainEffort
 	}
 
 	switch cfg.BrainProvider {
 	case "claude":
+		if !IsValidModel(cfg.BrainModel) {
+			return fmt.Errorf("unsupported brain_model %q (supported: haiku, sonnet, opus)", cfg.BrainModel)
+		}
+		if !IsValidEffort(cfg.BrainEffort) {
+			return fmt.Errorf("unsupported brain_effort %q (supported: low, medium, high, max)", cfg.BrainEffort)
+		}
 		return nil
 	default:
 		return fmt.Errorf("unsupported brain_provider %q (supported: claude)", cfg.BrainProvider)
