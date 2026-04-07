@@ -48,7 +48,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 		}
 	}
 
-	// Start brain.
+	// Start brain (no extra dirs yet — we haven't read JSONL).
 	var brain *Brain
 	if jsonlPath != "" {
 		var err error
@@ -79,6 +79,15 @@ func runWatchLoop(projectDir string, cfg Config) {
 	brainThinking := false
 	brainLastMsg := ""
 	loggedTrajectory := make(map[string]bool)
+	extraDirs := make(map[string]bool) // directories CC works in (from JSONL tool calls)
+
+	extraDirSlice := func() []string {
+		dirs := make([]string, 0, len(extraDirs))
+		for d := range extraDirs {
+			dirs = append(dirs, d)
+		}
+		return dirs
+	}
 	pendingTrigger := ""
 	shuttingDown := false
 	interval := time.Duration(cfg.PollInterval) * time.Second
@@ -165,6 +174,11 @@ func runWatchLoop(projectDir string, cfg Config) {
 							file := ""
 							if i < len(e.ToolFiles) {
 								file = filepath.Base(e.ToolFiles[i])
+								// Track directories CC works in.
+								dir := filepath.Dir(e.ToolFiles[i])
+								if dir != "" && dir != "." {
+									extraDirs[dir] = true
+								}
 							}
 							key := tool + ":" + file
 							if !seen[key] {
@@ -272,6 +286,9 @@ func runWatchLoop(projectDir string, cfg Config) {
 			if result.resp != nil {
 				brainLastMsg = result.resp.Reasoning
 				brainLastTime = time.Now()
+				if len(result.resp.Nudges) > 0 {
+					fmt.Print("\r\033[K") // clear heartbeat before nudges
+				}
 				for _, nudge := range result.resp.Nudges {
 					id := findings.Add(nudge.Severity, nudge.Message, result.resp.Reasoning)
 					for _, f := range findings.Recent(1) {
@@ -306,7 +323,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			if !shuttingDown && brain != nil {
 				brain.Stop()
 				brain = nil
-				newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second)
+				newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second, extraDirSlice()...)
 				if restartErr != nil {
 					Debugf("[watcher] brain restart failed: %v", restartErr)
 				} else {
@@ -367,7 +384,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 		}
 
 		if brainStale && !brainBusy && !shuttingDown && jsonlPath != "" {
-			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON())
+			newBrain, err := StartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), extraDirSlice()...)
 			if err != nil {
 				Debugf("[watcher] failed to start brain for current session: %v", err)
 			} else {
@@ -422,9 +439,10 @@ func runWatchLoop(projectDir string, cfg Config) {
 			CCStatus:           ccStatus,
 		}
 
-		// Log status only when files/build/CC change (not brain).
+		// Log status only when files/build change.
 		sh := statusOnlyHash(state)
 		if sh != lastStatusHash {
+			fmt.Print("\r\033[K") // clear heartbeat line before logging
 			LogStatus(state)
 			lastStatusHash = sh
 		}
@@ -442,6 +460,9 @@ func runWatchLoop(projectDir string, cfg Config) {
 			WriteLog(logPath, state)
 			lastLogHash = h
 		}
+
+		// Heartbeat — always updates, shows trupal is alive.
+		Heartbeat(ccStatus, brainThinking, brainLastTime, session.Elapsed())
 
 		// Wait for next tick or signal.
 		select {

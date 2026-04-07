@@ -107,8 +107,9 @@ func brainNotifyMessage(reason, findingsJSON string) string {
 	return fmt.Sprintf("NOTIFICATION: %s\n\nACTIVE FINDINGS (unresolved):\n%s", reason, findingsJSON)
 }
 
-// StartBrain spawns the CC subprocess.
-func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain, error) {
+// StartBrain spawns the CC subprocess. extraDirs are additional directories
+// the brain can access (from CC's tool calls to files outside projectDir).
+func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, extraDirs ...string) (*Brain, error) {
 	prompt := brainSystemPrompt(projectDir, jsonlPath, findingsJSON)
 	command, err := brainCommand(cfg.BrainProvider)
 	if err != nil {
@@ -126,6 +127,12 @@ func StartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string) (*Brain,
 		"--dangerously-skip-permissions",
 		"--no-session-persistence",
 		"--allowed-tools", "Read,Bash,Grep,Glob",
+	}
+	// Allow brain to read files in directories CC is working in.
+	for _, d := range extraDirs {
+		if d != "" && d != projectDir {
+			args = append(args, "--add-dir", d)
+		}
 	}
 
 	cmd := exec.Command(command, args...)
@@ -289,7 +296,7 @@ func jsonString(s string) string {
 }
 
 // RestartBrain stops the current brain and starts a new one after a delay.
-func RestartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, delay time.Duration) (*Brain, error) {
+func RestartBrain(cfg Config, projectDir, jsonlPath, findingsJSON string, delay time.Duration, extraDirs ...string) (*Brain, error) {
 	time.Sleep(delay)
-	return StartBrain(cfg, projectDir, jsonlPath, findingsJSON)
+	return StartBrain(cfg, projectDir, jsonlPath, findingsJSON, extraDirs...)
 }

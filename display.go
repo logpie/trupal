@@ -41,35 +41,23 @@ type BuildDisplay struct {
 	Trend      string
 }
 
-// --- Chat-style log rendering ---
-// No screen clearing. No alt screen. Just append timestamped lines.
-// The display acts like `tail -f` — new events at bottom, scroll up for history.
+// --- Chat log: append-only events ---
 
-// LogEvent prints a single timestamped event line to stdout.
+// LogEvent prints a timestamped event.
 func LogEvent(format string, args ...interface{}) {
 	ts := time.Now().Format("15:04:05")
 	msg := fmt.Sprintf(format, args...)
 	fmt.Printf("%s%s%s %s\n", dim, ts, reset, msg)
 }
 
-// LogBrain prints a brain status/assessment line.
-func LogBrain(msg string) {
-	ts := time.Now().Format("15:04:05")
-	fmt.Printf("%s%s%s %s•%s %s\n", dim, ts, reset, dim, reset, msg)
-}
-
-// LogNudge prints a nudge finding — conversational, prominent.
+// LogNudge prints a nudge — the main output of trupal.
 func LogNudge(f BrainFinding) {
 	ts := f.Timestamp.Format("15:04:05")
-	severity := fmt.Sprintf("%s⚠%s", yellow, reset)
+	icon := fmt.Sprintf("%s⚠%s", yellow, reset)
 	if f.Severity == "error" {
-		severity = fmt.Sprintf("%s✗%s", red, reset)
+		icon = fmt.Sprintf("%s✗%s", red, reset)
 	}
-
-	// Nudge as the main message (conversational).
-	fmt.Printf("%s%s%s %s %s\n", dim, ts, reset, severity, f.Nudge)
-
-	// Reasoning as context underneath (dim, indented).
+	fmt.Printf("\n%s%s%s %s %s\n", dim, ts, reset, icon, f.Nudge)
 	if f.Reasoning != "" {
 		for _, line := range strings.Split(f.Reasoning, "\n") {
 			line = strings.TrimSpace(line)
@@ -78,29 +66,26 @@ func LogNudge(f BrainFinding) {
 			}
 		}
 	}
+	fmt.Println()
 }
 
 // LogResolved prints when a finding is resolved.
 func LogResolved(f BrainFinding) {
 	ts := time.Now().Format("15:04:05")
-	fmt.Printf("%s%s%s %s✓%s %s%s%s\n", dim, ts, reset, green, reset, dim, f.Nudge, reset)
+	fmt.Printf("%s%s%s %s✓ resolved:%s %s%s%s\n", dim, ts, reset, green, reset, dim, f.Nudge, reset)
 }
 
-// LogStatus prints a compact status line (CC + build + files).
+// LogStatus prints a compact status line when files/build change.
 func LogStatus(state DisplayState) {
 	parts := []string{}
-
-	// CC status.
 	switch state.CCStatus {
 	case "active":
 		parts = append(parts, fmt.Sprintf("%s●%s cc", green, reset))
 	case "thinking":
 		parts = append(parts, fmt.Sprintf("%s●%s cc:thinking", yellow, reset))
 	default:
-		parts = append(parts, fmt.Sprintf("%s○%s cc:idle", dim, reset))
+		parts = append(parts, fmt.Sprintf("%s○%s cc", dim, reset))
 	}
-
-	// Build.
 	if state.Build != nil {
 		if state.Build.OK {
 			parts = append(parts, fmt.Sprintf("%s✓%s build", green, reset))
@@ -112,8 +97,6 @@ func LogStatus(state DisplayState) {
 			parts = append(parts, fmt.Sprintf("%s✗%s %s", red, reset, label))
 		}
 	}
-
-	// Files.
 	nMod := len(state.ChangedFiles)
 	nNew := len(state.UntrackedFiles)
 	if nMod > 0 {
@@ -124,33 +107,55 @@ func LogStatus(state DisplayState) {
 		names := baseNames(state.UntrackedFiles, 2)
 		parts = append(parts, fmt.Sprintf("%d new: %s", nNew, strings.Join(names, " ")))
 	}
-
 	ts := time.Now().Format("15:04:05")
 	fmt.Printf("%s%s%s %s\n", dim, ts, reset, strings.Join(parts, "  "))
 }
 
-// LogTrajectory prints trajectory warnings.
+// LogTrajectory prints a trajectory warning.
 func LogTrajectory(f Finding) {
 	ts := time.Now().Format("15:04:05")
 	fmt.Printf("%s%s%s %s▸%s %s\n", dim, ts, reset, yellow, reset, f.Message)
 }
 
-// LogHeader prints the startup banner.
+// --- Heartbeat: single line that overwrites in place ---
+
+// Heartbeat overwrites the last line with live status.
+// Uses \r to return to line start + \033[K to clear the line.
+func Heartbeat(ccStatus string, brainThinking bool, brainLastTime time.Time, elapsed string) {
+	ts := time.Now().Format("15:04:05")
+
+	cc := fmt.Sprintf("%s○%s", dim, reset)
+	if ccStatus == "active" || ccStatus == "thinking" {
+		cc = fmt.Sprintf("%s●%s", green, reset)
+	}
+
+	brain := ""
+	if brainThinking {
+		brain = fmt.Sprintf(" %s◌ brain%s", cyan, reset)
+	} else if !brainLastTime.IsZero() {
+		ago := time.Since(brainLastTime).Truncate(time.Second)
+		if ago < 60*time.Second {
+			brain = fmt.Sprintf(" %sbrain:%s ago%s", dim, ago, reset)
+		}
+	}
+
+	fmt.Printf("\r\033[K%s%s%s %s%s %s[%s]%s", dim, ts, reset, cc, brain, dim, elapsed, reset)
+}
+
+// --- Header and footer ---
+
 func LogHeader(projectDir string, cfg Config) {
-	fmt.Printf("\n %strupal%s %s— watching %s%s\n", bold, reset, dim, filepath.Base(projectDir), reset)
+	fmt.Printf("\n %strupal%s %s— %s%s\n", bold, reset, dim, filepath.Base(projectDir), reset)
 	if cfg.BuildCmd != "" {
 		fmt.Printf(" %sbuild: %s%s\n", dim, cfg.BuildCmd, reset)
 	}
 	fmt.Printf(" %sbrain: %s/%s (effort: %s)%s\n", dim, cfg.BrainProvider, cfg.BrainModel, cfg.BrainEffort, reset)
-	fmt.Printf(" %s%s%s\n", dim, strings.Repeat("─", 50), reset)
-	fmt.Println()
+	fmt.Printf(" %s%s%s\n\n", dim, strings.Repeat("─", 50), reset)
 }
 
-// LogStopped prints the stop summary.
 func LogStopped(elapsed string, findings []BrainFinding) {
 	fmt.Println()
 	fmt.Printf(" %strupal stopped%s  %s%s%s\n", bold, reset, dim, elapsed, reset)
-
 	active := 0
 	resolved := 0
 	for _, f := range findings {
@@ -160,26 +165,23 @@ func LogStopped(elapsed string, findings []BrainFinding) {
 			resolved++
 		}
 	}
-
 	if len(findings) > 0 {
 		fmt.Printf(" %sfindings: %d active, %d resolved%s\n", dim, active, resolved, reset)
 		for _, f := range findings {
-			status := fmt.Sprintf("%s●%s", yellow, reset)
+			icon := fmt.Sprintf("%s●%s", yellow, reset)
 			if f.Status == "resolved" {
-				status = fmt.Sprintf("%s✓%s", green, reset)
+				icon = fmt.Sprintf("%s✓%s", green, reset)
 			}
 			ts := f.Timestamp.Format("15:04")
-			fmt.Printf(" %s %s%s%s %s\n", status, dim, ts, reset, f.Nudge)
+			fmt.Printf(" %s %s%s%s %s\n", icon, dim, ts, reset, f.Nudge)
 		}
 	} else {
 		fmt.Printf(" %sno findings this session%s\n", dim, reset)
 	}
-
 	fmt.Printf("\n %slog: .trupal.log  debug: .trupal.debug%s\n", dim, reset)
 	fmt.Printf(" %spress ctrl+c to close pane%s\n", dim, reset)
 }
 
-// baseNames returns base filenames, truncated to max count.
 func baseNames(files []string, max int) []string {
 	var result []string
 	for i, f := range files {
@@ -192,14 +194,13 @@ func baseNames(files []string, max int) []string {
 	return result
 }
 
-// WriteLog appends a plain-text summary to the log file.
+// WriteLog appends to the log file.
 func WriteLog(logPath string, state DisplayState) {
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-
 	ts := time.Now().Format("15:04:05")
 	fmt.Fprintf(f, "%s cc:%s", ts, state.CCStatus)
 	if state.Build != nil {
