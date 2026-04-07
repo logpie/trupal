@@ -70,7 +70,9 @@ func initialModel(project string) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tickEvery(), tea.EnableMouseCellMotion)
+	// No mouse capture — preserves native text selection/copy.
+	// Use keyboard for scrolling (j/k, pgup/pgdown, g/G).
+	return tickEvery()
 }
 
 func tickEvery() tea.Cmd {
@@ -104,14 +106,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollOffset = m.maxScroll()
 		case "end", "G":
 			m.scrollOffset = 0
-		}
-		return m, nil
-
-	case tea.MouseMsg:
-		if msg.Button == tea.MouseButtonWheelUp {
-			m.scrollUp(3)
-		} else if msg.Button == tea.MouseButtonWheelDown {
-			m.scrollDown(3)
 		}
 		return m, nil
 
