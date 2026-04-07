@@ -210,7 +210,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case nudgeMsg:
 		m.findings++
-		w := m.contentW()
 		// Label + color based on severity
 		label := sWarn.Render("nudge")
 		if msg.finding.Severity == "error" {
@@ -219,10 +218,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.log("")
 		// Observation context
 		if msg.finding.Reasoning != "" {
-			m.logLabeled(sCyan.Render("seen"), msg.finding.Reasoning, w)
+			m.logLabeled(sCyan.Render("seen"), msg.finding.Reasoning, m.width)
 		}
 		// Actionable nudge
-		m.logLabeled(label, msg.finding.Nudge, w)
+		m.logLabeled(label, msg.finding.Nudge, m.width)
 		m.log("")
 
 	case resolvedMsg:
@@ -231,13 +230,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.findings = 0
 		}
 		m.resolved++
-		m.logLabeled(sOk.Render("fixed"), sDim.Render(msg.finding.Nudge), m.contentW())
+		m.logLabeled(sOk.Render("fixed"), sDim.Render(msg.finding.Nudge), m.width)
 
 	case observationMsg:
-		m.logLabeled(sCyan.Render("seen"), msg.text, m.contentW())
+		m.logLabeled(sCyan.Render("seen"), msg.text, m.width)
 
 	case trajectoryMsg:
-		m.logLabeled(sWarn.Render("track"), msg.message, m.contentW())
+		m.logLabeled(sWarn.Render("track"), msg.message, m.width)
 
 	case brainStatusMsg:
 		if msg.thinking {
@@ -281,7 +280,8 @@ func (m *model) logLabeled(label, text string, w int) {
 	// "HH:MM  label  first line..."
 	// "       continuation..."
 	//  ^5+2   ^7 = continuation indent
-	textW := w - 8 // leave room for "HH:MM  " + a bit
+	// w = pane width. Subtract timestamp(5) + spaces(2) + label(~6) + space(1) = ~14
+	textW := w - 14
 	if textW < 20 {
 		textW = 20
 	}

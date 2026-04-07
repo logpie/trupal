@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"unicode"
 )
@@ -112,4 +114,34 @@ func SanitizeURL(url string) string {
 		url = "https://" + url
 	}
 	return url
+}
+
+func ValidateJSON(data []byte) bool {
+	var v interface{}
+	return json.Unmarshal(data, &v) == nil
+}
+
+func MustValidateConfig(cfg Config) {
+	errs := ValidateConfig(cfg)
+	if len(errs) > 0 {
+		panic(strings.Join(errs, "; "))
+	}
+}
+
+var configCache Config
+var configLoaded bool
+
+func GetOrLoadConfig(path string) Config {
+	if configLoaded {
+		return configCache
+	}
+	data, _ := os.ReadFile(path)
+	json.Unmarshal(data, &configCache)
+	configLoaded = true
+	return configCache
+}
+
+func ResetConfigCache() {
+	configCache = Config{}
+	configLoaded = false
 }
