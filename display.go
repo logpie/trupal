@@ -31,7 +31,8 @@ type DisplayState struct {
 	DeletedTests       []string
 	BrainFindings      []BrainFinding
 	BrainThinking      bool
-	BrainLastMsg       string // latest brain reasoning (even with 0 nudges)
+	BrainLastMsg       string
+	BrainLastTime      time.Time // when brain last responded
 	CCStatus           string
 }
 
@@ -44,7 +45,6 @@ type BuildDisplay struct {
 
 // getPaneWidth returns the width of this process's tmux pane.
 func getPaneWidth() int {
-	// Use TMUX_PANE to query our specific pane's width.
 	paneID := os.Getenv("TMUX_PANE")
 	if paneID == "" {
 		return 45
@@ -62,156 +62,140 @@ func getPaneWidth() int {
 
 // Render redraws the status frame in place (no scrollback pollution).
 func Render(state DisplayState) {
-	// Move cursor home + clear screen. Use ED (erase display) mode 2 only on first render,
-	// then use ED mode 0 (erase below cursor) to avoid scrollback issues.
 	fmt.Print("\033[H\033[J")
 	w := getPaneWidth()
+	sep := strings.Repeat("─", w-2)
 
-	// ── Header ──
-	printLine(w, fmt.Sprintf(" %strupal%s  %s%s%s", bold, reset, dim, state.Elapsed, reset))
+	// ── Header: always shows trupal is alive ──
+	now := time.Now().Format("15:04:05")
+	fmt.Printf(" %strupal%s %s%s%s\n", bold, reset, dim, now, reset)
+	fmt.Printf(" %s%s%s\n", dim, sep, reset)
 
-	// CC status + build on one line
-	parts := []string{}
-	if state.CCStatus != "" {
-		switch state.CCStatus {
-		case "active":
-			parts = append(parts, fmt.Sprintf("%s●%s cc", green, reset))
-		case "thinking":
-			parts = append(parts, fmt.Sprintf("%s◌%s cc", yellow, reset))
-		default:
-			parts = append(parts, fmt.Sprintf("%s○%s cc", dim, reset))
-		}
-	}
+	// ── Status line: CC + brain + build ──
+	ccLabel := ccStatusLabel(state.CCStatus)
+	brainLabel := brainStatusLabel(state.BrainThinking, state.BrainLastTime)
+	fmt.Printf(" %s  %s\n", ccLabel, brainLabel)
+
 	if state.Build != nil {
-		if state.Build.OK {
-			parts = append(parts, fmt.Sprintf("%s✓%s build", green, reset))
-		} else {
-			label := fmt.Sprintf("%d err", state.Build.ErrorCount)
-			if state.Build.Trend != "" {
-				label += " (" + state.Build.Trend + ")"
-			}
-			parts = append(parts, fmt.Sprintf("%s✗%s %s", red, reset, label))
-		}
-	}
-	if len(parts) > 0 {
-		fmt.Printf(" %s\n", strings.Join(parts, "  "))
+		renderBuild(state.Build)
 	}
 
-	// ── Files ── (compact: just count + names)
+	// ── Files ──
 	nMod := len(state.ChangedFiles)
 	nNew := len(state.UntrackedFiles)
 	if nMod > 0 || nNew > 0 {
-		fileParts := []string{}
+		parts := []string{}
 		if nMod > 0 {
 			names := baseNames(state.ChangedFiles, 4)
-			fileParts = append(fileParts, fmt.Sprintf("%s%d mod:%s %s", dim, nMod, reset, strings.Join(names, " ")))
+			parts = append(parts, fmt.Sprintf("%d mod: %s", nMod, strings.Join(names, " ")))
 		}
 		if nNew > 0 {
 			names := baseNames(state.UntrackedFiles, 3)
-			fileParts = append(fileParts, fmt.Sprintf("%s%d new:%s %s", dim, nNew, reset, strings.Join(names, " ")))
+			parts = append(parts, fmt.Sprintf("%d new: %s", nNew, strings.Join(names, " ")))
 		}
-		for _, p := range fileParts {
-			fmt.Printf(" %s\n", p)
+		for _, p := range parts {
+			fmt.Printf(" %s%s%s\n", dim, p, reset)
 		}
 	}
 
-	// ── Trajectory warnings ──
+	// ── Trajectory ──
 	for _, f := range state.TrajectoryFindings {
-		wrapPrint(w, fmt.Sprintf(" %s▸ %s%s", yellow, f.Message, reset), 3)
+		fmt.Printf(" %s▸ %s%s\n", yellow, f.Message, reset)
 	}
 	for _, dt := range state.DeletedTests {
-		wrapPrint(w, fmt.Sprintf(" %s▸ deleted %s%s", yellow, filepath.Base(dt), reset), 3)
+		fmt.Printf(" %s▸ deleted %s%s\n", yellow, filepath.Base(dt), reset)
 	}
 
-	// ── Brain ──
-	hasBrain := len(state.BrainFindings) > 0 || state.BrainThinking || state.BrainLastMsg != ""
-	if hasBrain {
+	// ── Brain section ──
+	hasBrainContent := len(state.BrainFindings) > 0 || state.BrainLastMsg != ""
+	if hasBrainContent {
 		fmt.Println()
-		separator(w)
+		fmt.Printf(" %s%s%s\n", dim, sep, reset)
 
-		if state.BrainThinking {
-			fmt.Printf(" %s◌ analyzing...%s\n", cyan, reset)
-		} else if len(state.BrainFindings) == 0 && state.BrainLastMsg != "" {
-			// No nudges but brain has a status — show it dimmed.
+		// Show findings.
+		for _, f := range state.BrainFindings {
+			renderFinding(f, w)
+		}
+
+		// Show latest brain message if no findings.
+		if len(state.BrainFindings) == 0 && state.BrainLastMsg != "" {
 			lines := wordWrap(state.BrainLastMsg, w-2)
 			for _, line := range lines {
 				fmt.Printf(" %s%s%s\n", dim, line, reset)
 			}
 		}
-
-		for _, f := range state.BrainFindings {
-			renderFinding(f, w)
-		}
 	}
 
-	// No content at all
-	if !hasAnyContent(state) {
-		fmt.Printf(" %s…%s\n", dim, reset)
-	}
-
+	// ── Footer: session duration ──
 	fmt.Println()
+	fmt.Printf(" %ssession: %s%s\n", dim, state.Elapsed, reset)
 }
 
-func hasAnyContent(s DisplayState) bool {
-	return len(s.ChangedFiles) > 0 || len(s.UntrackedFiles) > 0 ||
-		s.Build != nil || len(s.TrajectoryFindings) > 0 ||
-		len(s.DeletedTests) > 0 || len(s.BrainFindings) > 0 || s.BrainThinking
+func ccStatusLabel(status string) string {
+	switch status {
+	case "active":
+		return fmt.Sprintf("%s●%s cc:active", green, reset)
+	case "thinking":
+		return fmt.Sprintf("%s●%s cc:thinking", yellow, reset)
+	default:
+		return fmt.Sprintf("%s○%s cc:idle", dim, reset)
+	}
+}
+
+func brainStatusLabel(thinking bool, lastTime time.Time) string {
+	if thinking {
+		return fmt.Sprintf("%s◌%s brain:analyzing", cyan, reset)
+	}
+	if lastTime.IsZero() {
+		return fmt.Sprintf("%s○%s brain:starting", dim, reset)
+	}
+	ago := time.Since(lastTime).Truncate(time.Second)
+	return fmt.Sprintf("%s●%s brain:%s ago", dim, reset, ago)
+}
+
+func renderBuild(b *BuildDisplay) {
+	if b.OK {
+		fmt.Printf(" %s✓ build clean%s\n", green, reset)
+		return
+	}
+	label := fmt.Sprintf("%d errors", b.ErrorCount)
+	if b.Trend != "" {
+		label += " (" + b.Trend + ")"
+	}
+	fmt.Printf(" %s✗ %s%s\n", red, label, reset)
 }
 
 func renderFinding(f BrainFinding, w int) {
 	ts := f.Timestamp.Format("15:04")
 
-	// Status prefix
-	prefix := ""
-	switch f.Status {
-	case "resolved":
-		prefix = fmt.Sprintf(" %s%s ✓%s ", dim, ts, reset)
-	case "waived":
-		prefix = fmt.Sprintf(" %s%s -%s ", dim, ts, reset)
-	default:
-		prefix = fmt.Sprintf(" %s%s%s ", dim, ts, reset)
+	statusTag := ""
+	if f.Status == "resolved" {
+		statusTag = " ✓"
 	}
 
-	// Reasoning (dim, wrapped)
+	// Reasoning in dim.
 	if f.Reasoning != "" {
-		color := dim
-		if f.Status == "resolved" || f.Status == "waived" {
-			color = dim
-		}
-		lines := wordWrap(f.Reasoning, w-2)
+		lines := wordWrap(f.Reasoning, w-len(ts)-4)
 		for i, line := range lines {
 			if i == 0 {
-				fmt.Printf("%s%s%s%s\n", prefix, color, line, reset)
+				fmt.Printf(" %s%s%s%s %s%s\n", dim, ts, statusTag, reset, dim+line, reset)
 			} else {
-				fmt.Printf(" %s%s%s\n", color, strings.Repeat(" ", len(ts)+1)+line, reset)
+				fmt.Printf(" %s%s%s\n", dim, strings.Repeat(" ", len(ts)+2)+line, reset)
 			}
 		}
 	}
 
-	// Nudge (yellow arrow, prominent)
+	// Nudge in yellow.
 	if f.Nudge != "" {
-		nudgeColor := yellow
-		if f.Status == "resolved" || f.Status == "waived" {
-			nudgeColor = dim
+		color := yellow
+		if f.Status == "resolved" {
+			color = dim
 		}
 		lines := wordWrap("→ "+f.Nudge, w-4)
 		for _, line := range lines {
-			fmt.Printf("   %s%s%s\n", nudgeColor, line, reset)
+			fmt.Printf("   %s%s%s\n", color, line, reset)
 		}
 	}
-	fmt.Println()
-}
-
-func separator(w int) {
-	n := w - 2
-	if n < 10 {
-		n = 10
-	}
-	fmt.Printf(" %s%s%s\n", dim, strings.Repeat("─", n), reset)
-}
-
-func printLine(w int, content string) {
-	fmt.Printf("%s\n", content)
 }
 
 // baseNames returns base filenames, truncated to max count.
@@ -232,7 +216,6 @@ func wordWrap(text string, width int) []string {
 	if width < 10 {
 		width = 10
 	}
-	// Replace newlines with spaces for wrapping.
 	text = strings.ReplaceAll(text, "\n", " ")
 
 	var lines []string
@@ -241,25 +224,17 @@ func wordWrap(text string, width int) []string {
 			lines = append(lines, text)
 			break
 		}
-		// Find last space within width.
 		cut := width
 		for cut > 0 && text[cut] != ' ' {
 			cut--
 		}
 		if cut == 0 {
-			// No space found — hard break.
 			cut = width
 		}
 		lines = append(lines, text[:cut])
 		text = strings.TrimLeft(text[cut:], " ")
 	}
 	return lines
-}
-
-// wrapPrint prints a line, word-wrapping if it exceeds pane width.
-func wrapPrint(w int, text string, indent int) {
-	// Strip ANSI for length calculation — approximate by just printing.
-	fmt.Println(text)
 }
 
 // WriteLog appends a plain-text summary to the log file.

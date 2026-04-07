@@ -23,7 +23,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 	findings := NewFindingStore()
 	logPath := filepath.Join(projectDir, ".trupal.log")
 	var lastLogHash uint64
-	var lastRenderHash uint64
+	var brainLastTime time.Time
 
 	os.WriteFile(logPath, nil, 0644)
 
@@ -275,6 +275,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			}
 			if result.resp != nil {
 				brainLastMsg = result.resp.Reasoning
+				brainLastTime = time.Now()
 				for _, nudge := range result.resp.Nudges {
 					findings.Add(nudge.Severity, nudge.Message, result.resp.Reasoning)
 				}
@@ -409,14 +410,13 @@ func runWatchLoop(projectDir string, cfg Config) {
 			BrainFindings:      findings.Recent(10),
 			BrainThinking:      brainThinking,
 			BrainLastMsg:       brainLastMsg,
+			BrainLastTime:      brainLastTime,
 			CCStatus:           ccStatus,
 		}
 
+		Render(state)
+
 		h := stateHash(state)
-		if h != lastRenderHash {
-			Render(state)
-			lastRenderHash = h
-		}
 		if h != lastLogHash {
 			WriteLog(logPath, state)
 			lastLogHash = h
