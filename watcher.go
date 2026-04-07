@@ -30,11 +30,11 @@ func runWatchLoop(projectDir string, cfg Config) {
 	jsonlPath := FindSessionJSONL(projectDir)
 	Debugf("[watcher] JSONL path: %q", jsonlPath)
 	if jsonlPath == "" {
-		fmt.Printf("trupal watching: %s\n", shortenPath(projectDir))
-		fmt.Println("no CC session found — watching for new sessions...")
+		fmt.Printf("project: %s\n", shortenPath(projectDir))
+		fmt.Println("no CC session found — waiting...")
 	} else {
-		fmt.Printf("trupal watching: %s\n", shortenPath(projectDir))
-		fmt.Printf("CC session: %s\n", filepath.Base(jsonlPath))
+		fmt.Printf("project: %s\n", shortenPath(projectDir))
+		fmt.Printf("session: %s\n", filepath.Base(jsonlPath))
 	}
 
 	if cfg.BuildCmd != "" {
@@ -68,6 +68,9 @@ func runWatchLoop(projectDir string, cfg Config) {
 	debounceCh := make(chan string, 1)
 	var debounceTimer *time.Timer
 
+	// Brain state — brainResultCh receives results from the brain goroutine.
+	// All brain state is only written in the main loop (after reading from channel).
+	brainResultCh := make(chan *BrainResponse, 1)
 	brainBusy := false
 	brainThinking := false
 	brainLastMsg := ""
@@ -197,6 +200,23 @@ func runWatchLoop(projectDir string, cfg Config) {
 			ccStatus = DetectCCStatus(jsonlPath)
 		}
 
+		// Drain brain results (non-blocking).
+		select {
+		case resp := <-brainResultCh:
+			brainBusy = false
+			brainThinking = false
+			if resp != nil {
+				brainLastMsg = resp.Reasoning
+				for _, nudge := range resp.Nudges {
+					findings.Add(nudge.Severity, nudge.Message, resp.Reasoning)
+				}
+				if len(resp.ResolvedFindings) > 0 {
+					findings.Resolve(resp.ResolvedFindings)
+				}
+			}
+		default:
+		}
+
 		// Trigger brain analysis if needed.
 		if triggerBrain && brain != nil && !brainBusy {
 			Debugf("[watcher] triggering brain: %s", triggerReason)
@@ -204,32 +224,18 @@ func runWatchLoop(projectDir string, cfg Config) {
 			brainThinking = true
 
 			go func(reason string) {
-				defer func() {
-					brainBusy = false
-					brainThinking = false
-				}()
-
 				resp, err := brain.Notify(reason)
 				if err != nil {
-					// Brain may have crashed — try restart.
+					Debugf("[watcher] brain error: %v", err)
 					brain.Stop()
 					newBrain, restartErr := RestartBrain(cfg, projectDir, jsonlPath, findings.ActiveJSON(), 5*time.Second)
 					if restartErr == nil {
 						brain = newBrain
 					}
+					brainResultCh <- nil
 					return
 				}
-
-				// Process response.
-				if resp != nil {
-					brainLastMsg = resp.Reasoning
-					for _, nudge := range resp.Nudges {
-						findings.Add(nudge.Severity, nudge.Message, resp.Reasoning)
-					}
-					if len(resp.ResolvedFindings) > 0 {
-						findings.Resolve(resp.ResolvedFindings)
-					}
-				}
+				brainResultCh <- resp
 			}(triggerReason)
 		}
 
