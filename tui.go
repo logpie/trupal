@@ -65,7 +65,12 @@ type model struct {
 	resolved   int
 
 	// Footer state
-	fileLine string // current files summary
+	fileLine    string // current files summary
+	toastMsg    string // transient message (e.g. "copied!")
+	toastExpiry time.Time
+
+	// Selection
+	sel *Selection
 
 	quitting bool
 }
@@ -75,6 +80,7 @@ func initialModel(project string) model {
 		project:    project,
 		ccStatus:   "starting",
 		brainState: sDim.Render("starting"),
+		sel:        NewSelection(),
 	}
 }
 
@@ -126,8 +132,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll(3)
 		case tea.MouseButtonWheelDown:
 			m.scroll(-3)
+		case tea.MouseButtonLeft:
+			logTop := 3 // header(2) + sep(1)
+			switch msg.Action {
+			case tea.MouseActionPress:
+				m.sel.StartDrag(msg.X, msg.Y, logTop, m.scrollOffset)
+			case tea.MouseActionMotion:
+				m.sel.UpdateDrag(msg.X, msg.Y, m.scrollOffset)
+			case tea.MouseActionRelease:
+				text := m.sel.FinishDrag(m.lines)
+				if text != "" {
+					return m, func() tea.Msg {
+						CopySelectedToClipboard(text)
+						return SelectionCopiedMsg{Text: text, Time: time.Now()}
+					}
+				}
+			}
 		}
-		// Ignore click/drag — let terminal handle selection via Shift+click
 		return m, nil
 
 	case tickMsg:
@@ -211,6 +232,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.brainState = sOk.Render("●") + sDim.Render(fmt.Sprintf(" %dm", ago/60))
 			}
 		}
+
+	case SelectionCopiedMsg:
+		m.toastMsg = "copied to clipboard"
+		m.toastExpiry = time.Now().Add(2 * time.Second)
+		m.sel.Clear()
+		return m, nil
 
 	case logLineMsg:
 		m.log(msg.line)
@@ -328,7 +355,12 @@ func (m model) View() string {
 
 	visible := make([]string, 0, lh)
 	if start < end {
-		for _, line := range m.lines[start:end] {
+		for i, line := range m.lines[start:end] {
+			absIdx := start + i
+			if m.sel.IsLineSelected(absIdx) {
+				// Highlight selected lines with reverse video
+				line = "\033[7m" + line + "\033[27m"
+			}
 			visible = append(visible, line)
 		}
 	}
@@ -348,6 +380,10 @@ func (m model) View() string {
 			fl = fl[:remaining-1] + "…"
 		}
 		footerText += "  " + fl
+	}
+	// Toast message (temporary)
+	if m.toastMsg != "" && time.Now().Before(m.toastExpiry) {
+		footerText += "  " + m.toastMsg
 	}
 	footer := sDim.Render(footerText)
 
