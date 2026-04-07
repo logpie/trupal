@@ -119,7 +119,8 @@ func brainNotifyMessage(reason, findingsJSON string) string {
 	if findingsJSON == "" {
 		findingsJSON = "[]"
 	}
-	return fmt.Sprintf("NOTIFICATION: %s\n\nACTIVE FINDINGS (unresolved):\n%s", reason, findingsJSON)
+	// reason already contains files changed + diff summary from buildBrainNotification
+	return fmt.Sprintf("%s\n\nACTIVE FINDINGS:\n%s", reason, findingsJSON)
 }
 
 // StartBrain spawns the CC subprocess. extraDirs are additional directories
