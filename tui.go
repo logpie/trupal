@@ -21,10 +21,10 @@ var (
 	sCyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	sSep   = lipgloss.NewStyle().Faint(true)
 
-	sNudgeWarnMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("3"))
-	sNudgeWarnText   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
-	sNudgeErrMarker  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1"))
-	sNudgeErrText    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
+	sNudgeWarnMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")) // orange
+	sNudgeWarnText   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	sNudgeErrMarker  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")) // bright red
+	sNudgeErrText    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196"))
 
 	sHeaderTitle  = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
 	sHeaderLine   = lipgloss.NewStyle().PaddingLeft(1)
@@ -255,7 +255,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.findings = 0
 		}
 		m.resolved++
-		m.logStyled(sOk.Bold(true).Render("✓"), msg.finding.Nudge, m.width, sDim)
+		// Short resolved message — don't repeat the full nudge text
+		short := msg.finding.Nudge
+		if len(short) > 40 {
+			short = short[:37] + "..."
+		}
+		m.logStyled(sOk.Render("✓"), sDim.Render("resolved: "+short), m.width, lipgloss.NewStyle())
 
 	case observationMsg:
 		m.logStyled(sCyan.Bold(true).Render("i"), msg.text, m.width, lipgloss.NewStyle())
@@ -672,7 +677,7 @@ func nudgePresentation(severity string) (string, lipgloss.Style) {
 	if severity == "error" {
 		return sNudgeErrMarker.Render("⚠"), sNudgeErrText
 	}
-	return sNudgeWarnMarker.Render("⚡"), sNudgeWarnText
+	return sNudgeWarnMarker.Render("▸"), sNudgeWarnText
 }
 
 func logPrefix(ts, marker string) string {
