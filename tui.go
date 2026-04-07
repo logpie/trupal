@@ -63,6 +63,7 @@ type model struct {
 	lines        []string // chat log lines
 	width        int
 	height       int
+	scrollOffset int    // 0 = bottom (latest), positive = scrolled up
 	ccStatus     string
 	brainState   string
 	buildState   string
@@ -100,9 +101,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+		case "up", "k":
+			if m.scrollOffset < len(m.lines)-1 {
+				m.scrollOffset++
+			}
+		case "down", "j":
+			if m.scrollOffset > 0 {
+				m.scrollOffset--
+			}
+		case "pgup":
+			m.scrollOffset += 10
+			max := len(m.lines) - 1
+			if max < 0 {
+				max = 0
+			}
+			if m.scrollOffset > max {
+				m.scrollOffset = max
+			}
+		case "pgdown":
+			m.scrollOffset -= 10
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
+		case "home", "g":
+			m.scrollOffset = len(m.lines) - 1
+		case "end", "G":
+			m.scrollOffset = 0
 		}
 		return m, nil
 
@@ -217,6 +245,10 @@ func (m *model) addLine(line string) {
 	} else {
 		m.lines = append(m.lines, ts+" "+line)
 	}
+	// Auto-scroll to bottom if user is at bottom.
+	if m.scrollOffset == 0 {
+		// Already at bottom, stay there.
+	}
 	m.trimLines()
 }
 
@@ -269,20 +301,36 @@ func (m model) View() string {
 		logHeight = 1
 	}
 
-	// Get the last N lines that fit.
-	visibleLines := m.lines
-	if len(visibleLines) > logHeight {
-		visibleLines = visibleLines[len(visibleLines)-logHeight:]
+	// Window into the log based on scroll offset.
+	total := len(m.lines)
+	end := total - m.scrollOffset
+	if end < 0 {
+		end = 0
+	}
+	start := end - logHeight
+	if start < 0 {
+		start = 0
 	}
 
-	// Pad with empty lines if log is shorter than available space.
+	visibleLines := make([]string, 0, logHeight)
+	if start < end && end <= total {
+		visibleLines = append(visibleLines, m.lines[start:end]...)
+	}
+
+	// Pad with empty lines.
 	for len(visibleLines) < logHeight {
 		visibleLines = append(visibleLines, "")
 	}
 
+	// Scroll indicator in footer.
+	scrollHint := ""
+	if m.scrollOffset > 0 {
+		scrollHint = fmt.Sprintf(" ↑%d", m.scrollOffset)
+	}
+
 	logContent := strings.Join(visibleLines, "\n")
 
-	return header + "\n" + sep + "\n" + logContent + "\n" + sep + "\n" + footer
+	return header + "\n" + sep + "\n" + logContent + "\n" + sep + "\n" + footer + dimStyle.Render(scrollHint)
 }
 
 func wordWrap(text string, width int) []string {
