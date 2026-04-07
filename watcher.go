@@ -23,6 +23,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 	findings := NewFindingStore()
 	logPath := filepath.Join(projectDir, ".trupal.log")
 	var lastLogHash uint64
+	var lastRenderHash uint64
 
 	os.WriteFile(logPath, nil, 0644)
 
@@ -411,9 +412,11 @@ func runWatchLoop(projectDir string, cfg Config) {
 			CCStatus:           ccStatus,
 		}
 
-		Render(state)
-
 		h := stateHash(state)
+		if h != lastRenderHash {
+			Render(state)
+			lastRenderHash = h
+		}
 		if h != lastLogHash {
 			WriteLog(logPath, state)
 			lastLogHash = h
@@ -561,6 +564,8 @@ func stateHash(state DisplayState) uint64 {
 		h.Write([]byte(f.Status))
 	}
 	h.Write([]byte(fmt.Sprintf("%v", state.BrainThinking)))
+	h.Write([]byte(state.BrainLastMsg))
+	h.Write([]byte(state.CCStatus))
 	return h.Sum64()
 }
 

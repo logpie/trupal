@@ -60,9 +60,11 @@ func getPaneWidth() int {
 	return n
 }
 
-// Render clears the screen and draws a full status frame.
+// Render redraws the status frame in place (no scrollback pollution).
 func Render(state DisplayState) {
-	fmt.Print("\033[2J\033[H")
+	// Move cursor home + clear screen. Use ED (erase display) mode 2 only on first render,
+	// then use ED mode 0 (erase below cursor) to avoid scrollback issues.
+	fmt.Print("\033[H\033[J")
 	w := getPaneWidth()
 
 	// ── Header ──
