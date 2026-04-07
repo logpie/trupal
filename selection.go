@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -42,7 +44,7 @@ func (s *Selection) UpdateDrag(x, y, scrollOffset int) {
 	s.endCol = x
 }
 
-// FinishDrag completes the selection. Returns the selected text.
+// FinishDrag completes the selection. Returns the selected text (full lines, ANSI stripped).
 func (s *Selection) FinishDrag(lines []string) string {
 	if !s.active || s.startLine < 0 {
 		s.Clear()
@@ -50,38 +52,19 @@ func (s *Selection) FinishDrag(lines []string) string {
 	}
 
 	// Normalize: start before end
-	sl, sc, el, ec := s.startLine, s.startCol, s.endLine, s.endCol
-	if sl > el || (sl == el && sc > ec) {
-		sl, sc, el, ec = el, ec, sl, sc
+	sl, el := s.startLine, s.endLine
+	if sl > el {
+		sl, el = el, sl
 	}
 
-	// Extract text
+	// Extract full lines, strip ANSI
 	var selected []string
 	for i := sl; i <= el && i < len(lines); i++ {
 		if i < 0 {
 			continue
 		}
-		line := stripAnsi(lines[i])
-		if sl == el {
-			// Single line selection
-			if sc < len(line) {
-				end := ec + 1
-				if end > len(line) {
-					end = len(line)
-				}
-				selected = append(selected, line[sc:end])
-			}
-		} else if i == sl {
-			if sc < len(line) {
-				selected = append(selected, line[sc:])
-			}
-		} else if i == el {
-			end := ec + 1
-			if end > len(line) {
-				end = len(line)
-			}
-			selected = append(selected, line[:end])
-		} else {
+		line := strings.TrimSpace(stripAnsi(lines[i]))
+		if line != "" {
 			selected = append(selected, line)
 		}
 	}
@@ -115,10 +98,18 @@ func (s *Selection) IsLineSelected(lineIdx int) bool {
 	return lineIdx >= sl && lineIdx <= el
 }
 
-// CopyToClipboard copies the selected text to system clipboard.
+// CopySelectedToClipboard copies text to clipboard.
+// Tries tmux buffer first (works over SSH), falls back to system clipboard.
 func CopySelectedToClipboard(text string) error {
 	if text == "" {
 		return nil
+	}
+	// tmux set-buffer works everywhere in tmux, even over SSH.
+	if os.Getenv("TMUX") != "" {
+		cmd := exec.Command("tmux", "set-buffer", text)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
 	}
 	return clipboard.WriteAll(text)
 }
