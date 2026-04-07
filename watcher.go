@@ -477,7 +477,6 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 			brainBusy = true
 			brainThinking = true
 			p.Send(brainStatusMsg{thinking: true})
-			p.Send(logLineMsg{line: sDim.Render("analyzing...")})
 			activeBrain := brain
 			findingsJSON := findings.ActiveJSON()
 
@@ -516,14 +515,24 @@ func runWatchLoop(projectDir string, cfg Config, p *tea.Program) {
 				buildOK = &v
 			}
 			p.Send(statusMsg{
-				ccStatus:   ccStatus,
-				buildOK:    buildOK,
-				buildErrs:  func() int { if state.Build != nil { return state.Build.ErrorCount }; return 0 }(),
-				buildTrend: func() string { if state.Build != nil { return state.Build.Trend }; return "" }(),
-				files:      changedFiles,
-				newFiles:   untrackedFiles,
-				elapsed:    session.Elapsed(),
-				project:    filepath.Base(projectDir),
+				ccStatus: ccStatus,
+				buildOK:  buildOK,
+				buildErrs: func() int {
+					if state.Build != nil {
+						return state.Build.ErrorCount
+					}
+					return 0
+				}(),
+				buildTrend: func() string {
+					if state.Build != nil {
+						return state.Build.Trend
+					}
+					return ""
+				}(),
+				files:    changedFiles,
+				newFiles: untrackedFiles,
+				elapsed:  session.Elapsed(),
+				project:  filepath.Base(projectDir),
 			})
 			lastStatusHash = sh
 		}
@@ -621,17 +630,17 @@ func buildTrend(history []int, buildOK bool) string {
 
 	// fix-then-break: previously clean, now broken.
 	if prev == 0 && curr > 0 {
-		return "was clean"
+		return "new breakage"
 	}
 
 	// Progress: error count decreased.
 	if prev > curr {
-		return fmt.Sprintf("was %d", prev)
+		return "fewer errors than last cycle"
 	}
 
 	// Regression: error count increased from a non-zero baseline.
 	if prev > 0 && curr > prev {
-		return fmt.Sprintf("was %d", prev)
+		return "more errors than last cycle"
 	}
 
 	// Stall: same non-zero count for several cycles.
@@ -645,7 +654,7 @@ func buildTrend(history []int, buildOK bool) string {
 			}
 		}
 		if stallLen >= 3 {
-			return fmt.Sprintf("stalled x%d", stallLen)
+			return fmt.Sprintf("%d cycles", stallLen)
 		}
 	}
 

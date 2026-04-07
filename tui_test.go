@@ -180,12 +180,12 @@ func TestLineTrimming(t *testing.T) {
 	}
 }
 
-func TestLogLabeledCompactWrap(t *testing.T) {
+func TestLogStyledCompactWrap(t *testing.T) {
 	m := initialModel("test")
 	m.width = 48
 
 	text := "GetOrLoadConfig swallows both os.ReadFile and json.Unmarshal errors instead of returning them."
-	m.logLabeled("!", text, m.width)
+	m.logStyled("!", text, m.width, lipgloss.NewStyle())
 
 	if len(m.lines) < 2 {
 		t.Fatalf("expected wrapped log entry, got %d line(s)", len(m.lines))
@@ -213,18 +213,19 @@ func TestLogLabeledCompactWrap(t *testing.T) {
 	}
 }
 
-func TestLogNudgeCompactWrap(t *testing.T) {
+func TestLogNudgeUsesSharedLayoutWithoutAccentBar(t *testing.T) {
 	m := initialModel("test")
 	m.width = 48
 
 	text := "Return the real parse error here so the next retry doesn't keep masking the root cause."
-	m.logNudge("!", text, m.width, "warn")
+	label, textStyle := nudgePresentation("warn")
+	m.logStyled(label, text, m.width, textStyle)
 
 	if len(m.lines) < 2 {
 		t.Fatalf("expected wrapped nudge entry, got %d line(s)", len(m.lines))
 	}
 
-	wrapped := wrap(text, logNudgeTextWidth(m.width))
+	wrapped := wrap(text, logTextWidth(m.width))
 	if len(wrapped) < 2 {
 		t.Fatalf("expected wrapped nudge content, got %d segment(s)", len(wrapped))
 	}
@@ -233,8 +234,8 @@ func TestLogNudgeCompactWrap(t *testing.T) {
 		if got := lipgloss.Width(line); got > m.width {
 			t.Fatalf("line %d exceeds pane width: got %d want <= %d", i, got, m.width)
 		}
-		if !containsStr(line, "▌") {
-			t.Fatalf("expected nudge accent bar in line %d: %q", i, line)
+		if containsStr(line, "▌") {
+			t.Fatalf("unexpected nudge accent bar in line %d: %q", i, line)
 		}
 	}
 

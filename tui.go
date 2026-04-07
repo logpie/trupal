@@ -21,10 +21,10 @@ var (
 	sCyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	sSep   = lipgloss.NewStyle().Faint(true)
 
-	sNudgeWarnBar  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
-	sNudgeWarnText = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("58")).Padding(0, 1)
-	sNudgeErrBar   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
-	sNudgeErrText  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("52")).Padding(0, 1)
+	sNudgeWarnMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("3"))
+	sNudgeWarnText   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
+	sNudgeErrMarker  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1"))
+	sNudgeErrText    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
 
 	sHeaderTitle  = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
 	sHeaderLine   = lipgloss.NewStyle().PaddingLeft(1)
@@ -40,7 +40,7 @@ var (
 const (
 	logTimeWidth   = 5
 	logGapWidth    = 2
-	logMarkerWidth = 1
+	logMarkerWidth = 2
 )
 
 // --- Messages ---
@@ -229,7 +229,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if *msg.buildOK {
 				m.buildState = sOk.Render("✓") + " build"
 			} else {
-				label := fmt.Sprintf("%d err", msg.buildErrs)
+				label := "build failing"
 				if msg.buildTrend != "" {
 					label += " (" + msg.buildTrend + ")"
 				}
@@ -244,19 +244,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case nudgeMsg:
 		m.findings++
-		// Label + color based on severity
-		label := sWarn.Bold(true).Render("!")
-		if msg.finding.Severity == "error" {
-			label = sErr.Bold(true).Render("!")
-		}
-		m.log("")
-		// Observation context
+		label, textStyle := nudgePresentation(msg.finding.Severity)
 		if msg.finding.Reasoning != "" {
-			m.logLabeled(sCyan.Bold(true).Render("i"), msg.finding.Reasoning, m.width)
+			m.logStyled(sCyan.Bold(true).Render("i"), msg.finding.Reasoning, m.width, lipgloss.NewStyle())
 		}
-		// Actionable nudge
-		m.logNudge(label, msg.finding.Nudge, m.width, msg.finding.Severity)
-		m.log("")
+		m.logStyled(label, msg.finding.Nudge, m.width, textStyle)
 
 	case resolvedMsg:
 		m.findings--
@@ -264,13 +256,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.findings = 0
 		}
 		m.resolved++
-		m.logLabeled(sOk.Bold(true).Render("✓"), sDim.Render(msg.finding.Nudge), m.width)
+		m.logStyled(sOk.Bold(true).Render("✓"), msg.finding.Nudge, m.width, sDim)
 
 	case observationMsg:
-		m.logLabeled(sCyan.Bold(true).Render("i"), msg.text, m.width)
+		m.logStyled(sCyan.Bold(true).Render("i"), msg.text, m.width, lipgloss.NewStyle())
 
 	case trajectoryMsg:
-		m.logLabeled(sWarn.Bold(true).Render("→"), msg.message, m.width)
+		m.logStyled(sWarn.Bold(true).Render("→"), msg.message, m.width, lipgloss.NewStyle())
 
 	case brainStatusMsg:
 		if msg.thinking {
@@ -322,12 +314,12 @@ func (m model) brainIndicator() string {
 
 // --- Log helpers ---
 
-// logLabeled renders a compact event lane tuned for narrow panes:
+// logStyled renders a compact event lane tuned for narrow panes:
 // "HH:MM  !  first line of text"
 // "       │  continuation line"
 // Wrap width is derived from the visible prefix width so the text uses the
 // full pane, even when styles add ANSI escape sequences.
-func (m *model) logLabeled(label, text string, w int) {
+func (m *model) logStyled(label, text string, w int, textStyle lipgloss.Style) {
 	textW := logTextWidth(w)
 	if textW < 18 {
 		textW = 18
@@ -339,34 +331,12 @@ func (m *model) logLabeled(label, text string, w int) {
 
 	ts := time.Now().Format("15:04")
 	for i, line := range lines {
-		if i == 0 {
-			m.lines = append(m.lines, renderLogLine(ts, label, line))
-			m.trim()
-		} else {
-			m.lines = append(m.lines, renderContinuationLine(line))
-			m.trim()
-		}
-	}
-}
-
-func (m *model) logNudge(label, text string, w int, severity string) {
-	textW := logNudgeTextWidth(w)
-	if textW < 14 {
-		textW = 14
-	}
-	lines := wrap(text, textW)
-	if len(lines) == 0 {
-		lines = []string{""}
-	}
-
-	ts := time.Now().Format("15:04")
-	for i, line := range lines {
-		body := renderNudgeBody(line, severity)
+		body := textStyle.Render(line)
 		if i == 0 {
 			m.lines = append(m.lines, renderLogLine(ts, label, body))
 			m.trim()
 		} else {
-			m.lines = append(m.lines, renderContinuationLineWithMarker(" ", body))
+			m.lines = append(m.lines, renderContinuationLine(body))
 			m.trim()
 		}
 	}
@@ -673,10 +643,6 @@ func logTextWidth(total int) int {
 	return total - lipgloss.Width(logPrefix("", ""))
 }
 
-func logNudgeTextWidth(total int) int {
-	return total - lipgloss.Width(logPrefix("", "")) - lipgloss.Width(renderNudgeBody("", "warn"))
-}
-
 func renderLogLine(ts, marker, text string) string {
 	return lipgloss.JoinHorizontal(
 		lipgloss.Top,
@@ -703,21 +669,11 @@ func renderContinuationLineWithMarker(marker, text string) string {
 	)
 }
 
-func renderNudgeBody(text, severity string) string {
-	barStyle, textStyle := nudgeStyles(severity)
-	return lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		barStyle.Render("▌"),
-		" ",
-		textStyle.Render(text),
-	)
-}
-
-func nudgeStyles(severity string) (lipgloss.Style, lipgloss.Style) {
+func nudgePresentation(severity string) (string, lipgloss.Style) {
 	if severity == "error" {
-		return sNudgeErrBar, sNudgeErrText
+		return sNudgeErrMarker.Render("⚠"), sNudgeErrText
 	}
-	return sNudgeWarnBar, sNudgeWarnText
+	return sNudgeWarnMarker.Render("⚡"), sNudgeWarnText
 }
 
 func logPrefix(ts, marker string) string {

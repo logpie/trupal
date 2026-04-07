@@ -89,7 +89,7 @@ func (s *Session) EvalTrajectory() []Finding {
 			if tail[0] <= tail[1] && tail[1] <= tail[2] && tail[2] > tail[0] {
 				findings = append(findings, Finding{
 					Level:   "warn",
-					Message: fmt.Sprintf("build errors are increasing (%d → %d → %d)", tail[0], tail[1], tail[2]),
+					Message: "build errors increasing",
 				})
 			}
 		}
@@ -122,7 +122,6 @@ func (s *Session) Reset() {
 	s.ErrorHistory = nil
 	s.LastDiffHash = make(map[string]uint64)
 }
-
 
 // fnvHash returns the FNV-64a hash of s.
 func fnvHash(s string) uint64 {
