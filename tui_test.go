@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestScrollBasic(t *testing.T) {
@@ -175,6 +176,39 @@ func TestLineTrimming(t *testing.T) {
 
 	if len(m.lines) != 500 {
 		t.Fatalf("expected 500 lines after trim, got %d", len(m.lines))
+	}
+}
+
+func TestLogLabeledCompactWrap(t *testing.T) {
+	m := initialModel("test")
+	m.width = 48
+
+	text := "GetOrLoadConfig swallows both os.ReadFile and json.Unmarshal errors instead of returning them."
+	m.logLabeled("!", text, m.width)
+
+	if len(m.lines) < 2 {
+		t.Fatalf("expected wrapped log entry, got %d line(s)", len(m.lines))
+	}
+
+	wrapped := wrap(text, logTextWidth(m.width))
+	if len(wrapped) < 2 {
+		t.Fatalf("expected wrapped content, got %d segment(s)", len(wrapped))
+	}
+
+	for i, line := range m.lines {
+		if got := lipgloss.Width(line); got > m.width {
+			t.Fatalf("line %d exceeds pane width: got %d want <= %d", i, got, m.width)
+		}
+	}
+
+	firstIndent := lipgloss.Width(m.lines[0]) - lipgloss.Width(wrapped[0])
+	secondIndent := lipgloss.Width(m.lines[1]) - lipgloss.Width(wrapped[1])
+	if firstIndent != secondIndent {
+		t.Fatalf("wrapped text does not align: first indent=%d second indent=%d", firstIndent, secondIndent)
+	}
+
+	if !containsStr(m.lines[1], "│") {
+		t.Fatalf("expected continuation marker in wrapped line: %q", m.lines[1])
 	}
 }
 

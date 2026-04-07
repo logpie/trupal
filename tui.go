@@ -20,6 +20,22 @@ var (
 	sOk    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	sCyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	sSep   = lipgloss.NewStyle().Faint(true)
+
+	sHeaderTitle  = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
+	sHeaderLine   = lipgloss.NewStyle().PaddingLeft(1)
+	sIndicatorGap = lipgloss.NewStyle().PaddingRight(2)
+	sFooterLine   = lipgloss.NewStyle().Faint(true).PaddingLeft(1)
+
+	sLogTimeCell   = lipgloss.NewStyle().Faint(true).Width(logTimeWidth).Align(lipgloss.Right)
+	sLogGapCell    = lipgloss.NewStyle().Width(logGapWidth)
+	sLogMarkerCell = lipgloss.NewStyle().Width(logMarkerWidth).Align(lipgloss.Center)
+	sLogGutterCell = lipgloss.NewStyle().Faint(true).Width(logMarkerWidth).Align(lipgloss.Center)
+)
+
+const (
+	logTimeWidth   = 5
+	logGapWidth    = 2
+	logMarkerWidth = 1
 )
 
 // --- Messages ---
@@ -211,14 +227,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case nudgeMsg:
 		m.findings++
 		// Label + color based on severity
-		label := sWarn.Render("nudge")
+		label := sWarn.Bold(true).Render("!")
 		if msg.finding.Severity == "error" {
-			label = sErr.Render("nudge")
+			label = sErr.Bold(true).Render("!")
 		}
 		m.log("")
 		// Observation context
 		if msg.finding.Reasoning != "" {
-			m.logLabeled(sCyan.Render("seen"), msg.finding.Reasoning, m.width)
+			m.logLabeled(sCyan.Bold(true).Render("i"), msg.finding.Reasoning, m.width)
 		}
 		// Actionable nudge
 		m.logLabeled(label, msg.finding.Nudge, m.width)
@@ -230,13 +246,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.findings = 0
 		}
 		m.resolved++
-		m.logLabeled(sOk.Render("fixed"), sDim.Render(msg.finding.Nudge), m.width)
+		m.logLabeled(sOk.Bold(true).Render("✓"), sDim.Render(msg.finding.Nudge), m.width)
 
 	case observationMsg:
-		m.logLabeled(sCyan.Render("seen"), msg.text, m.width)
+		m.logLabeled(sCyan.Bold(true).Render("i"), msg.text, m.width)
 
 	case trajectoryMsg:
-		m.logLabeled(sWarn.Render("track"), msg.message, m.width)
+		m.logLabeled(sWarn.Bold(true).Render("→"), msg.message, m.width)
 
 	case brainStatusMsg:
 		if msg.thinking {
@@ -271,37 +287,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // --- Log helpers ---
 
-// logLabeled prints "HH:MM  label  text" with wrapped continuation lines.
-// Layout: "HH:MM  label  first line of text"
-//         "              continuation line"
-// The indent is 14 chars (6 timestamp + 2 gap + ~5 label + 1 gap).
-// Text wraps at pane width minus indent.
+// logLabeled renders a compact event lane tuned for narrow panes:
+// "HH:MM  !  first line of text"
+// "       │  continuation line"
+// Wrap width is derived from the visible prefix width so the text uses the
+// full pane, even when styles add ANSI escape sequences.
 func (m *model) logLabeled(label, text string, w int) {
-	// "HH:MM  label  first line..."
-	// "       continuation..."
-	//  ^5+2   ^7 = continuation indent
-	// w = pane width. Subtract timestamp(5) + spaces(2) + label(~6) + space(1) = ~14
-	textW := w - 14
-	if textW < 20 {
-		textW = 20
+	textW := logTextWidth(w)
+	if textW < 18 {
+		textW = 18
 	}
 	lines := wrap(text, textW)
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+
+	ts := time.Now().Format("15:04")
 	for i, line := range lines {
 		if i == 0 {
-			m.log(label + "  " + line)
+			m.lines = append(m.lines, renderLogLine(ts, label, line))
+			m.trim()
 		} else {
-			m.lines = append(m.lines, "       "+line)
+			m.lines = append(m.lines, renderContinuationLine(line))
 			m.trim()
 		}
 	}
 }
 
 func (m *model) log(line string) {
-	ts := sDim.Render(time.Now().Format("15:04"))
+	ts := sLogTimeCell.Render(time.Now().Format("15:04"))
 	if line == "" {
 		m.lines = append(m.lines, "")
 	} else {
-		m.lines = append(m.lines, ts+"  "+line)
+		m.lines = append(m.lines, lipgloss.JoinHorizontal(lipgloss.Top, ts, sLogGapCell.Render(""), line))
 	}
 	if m.scrollOffset == 0 { /* auto-scroll: already at bottom */
 	}
@@ -309,7 +327,12 @@ func (m *model) log(line string) {
 }
 
 func (m *model) raw(line string) {
-	m.lines = append(m.lines, "          "+line) // align with text after timestamp
+	m.lines = append(m.lines, lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		sLogTimeCell.Render(""),
+		sLogGapCell.Render(""),
+		line,
+	))
 	m.trim()
 }
 
@@ -347,9 +370,9 @@ func (m model) logH() int {
 }
 
 func (m model) contentW() int {
-	w := m.width - 14
-	if w < 20 {
-		return 20
+	w := logTextWidth(m.width)
+	if w < 18 {
+		return 18
 	}
 	return w
 }
@@ -427,7 +450,11 @@ func (m model) View() string {
 	w := m.width
 
 	// ── Header line 1: trupal · project · 5m ──
-	h1 := sTitle.Render(" trupal") + sDim.Render(" · "+m.project+" · "+m.elapsed)
+	h1 := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		sHeaderTitle.Render("trupal"),
+		sDim.Render(" · "+m.project+" · "+m.elapsed),
+	)
 
 	// ── Header line 2: status indicators ──
 	indicators := []string{}
@@ -447,7 +474,15 @@ func (m model) View() string {
 	if m.resolved > 0 {
 		indicators = append(indicators, sOk.Render(fmt.Sprintf("✓ %d", m.resolved)))
 	}
-	h2 := " " + strings.Join(indicators, "  ")
+	h2Items := make([]string, 0, len(indicators))
+	for i, indicator := range indicators {
+		if i < len(indicators)-1 {
+			h2Items = append(h2Items, sIndicatorGap.Render(indicator))
+		} else {
+			h2Items = append(h2Items, indicator)
+		}
+	}
+	h2 := sHeaderLine.Render(lipgloss.JoinHorizontal(lipgloss.Top, h2Items...))
 
 	sep := sSep.Render(strings.Repeat("─", w))
 
@@ -471,27 +506,42 @@ func (m model) View() string {
 	}
 
 	// ── Footer — truncate to fit pane width ──
-	footerText := ""
+	footerParts := []string{}
 	if m.scrollOffset > 0 {
-		footerText = fmt.Sprintf(" ↑%d", m.scrollOffset)
+		footerParts = append(footerParts, fmt.Sprintf("↑%d", m.scrollOffset))
 	}
 	if m.fileLine != "" {
-		remaining := w - len(footerText) - 3
-		fl := m.fileLine
-		if len(fl) > remaining && remaining > 10 {
-			fl = fl[:remaining-1] + "…"
+		used := joinWidth(footerParts, "  ")
+		remaining := w - used - 1
+		if len(footerParts) > 0 {
+			remaining -= 2
 		}
-		footerText += "  " + fl
+		if remaining > 0 {
+			footerParts = append(footerParts, truncateWidth(m.fileLine, remaining))
+		}
 	}
 	// Toast message (temporary)
 	if m.toastMsg != "" && time.Now().Before(m.toastExpiry) {
-		footerText += "  " + m.toastMsg
+		used := joinWidth(footerParts, "  ")
+		remaining := w - used - 1
+		if len(footerParts) > 0 {
+			remaining -= 2
+		}
+		if remaining > 0 {
+			footerParts = append(footerParts, truncateWidth(m.toastMsg, remaining))
+		}
 	}
-	footer := sDim.Render(footerText)
+	footer := sFooterLine.Render(strings.Join(footerParts, "  "))
 
-	return h1 + "\n" + h2 + "\n" + sep + "\n" +
-		strings.Join(visible, "\n") + "\n" +
-		sep + "\n" + footer
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		h1,
+		h2,
+		sep,
+		strings.Join(visible, "\n"),
+		sep,
+		footer,
+	)
 }
 
 // --- Helpers ---
@@ -511,22 +561,40 @@ func wrap(text string, width int) []string {
 	if width < 10 {
 		width = 10
 	}
-	text = strings.ReplaceAll(text, "\n", " ")
-	var lines []string
-	for len(text) > 0 {
-		if len(text) <= width {
-			lines = append(lines, text)
-			break
+	text = strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
+	if text == "" {
+		return nil
+	}
+
+	words := strings.Fields(text)
+	lines := make([]string, 0, len(words))
+	current := ""
+
+	for _, word := range words {
+		if lipgloss.Width(word) > width {
+			if current != "" {
+				lines = append(lines, current)
+				current = ""
+			}
+			lines = append(lines, wrapWord(word, width)...)
+			continue
 		}
-		cut := width
-		for cut > 0 && text[cut] != ' ' {
-			cut--
+
+		candidate := word
+		if current != "" {
+			candidate = current + " " + word
 		}
-		if cut == 0 {
-			cut = width
+		if lipgloss.Width(candidate) <= width {
+			current = candidate
+			continue
 		}
-		lines = append(lines, text[:cut])
-		text = strings.TrimLeft(text[cut:], " ")
+
+		lines = append(lines, current)
+		current = word
+	}
+
+	if current != "" {
+		lines = append(lines, current)
 	}
 	return lines
 }
@@ -541,4 +609,90 @@ func joinBase(files []string, max int) string {
 		names = append(names, filepath.Base(f))
 	}
 	return strings.Join(names, " ")
+}
+
+func logTextWidth(total int) int {
+	return total - lipgloss.Width(logPrefix("", ""))
+}
+
+func renderLogLine(ts, marker, text string) string {
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		sLogTimeCell.Render(ts),
+		sLogGapCell.Render(""),
+		sLogMarkerCell.Render(marker),
+		sLogGapCell.Render(""),
+		text,
+	)
+}
+
+func renderContinuationLine(text string) string {
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		sLogTimeCell.Render(""),
+		sLogGapCell.Render(""),
+		sLogGutterCell.Render("│"),
+		sLogGapCell.Render(""),
+		text,
+	)
+}
+
+func logPrefix(ts, marker string) string {
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		sLogTimeCell.Render(ts),
+		sLogGapCell.Render(""),
+		sLogMarkerCell.Render(marker),
+		sLogGapCell.Render(""),
+	)
+}
+
+func wrapWord(word string, width int) []string {
+	if width < 1 {
+		return []string{word}
+	}
+
+	var parts []string
+	var chunk strings.Builder
+	for _, r := range word {
+		next := chunk.String() + string(r)
+		if chunk.Len() > 0 && lipgloss.Width(next) > width {
+			parts = append(parts, chunk.String())
+			chunk.Reset()
+		}
+		chunk.WriteRune(r)
+	}
+	if chunk.Len() > 0 {
+		parts = append(parts, chunk.String())
+	}
+	return parts
+}
+
+func truncateWidth(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(text) <= width {
+		return text
+	}
+	if width == 1 {
+		return "…"
+	}
+
+	var out strings.Builder
+	for _, r := range text {
+		next := out.String() + string(r)
+		if lipgloss.Width(next+"…") > width {
+			break
+		}
+		out.WriteRune(r)
+	}
+	return out.String() + "…"
+}
+
+func joinWidth(parts []string, sep string) int {
+	if len(parts) == 0 {
+		return 0
+	}
+	return lipgloss.Width(strings.Join(parts, sep))
 }
