@@ -209,22 +209,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case nudgeMsg:
 		m.findings++
-		icon := sWarn.Render("⚠")
-		if msg.finding.Severity == "error" {
-			icon = sErr.Render("✗")
-		}
 		w := m.contentW()
 		m.log("")
-		for i, line := range wrap(msg.finding.Nudge, w) {
-			if i == 0 {
-				m.log(icon + " " + line)
-			} else {
-				m.raw("  " + line)
+		// Observation (what trupal saw) — dim
+		if msg.finding.Reasoning != "" {
+			for i, line := range wrap(msg.finding.Reasoning, w-2) {
+				if i == 0 {
+					m.log(sDim.Render("  " + line))
+				} else {
+					m.raw(sDim.Render("  " + line))
+				}
 			}
 		}
-		if msg.finding.Reasoning != "" {
-			for _, line := range wrap(msg.finding.Reasoning, w) {
-				m.raw("  " + sDim.Render(line))
+		// Nudge (what CC should do) — yellow arrow
+		icon := sWarn.Render("→")
+		if msg.finding.Severity == "error" {
+			icon = sErr.Render("→")
+		}
+		for i, line := range wrap(msg.finding.Nudge, w-4) {
+			if i == 0 {
+				m.raw("  " + icon + " " + line)
+			} else {
+				m.raw("    " + line)
 			}
 		}
 		m.log("")
@@ -238,14 +244,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w := m.contentW()
 		for i, line := range wrap(msg.finding.Nudge, w) {
 			if i == 0 {
-				m.log(sOk.Render("✓") + " " + sDim.Render(line))
+				m.log(sOk.Render("✓ ") + sDim.Render(line))
 			} else {
 				m.raw("  " + sDim.Render(line))
 			}
 		}
 
 	case trajectoryMsg:
-		m.log(sWarn.Render("▸") + " " + msg.message)
+		// Make trajectory signals human-readable
+		m.log(sDim.Render("  " + msg.message))
 
 	case brainStatusMsg:
 		if msg.thinking {

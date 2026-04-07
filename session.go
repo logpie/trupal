@@ -68,7 +68,7 @@ func (s *Session) EvalTrajectory() []Finding {
 		if count >= 3 {
 			findings = append(findings, Finding{
 				Level:   "warn",
-				Message: fmt.Sprintf("%s edited %dx", filename, count),
+				Message: fmt.Sprintf("you've edited %s %d times this session", filename, count),
 			})
 		}
 	}
@@ -89,7 +89,7 @@ func (s *Session) EvalTrajectory() []Finding {
 			if tail[0] <= tail[1] && tail[1] <= tail[2] && tail[2] > tail[0] {
 				findings = append(findings, Finding{
 					Level:   "warn",
-					Message: fmt.Sprintf("errors up: %d→%d→%d", tail[0], tail[1], tail[2]),
+					Message: fmt.Sprintf("build errors are increasing (%d → %d → %d)", tail[0], tail[1], tail[2]),
 				})
 			}
 		}
