@@ -1,15 +1,20 @@
 package main
 
 import (
+	"encoding/base64"
+	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func base64Encode(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
+}
 
 const (
 	selectionTabWidth = 8
@@ -207,20 +212,19 @@ func CopySelectedToClipboard(text string) error {
 		return nil
 	}
 
+	// OSC 52: set system clipboard via terminal escape sequence.
+	// Works over SSH, through tmux, on Ghostty/iTerm2/most modern terminals.
+	encoded := base64Encode(text)
+	fmt.Fprintf(os.Stderr, "\033]52;c;%s\a", encoded)
+
+	// Also set tmux buffer as fallback.
 	if os.Getenv("TMUX") != "" {
 		loadCmd := exec.Command("tmux", "load-buffer", "-")
 		loadCmd.Stdin = strings.NewReader(text)
-		if err := loadCmd.Run(); err == nil {
-			return nil
-		}
-
-		setCmd := exec.Command("tmux", "set-buffer", "--", text)
-		if err := setCmd.Run(); err == nil {
-			return nil
-		}
+		loadCmd.Run()
 	}
 
-	return clipboard.WriteAll(text)
+	return nil
 }
 
 func ExpandTabs(line string, tabWidth int) string {
