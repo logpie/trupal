@@ -267,16 +267,9 @@ func (m model) View() string {
 		return ""
 	}
 	w := m.width
-	clamp := lipgloss.NewStyle().Width(w).MaxWidth(w)
 
-	// ── Header line 1: trupal · project               5m ──
-	right := sDim.Render(m.elapsed)
-	left := sTitle.Render(" trupal") + sDim.Render(" · "+m.project)
-	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 1
-	if gap < 1 {
-		gap = 1
-	}
-	h1 := clamp.Render(left + strings.Repeat(" ", gap) + right)
+	// ── Header line 1: trupal · project · 5m ──
+	h1 := sTitle.Render(" trupal") + sDim.Render(" · "+m.project+" · "+m.elapsed)
 
 	// ── Header line 2: status indicators ──
 	indicators := []string{}
@@ -296,7 +289,7 @@ func (m model) View() string {
 	if m.resolved > 0 {
 		indicators = append(indicators, sOk.Render(fmt.Sprintf("✓ %d", m.resolved)))
 	}
-	h2 := clamp.Render(" " + strings.Join(indicators, "  "))
+	h2 := " " + strings.Join(indicators, "  ")
 
 	sep := sSep.Render(strings.Repeat("─", w))
 
@@ -318,25 +311,20 @@ func (m model) View() string {
 	visible := make([]string, 0, lh)
 	if start < end {
 		for _, line := range m.lines[start:end] {
-			visible = append(visible, clamp.Render(line))
+			visible = append(visible, line)
 		}
 	}
 	for len(visible) < lh {
 		visible = append(visible, "")
 	}
 
-	// ── Footer: files + scroll hint + keys ──
+	// ── Footer ──
 	fl := sDim.Render(" " + m.fileLine)
 	scrollHint := ""
 	if m.scrollOffset > 0 {
 		scrollHint = sDim.Render(fmt.Sprintf("  ↑%d", m.scrollOffset))
 	}
-	keys := sDim.Render("j/k ↕")
-	fGap := w - lipgloss.Width(fl) - lipgloss.Width(scrollHint) - lipgloss.Width(keys) - 1
-	if fGap < 1 {
-		fGap = 1
-	}
-	footer := clamp.Render(fl + scrollHint + strings.Repeat(" ", fGap) + keys)
+	footer := fl + scrollHint
 
 	return h1 + "\n" + h2 + "\n" + sep + "\n" +
 		strings.Join(visible, "\n") + "\n" +
