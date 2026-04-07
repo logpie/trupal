@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,6 +14,10 @@ import (
 func runWatchLoop(projectDir string, cfg Config) {
 	InitDebugLog(projectDir)
 	defer CloseDebugLog()
+
+	// Handle SIGINT for graceful shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
 
 	session := NewSession(projectDir)
 	findings := NewFindingStore()
@@ -65,6 +70,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 
 	brainBusy := false
 	brainThinking := false
+	brainLastMsg := ""
 	interval := time.Duration(cfg.PollInterval) * time.Second
 
 	// Main loop ticker.
@@ -216,6 +222,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 
 				// Process response.
 				if resp != nil {
+					brainLastMsg = resp.Reasoning
 					for _, nudge := range resp.Nudges {
 						findings.Add(nudge.Severity, nudge.Message, resp.Reasoning)
 					}
@@ -255,6 +262,7 @@ func runWatchLoop(projectDir string, cfg Config) {
 			DeletedTests:       deletedTests,
 			BrainFindings:      findings.Recent(10),
 			BrainThinking:      brainThinking,
+			BrainLastMsg:       brainLastMsg,
 			CCStatus:           ccStatus,
 		}
 
@@ -266,7 +274,29 @@ func runWatchLoop(projectDir string, cfg Config) {
 			lastLogHash = h
 		}
 
-		<-ticker.C
+		// Wait for next tick or signal.
+		select {
+		case <-ticker.C:
+		case <-sigCh:
+			// Graceful shutdown.
+			Debugf("[watcher] received SIGINT, shutting down")
+			if brain != nil {
+				brain.Stop()
+			}
+			if jsonlWatcher != nil {
+				jsonlWatcher.Close()
+			}
+			fmt.Print("\033[2J\033[H")
+			fmt.Printf(" %strupal stopped%s\n", bold, reset)
+			fmt.Printf(" %ssession: %s%s\n", dim, session.Elapsed(), reset)
+			nFindings := len(findings.Recent(100))
+			fmt.Printf(" %s%d findings this session%s\n", dim, nFindings, reset)
+			fmt.Printf("\n %slog: .trupal.log%s\n", dim, reset)
+			fmt.Printf(" %sdebug: .trupal.debug%s\n", dim, reset)
+			// Block forever — keep process alive so tmux doesn't show "Pane is dead".
+			// User closes the pane manually (prefix+x or trupal stop --close).
+			select {}
+		}
 	}
 }
 
