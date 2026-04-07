@@ -117,6 +117,21 @@ func (s *Session) Elapsed() string {
 	return fmt.Sprintf("%ds", sec)
 }
 
+func (s *Session) Reset() {
+	s.FileEditCount = make(map[string]int)
+	s.ErrorHistory = nil
+	s.LastDiffHash = make(map[string]uint64)
+}
+
+func (s *Session) Summary() string {
+	totalEdits := 0
+	for _, c := range s.FileEditCount {
+		totalEdits += c
+	}
+	return fmt.Sprintf("files=%d edits=%d errors=%d duration=%s",
+		len(s.FileEditCount), totalEdits, len(s.ErrorHistory), s.Elapsed())
+}
+
 // fnvHash returns the FNV-64a hash of s.
 func fnvHash(s string) uint64 {
 	h := fnv.New64a()

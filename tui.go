@@ -67,9 +67,7 @@ type model struct {
 	// Footer state
 	fileLine string // current files summary
 
-	// Dedup
-	lastFileLine string
-	quitting     bool
+	quitting bool
 }
 
 func initialModel(project string) model {
@@ -138,15 +136,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.buildState = sErr.Render("✗") + " " + label
 			}
 		}
-		// Update footer files.
+		// Update footer files (shown in footer, not logged to chat).
 		fl := filesLine(msg.files, msg.newFiles)
 		if fl != "" {
 			m.fileLine = fl
-		}
-		// Log file changes only when different.
-		if fl != "" && fl != m.lastFileLine {
-			m.log(sDim.Render(fl))
-			m.lastFileLine = fl
 		}
 
 	case nudgeMsg:

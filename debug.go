@@ -35,6 +35,10 @@ func CloseDebugLog() {
 	}
 }
 
+func DebugEnabled() bool {
+	return debugLog.file != nil
+}
+
 // Debugf writes a timestamped line to the debug log.
 func Debugf(format string, args ...interface{}) {
 	debugLog.mu.Lock()

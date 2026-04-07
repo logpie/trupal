@@ -48,6 +48,27 @@ func (fs *FindingStore) Add(severity, nudge, reasoning string) string {
 	return id
 }
 
+func (fs *FindingStore) Count() (active, resolved int) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	for _, f := range fs.findings {
+		switch f.Status {
+		case "shown":
+			active++
+		case "resolved":
+			resolved++
+		}
+	}
+	return
+}
+
+func (fs *FindingStore) Clear() {
+	fs.mu.Lock()
+	fs.findings = nil
+	fs.nextID = 0
+	fs.mu.Unlock()
+}
+
 // Resolve marks matching findings as "resolved" if they are currently "shown".
 func (fs *FindingStore) Resolve(ids []string) {
 	fs.mu.Lock()

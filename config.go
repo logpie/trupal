@@ -75,6 +75,22 @@ func loadConfig(projectDir string) Config {
 	return cfg
 }
 
+func (cfg Config) String() string {
+	parts := []string{}
+	if cfg.BuildCmd != "" {
+		parts = append(parts, "build="+cfg.BuildCmd)
+	}
+	parts = append(parts, "brain="+cfg.BrainProvider+"/"+cfg.BrainModel)
+	parts = append(parts, "effort="+cfg.BrainEffort)
+	parts = append(parts, fmt.Sprintf("poll=%ds", cfg.PollInterval))
+	return strings.Join(parts, " ")
+}
+
+func ReloadConfig(projectDir string) Config {
+	cfg := loadConfig(projectDir)
+	return cfg
+}
+
 // Validate normalizes and validates config values that must match runtime support.
 func (cfg *Config) Validate() error {
 	cfg.BrainProvider = strings.ToLower(strings.TrimSpace(cfg.BrainProvider))

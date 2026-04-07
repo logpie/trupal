@@ -66,6 +66,16 @@ func ShouldRunBuild(changedFiles, untrackedFiles []string, extensions []string) 
 	return false
 }
 
+func ParseBuildErrors(output string) []string {
+	var errors []string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(strings.ToLower(line), "error") {
+			errors = append(errors, line)
+		}
+	}
+	return errors
+}
+
 // ScanDeletedTests checks git diff --name-status output for deleted test files.
 func ScanDeletedTests(nameStatus string) []string {
 	var deleted []string
