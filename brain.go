@@ -14,6 +14,7 @@ import (
 // BrainResponse is the parsed JSON response from the brain.
 type BrainResponse struct {
 	Reasoning        string       `json:"reasoning"`
+	Observations     []string     `json:"observations"`
 	Nudges           []BrainNudge `json:"nudges"`
 	ResolvedFindings []string     `json:"resolved_findings"`
 }
@@ -85,9 +86,18 @@ ALWAYS generate a nudge for it. Do NOT suppress nudges because you think CC is "
 is "intentional." Your job is to flag code problems. CC decides what to do with them.
 
 Respond with JSON only:
-{"reasoning": "1 sentence summary", "nudges": [{"severity": "warn|error", "message": "conversational nudge", "reasoning": "1 sentence explaining this specific finding"}], "resolved_findings": []}
+{
+  "observations": ["what you noticed — facts, patterns, context"],
+  "nudges": [{"severity": "warn|error", "message": "what CC should do", "reasoning": "why"}],
+  "resolved_findings": ["<finding_id>"]
+}
 
-Empty response: {"reasoning": "nothing to flag", "nudges": [], "resolved_findings": []}
+Not every observation needs a nudge. Report what you see. Only add a nudge when there's a specific action CC should take.
+
+Examples:
+- Observation only: {"observations": ["CC has edited watcher.go 4 times this session"], "nudges": [], "resolved_findings": []}
+- Observation + nudge: {"observations": ["CC deleted test files"], "nudges": [{"severity": "error", "message": "Hey, you deleted the test file — was that intentional?", "reasoning": "test_auth.py removed"}], "resolved_findings": []}
+- Nothing: {"observations": [], "nudges": [], "resolved_findings": []}
 
 Rules:
 - Reasoning: 1 sentence explaining what you checked. This is shown to the human as context below the nudge.

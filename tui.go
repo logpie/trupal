@@ -36,6 +36,7 @@ type statusMsg struct {
 }
 type nudgeMsg struct{ finding BrainFinding }
 type resolvedMsg struct{ finding BrainFinding }
+type observationMsg struct{ text string }
 type trajectoryMsg struct{ message string }
 type brainStatusMsg struct {
 	thinking bool
@@ -250,9 +251,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case observationMsg:
+		w := m.contentW()
+		for i, line := range wrap(msg.text, w-2) {
+			if i == 0 {
+				m.log("  " + line)
+			} else {
+				m.raw("  " + line)
+			}
+		}
+
 	case trajectoryMsg:
-		// Make trajectory signals human-readable
-		m.log(sDim.Render("  " + msg.message))
+		m.log("  " + msg.message)
 
 	case brainStatusMsg:
 		if msg.thinking {
