@@ -22,10 +22,8 @@ var (
 	sCyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	sSep   = lipgloss.NewStyle().Faint(true)
 
-	sNudgeWarnMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	sNudgeWarnText   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	sNudgeErrMarker  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	sNudgeErrText    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	sNudgeMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	sNudgeText   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
 	sHeaderTitle  = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
 	sHeaderLine   = lipgloss.NewStyle().PaddingLeft(1)
@@ -75,9 +73,12 @@ type statusMsg struct {
 	resolved   int
 	issues     []CurrentIssue
 }
-type nudgeMsg struct{ finding BrainFinding }
+type nudgeMsg struct {
+	finding BrainFinding
+	source  string
+	detail  []string
+}
 type resolvedMsg struct{ finding BrainFinding }
-type observationMsg struct{ text string }
 type trajectoryMsg struct{ message string }
 type patternMsg struct{ finding PatternFinding }
 type brainStatusMsg struct {
@@ -90,13 +91,24 @@ type tickMsg time.Time
 
 var copySelectedText = CopySelectedToClipboard
 
+type timelineEntry struct {
+	ID      string
+	Kind    string
+	Time    string
+	Marker  string
+	Summary string
+	Detail  []string
+}
+
 // --- Model ---
 
 type model struct {
-	// Log
-	lines        []string
-	scrollOffset int
+	// Timeline
+	entries       []timelineEntry
+	selectedEntry int
+	scrollOffset  int
 	recentEvents []string
+	lines        []string // legacy raw line buffer used by low-level log/selection tests
 
 	// Layout
 	width  int
@@ -113,12 +125,12 @@ type model struct {
 	brain      brainIndicatorState
 
 	// Footer state
-	fileLine    string // current files summary
-	issueItems  []CurrentIssue
-	issueCursor int
-	issueOpen   map[string]bool
-	issuePanelVisible bool
-	reviewTrace []reviewTraceEntry
+	fileLine           string // current files summary
+	issueItems         []CurrentIssue
+	issueCursor        int
+	issuesPopupVisible bool
+	issuePanelVisible  bool // compatibility alias for existing tests while popup work lands
+	detailOpen  map[string]bool
 	toastMsg    string // transient message (e.g. "copied!")
 	toastExpiry time.Time
 
@@ -135,11 +147,6 @@ type brainIndicatorState struct {
 	stats    BrainStats
 }
 
-type reviewTraceEntry struct {
-	Label string
-	Text  string
-}
-
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func initialModel(project string) model {
@@ -147,7 +154,7 @@ func initialModel(project string) model {
 		project:    project,
 		agentLabel: "agent",
 		ccStatus:   "starting",
-		issueOpen:  make(map[string]bool),
+		detailOpen: make(map[string]bool),
 		sel:        NewSelection(),
 	}
 }
@@ -166,6 +173,8 @@ func tickEvery() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+func (m model) popupVisible() bool { return m.issuesPopupVisible || m.issuePanelVisible }
+
 // --- Update ---
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -181,44 +190,76 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "up", "k":
-			m.scroll(1)
+			if m.issuesPopupVisible {
+				if len(m.issueItems) > 0 {
+					m.issueCursor = (m.issueCursor - 1 + len(m.issueItems)) % len(m.issueItems)
+				}
+			} else {
+				m.moveSelection(-1)
+			}
 		case "down", "j":
-			m.scroll(-1)
+			if m.issuesPopupVisible {
+				if len(m.issueItems) > 0 {
+					m.issueCursor = (m.issueCursor + 1) % len(m.issueItems)
+				}
+			} else {
+				m.moveSelection(1)
+			}
 		case "pgup":
 			m.scroll(10)
 		case "pgdown":
 			m.scroll(-10)
 		case "g", "home":
-			m.scrollOffset = m.maxScroll()
+			if len(m.entries) > 0 {
+				m.selectedEntry = 0
+				m.scrollSelectedIntoView()
+			} else {
+				m.scrollOffset = m.maxScroll()
+			}
 		case "G", "end":
-			m.scrollOffset = 0
+			if len(m.entries) > 0 {
+				m.selectedEntry = len(m.entries) - 1
+				m.scrollSelectedIntoView()
+			} else {
+				m.scrollOffset = 0
+			}
 		case "o":
+			if !m.popupVisible() && len(m.entries) > 0 {
+				entry := m.entries[m.selectedEntry]
+				if len(entry.Detail) > 0 {
+					key := entry.ID
+					if key == "" {
+						key = fmt.Sprintf("entry-%d", m.selectedEntry)
+					}
+					m.toggleEntryDetail(key)
+				}
+			}
+		case "p":
 			if len(m.issueItems) > 0 {
-				m.issuePanelVisible = !m.issuePanelVisible
+				next := !m.popupVisible()
+				m.issuesPopupVisible = next
+				m.issuePanelVisible = next
+				if next {
+					m.syncIssueCursorToSelection()
+				}
 			}
 		case "]":
-			if len(m.issueItems) > 0 && m.issuePanelVisible {
+			if len(m.issueItems) > 0 && m.popupVisible() {
 				m.issueCursor = (m.issueCursor + 1) % len(m.issueItems)
 			}
 		case "[":
-			if len(m.issueItems) > 0 && m.issuePanelVisible {
+			if len(m.issueItems) > 0 && m.popupVisible() {
 				m.issueCursor = (m.issueCursor - 1 + len(m.issueItems)) % len(m.issueItems)
-			}
-		case "tab":
-			if len(m.issueItems) > 0 && m.issuePanelVisible {
-				m.issueCursor = (m.issueCursor + 1) % len(m.issueItems)
-			}
-		case "shift+tab":
-			if len(m.issueItems) > 0 && m.issuePanelVisible {
-				m.issueCursor = (m.issueCursor - 1 + len(m.issueItems)) % len(m.issueItems)
-			}
-		case "enter", " ":
-			if len(m.issueItems) > 0 && m.issuePanelVisible {
-				key := m.issueItems[m.issueCursor].Key()
-				m.issueOpen[key] = !m.issueOpen[key]
 			}
 		case "esc":
+			m.issuesPopupVisible = false
 			m.issuePanelVisible = false
+		case "enter", " ":
+			if m.popupVisible() && len(m.issueItems) > 0 {
+				m.jumpToIssue(m.issueItems[m.issueCursor].Key())
+				m.issuesPopupVisible = false
+				m.issuePanelVisible = false
+			}
 		}
 
 	case tea.MouseMsg:
@@ -323,19 +364,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case nudgeMsg:
 		m.findings++
-		label, textStyle := nudgePresentation(msg.finding.Severity)
-		text := "issue: " + normalizeIssueText(msg.finding.Nudge)
-		m.pushReviewTrace("opened", normalizeIssueText(msg.finding.Nudge))
-		if m.shouldLogEvent("nudge", text) {
-			m.separateEvent()
-			m.logStyled(label, text, m.width, textStyle)
-			if why := strings.TrimSpace(msg.finding.Why); why != "" {
-				whyText := "why: " + compactEventText(why, 0)
-				if m.shouldLogEvent("why", whyText) {
-					m.logStyled(sDim.Render("·"), whyText, m.width, sDim)
-				}
-			}
-		}
+		m.logIssueEvent("nudge", msg.finding.ID, msg.finding.Severity, msg.finding.Nudge, msg.finding.Why, issueRef(msg.finding.ID, msg.finding.Timestamp), msg.source, msg.detail)
 
 	case resolvedMsg:
 		m.findings--
@@ -344,33 +373,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resolved++
 		text := "resolved: " + normalizeIssueText(msg.finding.Nudge)
-		m.pushReviewTrace("resolved", normalizeIssueText(msg.finding.Nudge))
 		if m.shouldLogEvent("resolved", text) {
-			m.separateEvent()
-			m.logStyled(sOk.Render("✓"), text, m.width, sDim)
+			m.appendEntry(timelineEntry{
+				ID:      msg.finding.ID,
+				Kind:    "resolved",
+				Time:    time.Now().Format("15:04"),
+				Marker:  "✓",
+				Summary: "resolved: " + normalizeIssueText(msg.finding.Nudge),
+			})
 		}
-
-	case observationMsg:
-		m.pushReviewTrace("review", compactEventText(msg.text, 72))
 
 	case trajectoryMsg:
-		m.separateEvent()
-		m.logStyled(sWarn.Bold(true).Render("→"), msg.message, m.width, lipgloss.NewStyle())
+		m.appendEntry(timelineEntry{
+			Kind:    "note",
+			Time:    time.Now().Format("15:04"),
+			Marker:  "→",
+			Summary: msg.message,
+		})
 
 	case patternMsg:
-		label, textStyle := nudgePresentation(msg.finding.Level)
-		text := "issue: " + normalizeIssueText(msg.finding.Message)
-		m.pushReviewTrace("opened", normalizeIssueText(msg.finding.Message))
-		if m.shouldLogEvent("pattern", text) {
-			m.separateEvent()
-			m.logStyled(label, text, m.width, textStyle)
-			if why := strings.TrimSpace(shortIssueWhy(msg.finding)); why != "" {
-				whyText := "why: " + compactEventText(why, 0)
-				if m.shouldLogEvent("pattern-why", whyText) {
-					m.logStyled(sDim.Render("·"), whyText, m.width, sDim)
-				}
-			}
-		}
+		m.logIssueEvent("pattern", msg.finding.Key, msg.finding.Level, msg.finding.Message, shortIssueWhy(msg.finding), msg.finding.Key, "", nil)
 
 	case brainStatusMsg:
 		if msg.thinking {
@@ -399,7 +421,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case logLineMsg:
-		m.log(msg.line)
+		m.appendEntry(timelineEntry{
+			Kind:    "log",
+			Time:    time.Now().Format("15:04"),
+			Marker:  "",
+			Summary: msg.line,
+		})
 	}
 
 	return m, nil
@@ -526,6 +553,25 @@ func chooseBrainStatsIndicator(stats BrainStats, maxWidth int) string {
 // "       │  continuation line"
 // Wrap width is derived from the visible prefix width so the text uses the
 // full pane, even when styles add ANSI escape sequences.
+func (m *model) appendEntry(entry timelineEntry) {
+	atEnd := len(m.entries) == 0 || m.selectedEntry >= len(m.entries)-1
+	m.entries = append(m.entries, entry)
+	if len(m.entries) > 200 {
+		evicted := len(m.entries) - 200
+		m.entries = m.entries[evicted:]
+		m.selectedEntry -= evicted
+		if m.selectedEntry < 0 {
+			m.selectedEntry = 0
+		}
+		m.sel.Clear()
+	}
+	if atEnd {
+		m.selectedEntry = len(m.entries) - 1
+		m.scrollSelectedIntoView()
+	}
+}
+
+// logStyled and log are retained for low-level wrapping/selection tests.
 func (m *model) logStyled(label, text string, w int, textStyle lipgloss.Style) {
 	textW := logTextWidth(w)
 	if textW < 18 {
@@ -541,12 +587,11 @@ func (m *model) logStyled(label, text string, w int, textStyle lipgloss.Style) {
 		body := textStyle.Render(line)
 		if i == 0 {
 			m.lines = append(m.lines, renderLogLine(ts, label, body))
-			m.trim()
 		} else {
 			m.lines = append(m.lines, renderContinuationLine(body))
-			m.trim()
 		}
 	}
+	m.trim()
 }
 
 func (m *model) log(line string) {
@@ -556,36 +601,59 @@ func (m *model) log(line string) {
 	} else {
 		m.lines = append(m.lines, lipgloss.JoinHorizontal(lipgloss.Top, ts, sLogGapCell.Render(""), line))
 	}
-	if m.scrollOffset == 0 { /* auto-scroll: already at bottom */
-	}
 	m.trim()
 }
 
-func (m *model) raw(line string) {
-	m.lines = append(m.lines, lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		sLogTimeCell.Render(""),
-		sLogGapCell.Render(""),
-		line,
-	))
-	m.trim()
+func (m *model) logIssueEvent(kind, id, severity, nudge, why, ref, source string, extraDetail []string) {
+	raw := strings.TrimSpace(strings.ReplaceAll(nudge, "`", ""))
+	short := normalizeIssueText(raw)
+	text := "issue: " + short
+	if m.shouldLogEvent(kind, text) {
+		entry := timelineEntry{
+			ID:      strings.TrimSpace(id),
+			Kind:    "issue",
+			Time:    time.Now().Format("15:04"),
+			Marker:  "!",
+			Summary: short,
+		}
+		if why = strings.TrimSpace(why); why != "" {
+			entry.Detail = append(entry.Detail, "Why\n"+why)
+		}
+		for _, block := range detailBlocksFromSource(source) {
+			entry.Detail = append(entry.Detail, block)
+		}
+		entry.Detail = append(entry.Detail, extraDetail...)
+		if strings.TrimSpace(ref) != "" {
+			entry.Detail = append(entry.Detail, "Seen\n"+ref)
+		}
+		m.appendEntry(entry)
+	}
 }
 
-func (m *model) separateEvent() {
-	if len(m.lines) == 0 {
-		return
+func detailBlocksFromSource(source string) []string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return nil
 	}
-	if strings.TrimSpace(ansi.Strip(m.lines[len(m.lines)-1])) == "" {
-		return
+	var blocks []string
+	switch {
+	case strings.Contains(source, "agent said:"):
+		claim := strings.TrimSpace(strings.SplitN(source, "agent said:", 2)[1])
+		blocks = append(blocks, "Claim\n"+claim)
+	case strings.Contains(source, "agent asked:"):
+		req := strings.TrimSpace(strings.SplitN(source, "agent asked:", 2)[1])
+		blocks = append(blocks, "Request\n"+req)
+	default:
+		blocks = append(blocks, "Context\n"+source)
 	}
-	m.raw("")
+	return blocks
 }
 
 func (m *model) trim() {
 	if len(m.lines) > 500 {
 		evicted := len(m.lines) - 500
 		m.lines = m.lines[evicted:]
-		m.sel.ShiftLinesAfter(len(m.reviewSurfaceLines()), evicted)
+		m.sel.ShiftLinesAfter(len(m.issuesPopupLines()), evicted)
 	}
 }
 
@@ -601,10 +669,11 @@ func (m *model) scroll(delta int) {
 
 func (m model) maxScroll() int {
 	lh := m.logViewportH()
-	if len(m.lines) <= lh {
+	lines, _ := m.renderedTimeline()
+	if len(lines) <= lh {
 		return 0
 	}
-	return len(m.lines) - lh
+	return len(lines) - lh
 }
 
 func (m model) logH() int {
@@ -621,6 +690,170 @@ func (m model) contentW() int {
 		return 18
 	}
 	return w
+}
+
+func (m model) renderEntry(entry timelineEntry, width int, open, selected bool) []string {
+	textW := logTextWidth(width)
+	if textW < 18 {
+		textW = 18
+	}
+
+	summaryLines := wrap(entry.Summary, textW)
+	if len(summaryLines) == 0 {
+		summaryLines = []string{""}
+	}
+
+	var lines []string
+	for i, line := range summaryLines {
+		body := line
+		if entry.Kind == "issue" {
+			body = sIssueText.Render(line)
+		} else if entry.Kind == "resolved" {
+			body = sDim.Render(line)
+		}
+		marker := entry.Marker
+		if selected {
+			body = sFocusBody.Render(ansi.Strip(line))
+			marker = "›"
+		} else if entry.Kind == "issue" {
+			marker = ""
+		}
+		if i == 0 {
+			lines = append(lines, renderLogLine(entry.Time, marker, body))
+		} else {
+			lines = append(lines, renderContinuationLine(body))
+		}
+	}
+
+	if open {
+		for _, block := range entry.Detail {
+			parts := strings.SplitN(block, "\n", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			label := parts[0]
+			value := parts[1]
+			style := sIssueWhy
+			if label == "Seen" {
+				style = sIssuePreview
+			}
+			lines = append(lines, renderDetailField(label, value, width-lipgloss.Width(logPrefix("", ""))-logGapWidth, style)...)
+		}
+	}
+	return lines
+}
+
+func (m model) renderedTimeline() ([]string, []int) {
+	if len(m.entries) == 0 {
+		owners := make([]int, len(m.lines))
+		for i := range owners {
+			owners[i] = -1
+		}
+		return append([]string{}, m.lines...), owners
+	}
+	var lines []string
+	var owners []int
+	for i, entry := range m.entries {
+		key := entry.ID
+		if key == "" {
+			key = fmt.Sprintf("entry-%d", i)
+		}
+		entryLines := m.renderEntry(entry, m.width, m.detailOpen[key], i == m.selectedEntry)
+		for _, line := range entryLines {
+			lines = append(lines, line)
+			owners = append(owners, i)
+		}
+		if i < len(m.entries)-1 {
+			lines = append(lines, "")
+			owners = append(owners, -1)
+		}
+	}
+	return lines, owners
+}
+
+func (m *model) moveSelection(delta int) {
+	if len(m.entries) == 0 {
+		m.scroll(-delta)
+		return
+	}
+	m.selectedEntry += delta
+	if m.selectedEntry < 0 {
+		m.selectedEntry = 0
+	}
+	if m.selectedEntry >= len(m.entries) {
+		m.selectedEntry = len(m.entries) - 1
+	}
+	m.scrollSelectedIntoView()
+}
+
+func (m *model) scrollSelectedIntoView() {
+	if len(m.entries) == 0 {
+		return
+	}
+	lines, owners := m.renderedTimeline()
+	if len(lines) == 0 || len(owners) == 0 {
+		m.scrollOffset = 0
+		return
+	}
+	startLine, endLine := -1, -1
+	for i, owner := range owners {
+		if owner != m.selectedEntry {
+			continue
+		}
+		if startLine == -1 {
+			startLine = i
+		}
+		endLine = i
+	}
+	if startLine == -1 {
+		return
+	}
+	lh := m.logViewportH()
+	start, end := m.visibleLogRange()
+	if startLine < start {
+		m.scrollOffset = len(lines) - (startLine + lh)
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
+		return
+	}
+	if endLine >= end {
+		m.scrollOffset = len(lines) - (endLine + 1)
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
+	}
+}
+
+func (m *model) toggleEntryDetail(key string) {
+	m.detailOpen[key] = !m.detailOpen[key]
+	m.scrollSelectedIntoView()
+}
+
+func (m *model) jumpToIssue(key string) {
+	for i, entry := range m.entries {
+		if entry.ID == key {
+			m.selectedEntry = i
+			m.scrollSelectedIntoView()
+			return
+		}
+	}
+}
+
+func (m *model) syncIssueCursorToSelection() {
+	if len(m.issueItems) == 0 || len(m.entries) == 0 {
+		return
+	}
+	selectedID := strings.TrimSpace(m.entries[m.selectedEntry].ID)
+	if selectedID == "" {
+		return
+	}
+	for i, issue := range m.issueItems {
+		if issue.Key() == selectedID {
+			m.issueCursor = i
+			return
+		}
+	}
 }
 
 func (m model) bodyRect() selectionRect {
@@ -642,43 +875,15 @@ func (m model) logRect() selectionRect {
 	}
 }
 
-func (m model) issuePanelLines() []string {
-	if len(m.issueItems) == 0 {
-		return nil
-	}
-	width := m.width - 2
-	if width < 12 {
-		width = 12
-	}
-	lines := []string{fmt.Sprintf("current issues (%d)  tab cycle  enter why", len(m.issueItems))}
-	for i, issue := range m.issueItems {
-		if i >= 3 {
-			lines = append(lines, fmt.Sprintf("+%d more", len(m.issueItems)-3))
-			break
-		}
-		prefix := "• "
-		if i == m.issueCursor {
-			prefix = "▸ "
-		}
-		lines = append(lines, prefix+truncateWidth(issue.Nudge, width-2))
-		if m.issueOpen[issue.Key()] && strings.TrimSpace(issue.Why) != "" {
-			for _, why := range wrap(issue.Why, width-4) {
-				lines = append(lines, "  why: "+why)
-			}
-		}
-	}
-	return lines
-}
-
 func controlsHint() string {
 	return "j/k scroll  pgup/pgdn  drag copy  ctrl+c quit"
 }
 
 func issueControlsHint() string {
-	return "[ ] switch issue  o hide"
+	return "j/k move  enter jump  p hide"
 }
 
-func renderFocusField(label, text string, width int, bodyStyle lipgloss.Style) []string {
+func renderLabeledField(label, text string, width int, bodyStyle lipgloss.Style) []string {
 	labelRendered := sFocusLabel.Render(label)
 	labelWidth := lipgloss.Width(labelRendered)
 	bodyWidth := width - labelWidth - 1
@@ -700,8 +905,60 @@ func renderFocusField(label, text string, width int, bodyStyle lipgloss.Style) [
 	return out
 }
 
-func (m model) reviewSurfaceLines() []string {
-	if len(m.issueItems) == 0 || !m.issuePanelVisible {
+func renderDetailField(label, text string, width int, bodyStyle lipgloss.Style) []string {
+	labelRendered := sFocusLabel.Render(label)
+	labelWidth := lipgloss.Width(labelRendered)
+	bodyWidth := width - labelWidth - 1
+	if bodyWidth < 12 {
+		bodyWidth = 12
+	}
+
+	lines := []string{}
+	paragraphs := strings.Split(strings.TrimSpace(text), "\n")
+	firstLine := true
+	padding := strings.Repeat(" ", labelWidth+1)
+
+	for _, raw := range paragraphs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+
+		bullet := strings.HasPrefix(raw, "- ")
+		if bullet {
+			raw = strings.TrimSpace(strings.TrimPrefix(raw, "- "))
+		}
+
+		wrapped := wrap(raw, bodyWidth-2)
+		if len(wrapped) == 0 {
+			wrapped = []string{""}
+		}
+
+		for i, line := range wrapped {
+			prefix := padding
+			if firstLine {
+				prefix = labelRendered + " "
+			}
+			if bullet {
+				if i == 0 {
+					line = "• " + line
+				} else {
+					line = "  " + line
+				}
+			}
+			lines = append(lines, renderContinuationLineWithMarker(" ", prefix+bodyStyle.Render(line)))
+			firstLine = false
+		}
+	}
+
+	if len(lines) == 0 {
+		return []string{renderContinuationLineWithMarker(" ", labelRendered)}
+	}
+	return lines
+}
+
+func (m model) issuesPopupLines() []string {
+	if len(m.issueItems) == 0 || !m.popupVisible() {
 		return nil
 	}
 	width := m.width - lipgloss.Width(logPrefix("", "")) - logGapWidth
@@ -709,23 +966,28 @@ func (m model) reviewSurfaceLines() []string {
 		width = 20
 	}
 	current := m.issueItems[m.issueCursor%len(m.issueItems)]
-	lines := []string{renderLogLine("", sIssueBullet.Render("!"), sIssueTitle.Render(fmt.Sprintf("focus %d/%d", m.issueCursor+1, len(m.issueItems))))}
-	lines = append(lines, renderFocusField("Next", normalizeIssueText(current.Nudge), width, sFocusBody)...)
-	if strings.TrimSpace(current.Why) != "" {
-		lines = append(lines, renderFocusField("Why", strings.TrimSpace(current.Why), width, sIssueWhy)...)
+	lines := []string{renderLogLine("", sIssueBullet.Render("!"), sIssueTitle.Render(fmt.Sprintf("open issues %d/%d", m.issueCursor+1, len(m.issueItems))))}
+	for i, issue := range m.issueItems {
+		marker := fmt.Sprintf("%d.", i+1)
+		style := sIssuePreview
+		if i == m.issueCursor {
+			marker = "›"
+			style = sIssueText.Bold(true)
+		}
+		lines = append(lines, renderContinuationLineWithMarker(marker, style.Render(wrapSingleLine(normalizeIssueText(issue.Nudge), width-4))))
 	}
-	if len(m.issueItems) > 1 {
-		lines = append(lines, renderFocusField("More", fmt.Sprintf("%d other issue(s)", len(m.issueItems)-1), width, sIssuePreview)...)
+	if strings.TrimSpace(current.Why) != "" {
+		lines = append(lines, renderLabeledField("Why", strings.TrimSpace(current.Why), width, sIssueWhy)...)
 	}
 	if strings.TrimSpace(current.Ref) != "" {
-		lines = append(lines, renderFocusField("Seen", current.Ref, width, sIssuePreview)...)
+		lines = append(lines, renderLabeledField("Seen", current.Ref, width, sIssuePreview)...)
 	}
 	lines = append(lines, sSep.Render(strings.Repeat("─", m.width)))
 	return lines
 }
 
 func (m model) issuePinnedLines() []string {
-	lines := m.reviewSurfaceLines()
+	lines := m.issuesPopupLines()
 	if len(lines) == 0 {
 		return nil
 	}
@@ -763,39 +1025,16 @@ func (m model) logViewportH() int {
 	return h
 }
 
-func issueMarker(severity string) string {
-	if severity == "error" {
-		return sNudgeErrMarker.Render("!")
-	}
-	return sIssueBullet.Render("!")
-}
-
 func (m model) contentLines() []string {
-	content := append([]string{}, m.reviewSurfaceLines()...)
-	content = append(content, m.lines...)
+	lines, _ := m.renderedTimeline()
+	content := append([]string{}, m.issuesPopupLines()...)
+	content = append(content, lines...)
 	return content
 }
 
-func (m *model) pushReviewTrace(label, text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-	entry := reviewTraceEntry{Label: label, Text: text}
-	if len(m.reviewTrace) > 0 {
-		last := m.reviewTrace[len(m.reviewTrace)-1]
-		if last == entry {
-			return
-		}
-	}
-	m.reviewTrace = append(m.reviewTrace, entry)
-	if len(m.reviewTrace) > 8 {
-		m.reviewTrace = m.reviewTrace[len(m.reviewTrace)-8:]
-	}
-}
-
 func (m model) visibleLogRange() (start, end int) {
-	total := len(m.lines)
+	lines, _ := m.renderedTimeline()
+	total := len(lines)
 	end = total - m.scrollOffset
 	if end > total {
 		end = total
@@ -841,7 +1080,7 @@ func (m model) selectionPointAt(x, y int, clamp bool) (selectionPoint, bool) {
 		return selectionPoint{}, false
 	}
 
-	pinnedCount := len(m.reviewSurfaceLines())
+	pinnedCount := len(m.issuesPopupLines())
 	start, end := m.visibleLogRange()
 	visibleCount := pinnedCount + (end - start)
 	if visibleCount <= 0 {
@@ -929,7 +1168,7 @@ func (m model) View() string {
 	issueLines := m.issuePinnedLines()
 	lh := m.logViewportH()
 	start, end := m.visibleLogRange()
-	content := m.lines
+	content, owners := m.renderedTimeline()
 	pinnedCount := len(issueLines)
 
 	bodyLines := make([]string, 0, pinnedCount+lh)
@@ -950,6 +1189,9 @@ func (m model) View() string {
 			if m.sel.IsLineSelected(absIdx) {
 				startCol, endCol := m.sel.GetLineSelectionCols(absIdx)
 				line = InjectCharacterRangeBackground(line, startCol, endCol)
+			}
+			if !m.sel.HasSelection() && start+i < len(owners) && owners[start+i] == m.selectedEntry {
+				line = InjectCharacterRangeBackground(line, 0, -1)
 			}
 			visible = append(visible, line)
 		}
@@ -993,7 +1235,7 @@ func (m model) View() string {
 		if remaining > 0 {
 			hint := controlsHint()
 			if len(m.issueItems) > 0 {
-				if m.issuePanelVisible {
+				if m.popupVisible() {
 					hint = issueControlsHint()
 				} else {
 					hint = "o focus  j/k scroll  pgup/pgdn"
@@ -1090,6 +1332,14 @@ func wrap(text string, width int) []string {
 	return lines
 }
 
+func wrapSingleLine(text string, width int) string {
+	lines := wrap(text, width)
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[0]
+}
+
 func joinDisplayPaths(files []string, max int) string {
 	duplicateBase := make(map[string]bool)
 	baseCounts := make(map[string]int)
@@ -1159,9 +1409,9 @@ func renderContinuationLineWithMarker(marker, text string) string {
 
 func nudgePresentation(severity string) (string, lipgloss.Style) {
 	if severity == "error" {
-		return sNudgeErrMarker.Render("⚠"), sNudgeErrText
+		return sNudgeMarker.Render("⚠"), sNudgeText
 	}
-	return sNudgeWarnMarker.Render("▸"), sNudgeWarnText
+	return sNudgeMarker.Render("▸"), sNudgeText
 }
 
 func logPrefix(ts, marker string) string {

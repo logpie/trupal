@@ -427,11 +427,9 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				brainLastMsg = result.resp.Reasoning
 				brainLastTime = time.Now()
 				p.Send(brainStatusMsg{thinking: false, lastTime: brainLastTime})
-				// Send observations (no finding lifecycle, just display)
 				Debugf("[brain] %d observations, %d nudges", len(result.resp.Observations), len(result.resp.Nudges))
 				for _, obs := range result.resp.Observations {
 					Debugf("[brain] observation: %s", obs)
-					p.Send(observationMsg{text: obs})
 				}
 				for _, nudge := range result.resp.Nudges {
 					why := nudge.Why
@@ -443,9 +441,11 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 					}
 					id := findings.Add(nudge.Severity, nudge.Message, why)
 					Debugf("[brain] nudge: %s", nudge.Message)
+					sourceDetail := brainStats.LastTriggerSummary
+					detail := buildNudgeDetail(repoRoot, changedFiles, recentSessionEntries, nudge.Message)
 					for _, f := range findings.Recent(1) {
 						if f.ID == id {
-							p.Send(nudgeMsg{finding: f})
+							p.Send(nudgeMsg{finding: f, source: sourceDetail, detail: detail})
 						}
 					}
 				}
@@ -1234,14 +1234,108 @@ func shortIssueText(text string) string {
 }
 
 func issueRef(id string, ts time.Time) string {
-	id = strings.TrimSpace(id)
 	if ts.IsZero() {
-		return id
+		return ""
 	}
-	if id == "" {
-		return ts.Format("15:04")
+	return ts.Format("15:04")
+}
+
+func buildNudgeDetail(projectDir string, changedFiles []string, recentEntries []JSONLEntry, message string) []string {
+	var detail []string
+	if claim := latestAssistantClaim(recentEntries); claim != "" {
+		detail = append(detail, "Claim\n"+claim)
 	}
-	return ts.Format("15:04") + " · " + id
+	if snippet := codeSnippetForNudge(projectDir, changedFiles, message); snippet != "" {
+		detail = append(detail, "Code\n"+snippet)
+	}
+	return detail
+}
+
+func latestAssistantClaim(entries []JSONLEntry) string {
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Type == "assistant" && e.HasText && strings.TrimSpace(e.TextSnip) != "" {
+			claim := strings.TrimSpace(strings.ReplaceAll(e.TextSnip, "`", ""))
+			if idx := strings.Index(claim, "Verification:"); idx >= 0 {
+				claim = strings.TrimSpace(claim[:idx])
+			}
+			if idx := strings.Index(claim, "What changed:"); idx >= 0 {
+				claim = strings.TrimSpace(claim[idx+len("What changed:"):])
+			}
+			claim = strings.TrimSpace(strings.Join(strings.Fields(claim), " "))
+			if idx := strings.Index(claim, ". "); idx >= 0 {
+				claim = claim[:idx+1]
+			}
+			return claim
+		}
+	}
+	return ""
+}
+
+func codeSnippetForNudge(projectDir string, changedFiles []string, message string) string {
+	for _, file := range changedFiles {
+		path := file
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(projectDir, file)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		targets := snippetTargets(message)
+		if len(targets) == 0 {
+			continue
+		}
+		for _, target := range targets {
+			for i, line := range lines {
+				if !strings.Contains(line, target) {
+					continue
+				}
+				start := i - 2
+				if start < 0 {
+					start = 0
+				}
+				end := i + 3
+				if end > len(lines) {
+					end = len(lines)
+				}
+				var snippet []string
+				for j := start; j < end; j++ {
+					text := strings.TrimRight(lines[j], " ")
+					if strings.TrimSpace(text) == "" {
+						continue
+					}
+					snippet = append(snippet, fmt.Sprintf("%d: %s", j+1, text))
+				}
+				if len(snippet) > 0 {
+					return strings.Join(snippet, "\n")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func snippetTargets(message string) []string {
+	type targetGroup struct {
+		match   string
+		targets []string
+	}
+	groups := []targetGroup{
+		{match: "writeJSONError", targets: []string{`w.Write([]byte(`, "json.NewEncoder", "json.Marshal", "func writeJSONError"}},
+		{match: "ActiveJSON", targets: []string{"json.Marshal(sessions)", "func ActiveJSON"}},
+		{match: "Expire", targets: []string{"delete(sessions, id)", "sessions[id] = s", "func Expire"}},
+		{match: "/state", targets: []string{"StatusMethodNotAllowed", "http.MethodGet", `http.HandleFunc("/state"`}},
+		{match: "/refresh", targets: []string{"StatusMethodNotAllowed", "http.MethodPost", `http.HandleFunc("/refresh"`}},
+		{match: "ListenAndServe", targets: []string{"log.Fatal(err)", "ListenAndServe"}},
+	}
+	for _, group := range groups {
+		if strings.Contains(message, group.match) {
+			return group.targets
+		}
+	}
+	return nil
 }
 
 func shortIssueWhy(finding PatternFinding) string {

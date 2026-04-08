@@ -235,7 +235,7 @@ func TestIssuePanelReducesVisibleLogHeight(t *testing.T) {
 	m.issuePanelVisible = true
 
 	view := m.View()
-	if !containsStr(view, "focus 1/2") || !containsStr(view, "Next Mutex missing") {
+	if !containsStr(view, "open issues 1/2") || !containsStr(view, "›   Mutex missing") {
 		t.Fatalf("expected dedicated current-issues panel, got %q", view)
 	}
 }
@@ -268,7 +268,7 @@ func TestFooterShowsIssueControlsWhenIssuesExist(t *testing.T) {
 
 	m.issuePanelVisible = true
 	view = m.View()
-	if !containsStr(view, "[ ] switch issue") || !containsStr(view, "o hide") {
+	if !containsStr(view, "j/k move") || !containsStr(view, "enter jump") {
 		t.Fatalf("expected issue controls hint, got %q", view)
 	}
 }
@@ -284,7 +284,7 @@ func TestIssuePanelParticipatesInScrollableContent(t *testing.T) {
 	m.issuePanelVisible = true
 
 	content := m.contentLines()
-	if len(content) == 0 || !containsStr(content[0], "focus 1/2") {
+	if len(content) == 0 || !containsStr(content[0], "open issues 1/2") {
 		t.Fatalf("expected issue panel in content lines, got %#v", content)
 	}
 }
@@ -298,7 +298,6 @@ func TestIssuePanelCanExpandWhy(t *testing.T) {
 	})
 	m = newM.(model)
 	m.issuePanelVisible = true
-	m.issueOpen["f-1"] = true
 
 	view := m.View()
 	if !containsStr(view, "Why Both handlers touch the same global map.") {
@@ -322,7 +321,7 @@ func TestIssuePanelStaysVisibleAtBottomOfLog(t *testing.T) {
 	}
 
 	view := m.View()
-	if !containsStr(view, "focus 1/2") || !containsStr(view, "Next Mutex missing") {
+	if !containsStr(view, "open issues 1/2") || !containsStr(view, "›   Mutex missing") {
 		t.Fatalf("expected pinned issue panel, got %q", view)
 	}
 	if !containsStr(view, "content-19") {
