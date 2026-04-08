@@ -7,12 +7,15 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+var markdownLinkPattern = regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
 
 // DisplayState holds state for the log file writer.
 type DisplayState struct {
@@ -432,20 +435,30 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 					Debugf("[brain] observation: %s", obs)
 				}
 				for _, nudge := range result.resp.Nudges {
-					why := nudge.Why
-					if why == "" {
-						why = nudge.Reasoning
+					impact := strings.TrimSpace(nudge.Impact)
+					if impact == "" {
+						impact = strings.TrimSpace(nudge.Why)
 					}
-					if why == "" {
-						why = result.resp.Reasoning
+					if impact == "" {
+						impact = strings.TrimSpace(nudge.Reasoning)
 					}
-					id := findings.Add(nudge.Severity, nudge.Message, why)
+					if impact == "" {
+						impact = strings.TrimSpace(result.resp.Reasoning)
+					}
+					id := findings.Add(
+						nudge.Severity,
+						nudge.Message,
+						impact,
+						strings.TrimSpace(nudge.Claim),
+						strings.TrimSpace(nudge.Verified),
+						impact,
+						strings.TrimSpace(nudge.Tell),
+					)
 					Debugf("[brain] nudge: %s", nudge.Message)
-					sourceDetail := brainStats.LastTriggerSummary
 					detail := buildNudgeDetail(repoRoot, changedFiles, recentSessionEntries, nudge.Message)
 					for _, f := range findings.Recent(1) {
 						if f.ID == id {
-							p.Send(nudgeMsg{finding: f, source: sourceDetail, detail: detail})
+							p.Send(nudgeMsg{finding: f, detail: detail})
 						}
 					}
 				}
@@ -1242,8 +1255,8 @@ func issueRef(id string, ts time.Time) string {
 
 func buildNudgeDetail(projectDir string, changedFiles []string, recentEntries []JSONLEntry, message string) []string {
 	var detail []string
-	if claim := latestAssistantClaim(recentEntries); claim != "" {
-		detail = append(detail, "Claim\n"+claim)
+	if claim := latestAssistantClaim(recentEntries); claim != "" && claimMatchesIssue(claim, message) {
+		detail = append(detail, "Codex said\n"+claim)
 	}
 	if snippet := codeSnippetForNudge(projectDir, changedFiles, message); snippet != "" {
 		detail = append(detail, "Code\n"+snippet)
@@ -1251,17 +1264,43 @@ func buildNudgeDetail(projectDir string, changedFiles []string, recentEntries []
 	return detail
 }
 
+func claimMatchesIssue(claim, message string) bool {
+	claim = strings.ToLower(claim)
+	message = strings.ToLower(message)
+	switch {
+	case strings.Contains(message, "allow: post") || strings.Contains(message, "405"):
+		return strings.Contains(claim, "allow") || strings.Contains(claim, "405")
+	case strings.Contains(message, "writejsonerror"):
+		return strings.Contains(claim, "writejsonerror") || strings.Contains(claim, "json response")
+	case strings.Contains(message, "activejson") || strings.Contains(message, "json.marshal"):
+		return strings.Contains(claim, "activejson") || strings.Contains(claim, "json.Marshal") || strings.Contains(claim, "json response")
+	case strings.Contains(message, "mutex") || strings.Contains(message, "sessions map"):
+		return strings.Contains(claim, "mutex") || strings.Contains(claim, "sessions map")
+	case strings.Contains(message, "expire"):
+		return strings.Contains(claim, "expire") || strings.Contains(claim, "expired")
+	case strings.Contains(message, "/state"):
+		return strings.Contains(claim, "/state") && (strings.Contains(claim, "get") || strings.Contains(claim, "405"))
+	case strings.Contains(message, "/refresh"):
+		return strings.Contains(claim, "/refresh") && (strings.Contains(claim, "post") || strings.Contains(claim, "405"))
+	case strings.Contains(message, "listenandserve"):
+		return strings.Contains(claim, "listenandserve") || strings.Contains(claim, "startup")
+	}
+	return false
+}
+
 func latestAssistantClaim(entries []JSONLEntry) string {
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
 		if e.Type == "assistant" && e.HasText && strings.TrimSpace(e.TextSnip) != "" {
 			claim := strings.TrimSpace(strings.ReplaceAll(e.TextSnip, "`", ""))
+			claim = markdownLinkPattern.ReplaceAllString(claim, "$1")
 			if idx := strings.Index(claim, "Verification:"); idx >= 0 {
 				claim = strings.TrimSpace(claim[:idx])
 			}
 			if idx := strings.Index(claim, "What changed:"); idx >= 0 {
 				claim = strings.TrimSpace(claim[idx+len("What changed:"):])
 			}
+			claim = strings.TrimLeft(claim, "-• ")
 			claim = strings.TrimSpace(strings.Join(strings.Fields(claim), " "))
 			if idx := strings.Index(claim, ". "); idx >= 0 {
 				claim = claim[:idx+1]
@@ -1335,6 +1374,12 @@ func snippetTargets(message string) []string {
 			return group.targets
 		}
 	}
+	if strings.Contains(message, "marshal") {
+		return []string{"json.Marshal(sessions)", "func ActiveJSON"}
+	}
+	if strings.Contains(message, "mutex") || strings.Contains(message, "session map") {
+		return []string{"sessionsMu", "func ActiveJSON", "func Expire"}
+	}
 	return nil
 }
 
@@ -1387,6 +1432,12 @@ func normalizeIssueText(text string) string {
 
 	lower := strings.ToLower(text)
 	switch {
+	case strings.Contains(lower, "discarding the json.marshal error in activejson"):
+		return "Handle json.Marshal failures in ActiveJSON()"
+	case strings.Contains(lower, "dropping the json.marshal error in activejson"):
+		return "Handle json.Marshal failures in ActiveJSON()"
+	case strings.Contains(lower, "swallowing the marshal") && strings.Contains(lower, "activejson"):
+		return "Handle json.Marshal failures in ActiveJSON()"
 	case strings.Contains(lower, "findingstore.activejson") && strings.Contains(lower, "marshal"):
 		return "Stop hiding marshal failures in ActiveJSON"
 	case strings.Contains(lower, "findings.go::activejson") && strings.Contains(lower, "marshal"):

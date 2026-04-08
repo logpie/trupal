@@ -49,6 +49,11 @@ var (
 	sIssuePreview = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
 	sFocusLabel   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
 	sFocusBody    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	sDetailCode   = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236"))
+	sDetailCodeNo = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	sInspectorTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
+	sInspectorBox   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("239")).Padding(0, 1).Foreground(lipgloss.Color("252"))
+	sInspectorCode  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Background(lipgloss.Color("235")).Padding(0, 1).Foreground(lipgloss.Color("252"))
 )
 
 const (
@@ -75,7 +80,6 @@ type statusMsg struct {
 }
 type nudgeMsg struct {
 	finding BrainFinding
-	source  string
 	detail  []string
 }
 type resolvedMsg struct{ finding BrainFinding }
@@ -364,7 +368,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case nudgeMsg:
 		m.findings++
-		m.logIssueEvent("nudge", msg.finding.ID, msg.finding.Severity, msg.finding.Nudge, msg.finding.Why, issueRef(msg.finding.ID, msg.finding.Timestamp), msg.source, msg.detail)
+		m.logIssueEvent("nudge", msg.finding, msg.detail)
 
 	case resolvedMsg:
 		m.findings--
@@ -392,7 +396,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 
 	case patternMsg:
-		m.logIssueEvent("pattern", msg.finding.Key, msg.finding.Level, msg.finding.Message, shortIssueWhy(msg.finding), msg.finding.Key, "", nil)
+		m.logIssueEvent("pattern", BrainFinding{
+			ID:       msg.finding.Key,
+			Severity: msg.finding.Level,
+			Nudge:    msg.finding.Message,
+			Why:      shortIssueWhy(msg.finding),
+		}, nil)
 
 	case brainStatusMsg:
 		if msg.thinking {
@@ -604,49 +613,70 @@ func (m *model) log(line string) {
 	m.trim()
 }
 
-func (m *model) logIssueEvent(kind, id, severity, nudge, why, ref, source string, extraDetail []string) {
-	raw := strings.TrimSpace(strings.ReplaceAll(nudge, "`", ""))
+func (m *model) logIssueEvent(kind string, finding BrainFinding, extraDetail []string) {
+	raw := strings.TrimSpace(strings.ReplaceAll(finding.Nudge, "`", ""))
 	short := normalizeIssueText(raw)
 	text := "issue: " + short
 	if m.shouldLogEvent(kind, text) {
 		entry := timelineEntry{
-			ID:      strings.TrimSpace(id),
+			ID:      strings.TrimSpace(finding.ID),
 			Kind:    "issue",
 			Time:    time.Now().Format("15:04"),
 			Marker:  "!",
 			Summary: short,
 		}
-		if why = strings.TrimSpace(why); why != "" {
-			entry.Detail = append(entry.Detail, "Why\n"+why)
+		if claim := strings.TrimSpace(finding.Claim); claim != "" {
+			entry.Detail = append(entry.Detail, "Codex said\n"+claim)
 		}
-		for _, block := range detailBlocksFromSource(source) {
-			entry.Detail = append(entry.Detail, block)
+		if verified := strings.TrimSpace(finding.Verified); verified != "" {
+			entry.Detail = append(entry.Detail, "TruPal verified\n"+verified)
+		} else if raw != "" && realityAddsValue(short, raw) {
+			entry.Detail = append(entry.Detail, "TruPal verified\n"+realityText(raw))
+		}
+		if why := strings.TrimSpace(finding.Impact); why != "" {
+			entry.Detail = append(entry.Detail, "Why it matters\n"+why)
+		} else if why := strings.TrimSpace(finding.Why); why != "" {
+			entry.Detail = append(entry.Detail, "Why it matters\n"+why)
 		}
 		entry.Detail = append(entry.Detail, extraDetail...)
-		if strings.TrimSpace(ref) != "" {
-			entry.Detail = append(entry.Detail, "Seen\n"+ref)
+		if tell := strings.TrimSpace(finding.Tell); tell != "" {
+			entry.Detail = append(entry.Detail, "Tell Codex\n"+tell)
 		}
 		m.appendEntry(entry)
 	}
 }
 
-func detailBlocksFromSource(source string) []string {
-	source = strings.TrimSpace(source)
-	if source == "" {
-		return nil
+func realityText(text string) string {
+	text = strings.TrimSpace(strings.ReplaceAll(text, "`", ""))
+	prefixes := []string{
+		"hey, ",
+		"hey ",
+		"you still ",
+		"you’re still ",
+		"you're still ",
+		"you’ve ",
+		"you've ",
 	}
-	var blocks []string
-	switch {
-	case strings.Contains(source, "agent said:"):
-		claim := strings.TrimSpace(strings.SplitN(source, "agent said:", 2)[1])
-		blocks = append(blocks, "Claim\n"+claim)
-	case strings.Contains(source, "agent asked:"):
-		req := strings.TrimSpace(strings.SplitN(source, "agent asked:", 2)[1])
-		blocks = append(blocks, "Request\n"+req)
-	default:
-		blocks = append(blocks, "Context\n"+source)
+	lower := strings.ToLower(text)
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			text = strings.TrimSpace(text[len(prefix):])
+			break
+		}
 	}
-	return blocks
+	if text == "" {
+		return ""
+	}
+	return strings.ToUpper(text[:1]) + text[1:]
+}
+
+func realityAddsValue(summary, raw string) bool {
+	summary = strings.ToLower(strings.TrimSpace(summary))
+	raw = strings.ToLower(strings.TrimSpace(realityText(raw)))
+	if summary == "" || raw == "" {
+		return false
+	}
+	return !strings.Contains(raw, summary) && !strings.Contains(summary, raw)
 }
 
 func (m *model) trim() {
@@ -906,55 +936,91 @@ func renderLabeledField(label, text string, width int, bodyStyle lipgloss.Style)
 }
 
 func renderDetailField(label, text string, width int, bodyStyle lipgloss.Style) []string {
-	labelRendered := sFocusLabel.Render(label)
-	labelWidth := lipgloss.Width(labelRendered)
-	bodyWidth := width - labelWidth - 1
-	if bodyWidth < 12 {
-		bodyWidth = 12
+	switch label {
+	case "Code":
+		return renderCodeField("Code evidence", text, width)
+	case "Claim":
+		label = "Codex said"
+	case "Reality":
+		label = "TruPal verified"
 	}
-
-	lines := []string{}
-	paragraphs := strings.Split(strings.TrimSpace(text), "\n")
-	firstLine := true
-	padding := strings.Repeat(" ", labelWidth+1)
-
-	for _, raw := range paragraphs {
+	boxWidth := width
+	if boxWidth < 20 {
+		boxWidth = 20
+	}
+	var parts []string
+	for _, raw := range strings.Split(strings.TrimSpace(text), "\n") {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
-
 		bullet := strings.HasPrefix(raw, "- ")
 		if bullet {
 			raw = strings.TrimSpace(strings.TrimPrefix(raw, "- "))
-		}
-
-		wrapped := wrap(raw, bodyWidth-2)
-		if len(wrapped) == 0 {
-			wrapped = []string{""}
-		}
-
-		for i, line := range wrapped {
-			prefix := padding
-			if firstLine {
-				prefix = labelRendered + " "
-			}
-			if bullet {
+			wrapped := wrap(raw, boxWidth-8)
+			for i, line := range wrapped {
 				if i == 0 {
-					line = "• " + line
+					parts = append(parts, "• "+line)
 				} else {
-					line = "  " + line
+					parts = append(parts, "  "+line)
 				}
 			}
-			lines = append(lines, renderContinuationLineWithMarker(" ", prefix+bodyStyle.Render(line)))
-			firstLine = false
+			continue
 		}
+		parts = append(parts, wrap(raw, boxWidth-6)...)
 	}
-
-	if len(lines) == 0 {
-		return []string{renderContinuationLineWithMarker(" ", labelRendered)}
+	title := renderContinuationLineWithMarker(" ", sInspectorTitle.Render(label))
+	block := sInspectorBox.Width(boxWidth).Render(bodyStyle.Render(strings.Join(parts, "\n")))
+	lines := []string{title}
+	for _, line := range strings.Split(block, "\n") {
+		lines = append(lines, renderContinuationLineWithMarker(" ", line))
 	}
 	return lines
+}
+
+func renderCodeField(label, text string, width int) []string {
+	bodyWidth := width
+	if bodyWidth < 20 {
+		bodyWidth = 20
+	}
+
+	var bodyLines []string
+	for _, raw := range strings.Split(strings.TrimSpace(text), "\n") {
+		raw = strings.TrimRight(raw, " ")
+		if raw == "" {
+			continue
+		}
+		parts := strings.SplitN(raw, ": ", 2)
+		line := raw
+		if len(parts) == 2 && isDigits(parts[0]) {
+			line = sDetailCodeNo.Render(parts[0]) + " " + sDetailCode.Render(parts[1])
+		} else {
+			line = sDetailCode.Render(raw)
+		}
+		bodyLines = append(bodyLines, line)
+	}
+	title := renderContinuationLineWithMarker(" ", sInspectorTitle.Render(label))
+	if len(bodyLines) == 0 {
+		return []string{title}
+	}
+	block := sInspectorCode.Width(bodyWidth).Render(strings.Join(bodyLines, "\n"))
+	lines := []string{title}
+	for _, line := range strings.Split(block, "\n") {
+		lines = append(lines, renderContinuationLineWithMarker(" ", line))
+	}
+	return lines
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (m model) issuesPopupLines() []string {
@@ -978,9 +1044,6 @@ func (m model) issuesPopupLines() []string {
 	}
 	if strings.TrimSpace(current.Why) != "" {
 		lines = append(lines, renderLabeledField("Why", strings.TrimSpace(current.Why), width, sIssueWhy)...)
-	}
-	if strings.TrimSpace(current.Ref) != "" {
-		lines = append(lines, renderLabeledField("Seen", current.Ref, width, sIssuePreview)...)
 	}
 	lines = append(lines, sSep.Render(strings.Repeat("─", m.width)))
 	return lines

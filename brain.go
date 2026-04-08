@@ -33,6 +33,10 @@ type BrainNudge struct {
 	Message   string `json:"message"`
 	Why       string `json:"why,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"` // backward-compatible fallback
+	Claim     string `json:"claim,omitempty"`
+	Verified  string `json:"verified,omitempty"`
+	Impact    string `json:"impact,omitempty"`
+	Tell      string `json:"tell,omitempty"`
 }
 
 // BrainUsage is per-turn token usage reported by the brain subprocess.
@@ -186,7 +190,14 @@ Another way to say it: silence means bugs escape, so investigate first and err o
 Respond with JSON only:
 {
   "observations": ["what you noticed — facts, patterns, context"],
-  "nudges": [{"severity": "warn|error", "message": "operator-facing coaching line", "why": "short plain-language explanation for the human"}],
+  "nudges": [{
+    "severity": "warn|error",
+    "message": "short operator-facing nudge",
+    "claim": "what the coding agent implied, promised, or said (omit if none)",
+    "verified": "what you verified in code or session evidence that conflicts with the claim",
+    "impact": "short plain-language explanation for the human operator",
+    "tell": "one short sentence the human could say back to the coding agent"
+  }],
   "resolved_findings": ["<finding_id>"]
 }
 
@@ -196,8 +207,11 @@ Max 2 observations per response. If nothing notable, return empty.
 
 Rules:
 - Observations: 1 sentence each. Only notable patterns or risks.
-- Nudges: conversational, operator-facing coaching lines the human could say to the agent. They may be bug-specific, directional, principle-based, or process interventions, but must be grounded in evidence from the notification or files you read.
-- Why: 1 short plain-language sentence for the human operator. Not raw inner monologue.
+- Nudges: each one is a contradiction card. Prefer a short action title in "message", then fill "claim", "verified", "impact", and "tell" when you have the evidence.
+- "claim": only when the coding agent actually said or strongly implied something relevant.
+- "verified": what you checked in reality that conflicts with the claim or expected outcome.
+- "impact": 1 short plain-language sentence for the human operator. Not raw inner monologue.
+- "tell": one short operator-ready instruction back to the coding agent.
 - Focus on real correctness and verification risks, not style nits.
 - Before returning empty, explicitly check for concurrency, cache invalidation, auth coverage, route parsing, method handling, and dropped JSON errors in the changed files.
 - After you investigate, if nothing important is wrong, return empty nudges.`, agentName, agentName, jsonlPath, projectDir, agentLabel, agentLabel, agentLabel, agentLabel)

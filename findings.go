@@ -14,6 +14,10 @@ type BrainFinding struct {
 	Severity  string    `json:"severity"` // "warn" or "error"
 	Nudge     string    `json:"nudge"`
 	Why       string    `json:"why"`
+	Claim     string    `json:"claim,omitempty"`
+	Verified  string    `json:"verified,omitempty"`
+	Impact    string    `json:"impact,omitempty"`
+	Tell      string    `json:"tell,omitempty"`
 	Status    string    `json:"status"` // "new" / "shown" / "resolved" / "waived"
 }
 
@@ -31,7 +35,7 @@ func NewFindingStore() *FindingStore {
 
 // Add creates a new finding with an auto-incremented ID, status "shown", and timestamp now.
 // Returns the new finding's ID.
-func (fs *FindingStore) Add(severity, nudge, why string) string {
+func (fs *FindingStore) Add(severity, nudge, why, claim, verified, impact, tell string) string {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -43,6 +47,10 @@ func (fs *FindingStore) Add(severity, nudge, why string) string {
 		Severity:  severity,
 		Nudge:     nudge,
 		Why:       why,
+		Claim:     claim,
+		Verified:  verified,
+		Impact:    impact,
+		Tell:      tell,
 		Status:    "shown",
 	})
 	return id
