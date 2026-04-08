@@ -1293,6 +1293,14 @@ func normalizeIssueText(text string) string {
 
 	lower := strings.ToLower(text)
 	switch {
+	case strings.Contains(lower, "findingstore.activejson") && strings.Contains(lower, "marshal"):
+		return "Stop hiding marshal failures in ActiveJSON"
+	case strings.Contains(lower, "findings.go::activejson") && strings.Contains(lower, "marshal"):
+		return "Stop hiding marshal failures in ActiveJSON"
+	case strings.Contains(lower, "recent finding") && strings.Contains(lower, "ordering guarantees"):
+		return "Keep the focus drawer independent from finding order"
+	case strings.Contains(lower, "wrong tree") || (strings.Contains(lower, "watch loop") && strings.Contains(lower, "edits are in")) || (strings.Contains(lower, "different directories") && strings.Contains(lower, "current patch")):
+		return "Verify the same tree you are editing"
 	case strings.Contains(lower, "post /refresh") && strings.Contains(lower, "nothing to verify"):
 		return "Add POST /refresh"
 	case strings.Contains(lower, "only handle /state") && strings.Contains(lower, "post /refresh"):

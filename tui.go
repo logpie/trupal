@@ -22,10 +22,10 @@ var (
 	sCyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	sSep   = lipgloss.NewStyle().Faint(true)
 
-	sNudgeWarnMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")) // orange
+	sNudgeWarnMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	sNudgeWarnText   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	sNudgeErrMarker  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")) // bright red
-	sNudgeErrText    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196"))
+	sNudgeErrMarker  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	sNudgeErrText    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
 	sHeaderTitle  = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
 	sHeaderLine   = lipgloss.NewStyle().PaddingLeft(1)
@@ -327,7 +327,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		text := "issue: " + normalizeIssueText(msg.finding.Nudge)
 		m.pushReviewTrace("opened", normalizeIssueText(msg.finding.Nudge))
 		if m.shouldLogEvent("nudge", text) {
+			m.separateEvent()
 			m.logStyled(label, text, m.width, textStyle)
+			if why := strings.TrimSpace(msg.finding.Why); why != "" {
+				whyText := "why: " + compactEventText(why, 0)
+				if m.shouldLogEvent("why", whyText) {
+					m.logStyled(sDim.Render("·"), whyText, m.width, sDim)
+				}
+			}
 		}
 
 	case resolvedMsg:
@@ -339,17 +346,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		text := "resolved: " + normalizeIssueText(msg.finding.Nudge)
 		m.pushReviewTrace("resolved", normalizeIssueText(msg.finding.Nudge))
 		if m.shouldLogEvent("resolved", text) {
+			m.separateEvent()
 			m.logStyled(sOk.Render("✓"), text, m.width, sDim)
 		}
 
 	case observationMsg:
-		text := "review: " + compactEventText(msg.text, 0)
 		m.pushReviewTrace("review", compactEventText(msg.text, 72))
-		if m.shouldLogEvent("observation", text) {
-			m.logStyled(sCyan.Bold(true).Render("i"), text, m.width, lipgloss.NewStyle())
-		}
 
 	case trajectoryMsg:
+		m.separateEvent()
 		m.logStyled(sWarn.Bold(true).Render("→"), msg.message, m.width, lipgloss.NewStyle())
 
 	case patternMsg:
@@ -357,7 +362,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		text := "issue: " + normalizeIssueText(msg.finding.Message)
 		m.pushReviewTrace("opened", normalizeIssueText(msg.finding.Message))
 		if m.shouldLogEvent("pattern", text) {
+			m.separateEvent()
 			m.logStyled(label, text, m.width, textStyle)
+			if why := strings.TrimSpace(shortIssueWhy(msg.finding)); why != "" {
+				whyText := "why: " + compactEventText(why, 0)
+				if m.shouldLogEvent("pattern-why", whyText) {
+					m.logStyled(sDim.Render("·"), whyText, m.width, sDim)
+				}
+			}
 		}
 
 	case brainStatusMsg:
@@ -557,6 +569,16 @@ func (m *model) raw(line string) {
 		line,
 	))
 	m.trim()
+}
+
+func (m *model) separateEvent() {
+	if len(m.lines) == 0 {
+		return
+	}
+	if strings.TrimSpace(ansi.Strip(m.lines[len(m.lines)-1])) == "" {
+		return
+	}
+	m.raw("")
 }
 
 func (m *model) trim() {
@@ -874,27 +896,27 @@ func (m model) View() string {
 	}
 	switch m.ccStatus {
 	case "active", "thinking":
-		indicators = append(indicators, sOk.Render("●")+" "+agentLabel)
+		indicators = append(indicators, "● "+agentLabel)
 	default:
-		indicators = append(indicators, sDim.Render("○")+" "+agentLabel)
+		indicators = append(indicators, "○ "+agentLabel)
 	}
-	indicators = append(indicators, m.brainIndicator())
 	if m.buildState != "" {
 		indicators = append(indicators, m.buildState)
 	}
 	if m.findings > 0 {
-		indicators = append(indicators, sWarn.Render(fmt.Sprintf("⚠ %d", m.findings)))
+		indicators = append(indicators, fmt.Sprintf("⚠ %d", m.findings))
 	}
 	if m.resolved > 0 {
-		indicators = append(indicators, sOk.Render(fmt.Sprintf("✓ %d", m.resolved)))
+		indicators = append(indicators, fmt.Sprintf("✓ %d", m.resolved))
 	}
+	indicators = append(indicators, m.brainIndicator())
 
 	statsMaxWidth := w - 1
-	if used := joinWidth(indicators, "  "); used > 0 {
+	if used := joinWidth(indicators, " "); used > 0 {
 		statsMaxWidth -= used + 2
 	}
-	statsIndicator := sDim.Render(chooseBrainStatsIndicator(m.brain.stats, statsMaxWidth))
-	indicators = append(indicators[:2], append([]string{statsIndicator}, indicators[2:]...)...)
+	statsIndicator := chooseBrainStatsIndicator(m.brain.stats, statsMaxWidth)
+	indicators = append(indicators, statsIndicator)
 	if w < 44 {
 		indicators = []string{statsIndicator}
 	}
@@ -1310,7 +1332,7 @@ func styleHeaderIndicator(indicator string) string {
 		return sStatusChipEr.Render(plain)
 	case strings.Contains(plain, "build"):
 		return sStatusChipOk.Render(plain)
-	case strings.Contains(plain, "analyzing") || strings.Contains(plain, "ago") || strings.Contains(plain, "starting"):
+	case strings.Contains(plain, "analyzing") || strings.Contains(plain, "ago") || strings.Contains(plain, "starting") || strings.Contains(plain, "brain idle"):
 		return sStatusChipHi.Render(plain)
 	case strings.Contains(plain, "⚠"):
 		return sStatusChipWr.Render(plain)

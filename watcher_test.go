@@ -244,6 +244,14 @@ func TestNormalizeIssueTextCompressesKnownFindings(t *testing.T) {
 			in:   "wrap `sessions` with a mutex before you add `/refresh`",
 			want: "Protect sessions map with a mutex",
 		},
+		{
+			in:   "You’re testing the wrong tree now: the watch loop is bound to /home/yuxuan/work/trupal, but your edits are in /tmp/trupal-e2e-SnDE.",
+			want: "Verify the same tree you are editing",
+		},
+		{
+			in:   "You’re swallowing the JSON marshal failure in findings.go::ActiveJSON; if that serialization ever breaks, the brain gets an empty finding list.",
+			want: "Stop hiding marshal failures in ActiveJSON",
+		},
 	}
 
 	for _, tt := range tests {
