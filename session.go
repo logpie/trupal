@@ -68,7 +68,7 @@ func (s *Session) EvalTrajectory() []Finding {
 		if count >= 3 {
 			findings = append(findings, Finding{
 				Level:   "warn",
-				Message: fmt.Sprintf("you've edited %s %d times this session", filename, count),
+				Message: fmt.Sprintf("you've edited %s repeatedly this session", filename),
 			})
 		}
 	}

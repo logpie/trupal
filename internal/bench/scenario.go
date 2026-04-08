@@ -29,9 +29,11 @@ type Scenario struct {
 }
 
 type TrupalConfig struct {
-	BrainModel  string
-	BrainEffort string
-	BuildCmd    string
+	SessionProvider string
+	BrainProvider   string
+	BrainModel      string
+	BrainEffort     string
+	BuildCmd        string
 }
 
 type GroundTruth struct {
@@ -202,6 +204,10 @@ func parseScenarioYAML(raw []byte) (Scenario, error) {
 			return Scenario{}, fmt.Errorf("unexpected nested key %q on line %d", key, lineNo+1)
 		}
 		switch key {
+		case "session_provider":
+			scenario.TrupalConfig.SessionProvider = value
+		case "brain_provider":
+			scenario.TrupalConfig.BrainProvider = value
 		case "brain_model":
 			scenario.TrupalConfig.BrainModel = value
 		case "brain_effort":

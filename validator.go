@@ -65,6 +65,24 @@ func IsValidEffort(effort string) bool {
 	return false
 }
 
+func IsLikelyCodexModel(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" {
+		return false
+	}
+
+	switch model {
+	case "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4-mini",
+		"gpt-5", "gpt-5-mini", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex",
+		"gpt-5.3-codex-spark", "gpt-5.2":
+		return true
+	}
+
+	return strings.HasPrefix(model, "gpt-") ||
+		strings.HasPrefix(model, "chatgpt-") ||
+		strings.HasPrefix(model, "codex-")
+}
+
 func ParseDuration(s string) int {
 	total := 0
 	num := 0

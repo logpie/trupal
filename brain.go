@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -29,7 +31,8 @@ type BrainResponse struct {
 type BrainNudge struct {
 	Severity  string `json:"severity"`
 	Message   string `json:"message"`
-	Reasoning string `json:"reasoning,omitempty"` // per-nudge context
+	Why       string `json:"why,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"` // backward-compatible fallback
 }
 
 // BrainUsage is per-turn token usage reported by the brain subprocess.
@@ -42,24 +45,43 @@ type BrainUsage struct {
 
 // BrainStats is the cumulative token and cost usage for the current trupal session.
 type BrainStats struct {
+	Provider                 string
+	CostKnown                bool
+	TurnCount                int
+	LastDuration             time.Duration
+	LastEffort               string
+	LastTriggerSummary       string
 	TotalInputTokens         int
 	TotalOutputTokens        int
 	TotalCacheCreationTokens int
 	TotalCacheReadTokens     int
 	TotalCostUSD             float64
+	LastUsage                BrainUsage
+	LastCostUSD              float64
 }
 
 func (s *BrainStats) addTurn(usage BrainUsage, costUSD float64) {
+	s.TurnCount++
 	s.TotalInputTokens += usage.InputTokens
 	s.TotalOutputTokens += usage.OutputTokens
 	s.TotalCacheCreationTokens += usage.CacheCreationInputTokens
 	s.TotalCacheReadTokens += usage.CacheReadInputTokens
 	s.TotalCostUSD += costUSD
+	s.LastUsage = usage
+	s.LastCostUSD = costUSD
+}
+
+func (s *BrainStats) noteTurn(duration time.Duration, effort string) {
+	s.LastDuration = duration
+	s.LastEffort = strings.TrimSpace(effort)
 }
 
 // PromptTokens returns the total prompt-side token volume, including cache hits
 // and cache writes, for computing cache effectiveness.
 func (s BrainStats) PromptTokens() int {
+	if normalizeProvider(s.Provider, ProviderClaude) == ProviderCodex {
+		return s.TotalInputTokens
+	}
 	return s.TotalInputTokens + s.TotalCacheReadTokens + s.TotalCacheCreationTokens
 }
 
@@ -72,42 +94,65 @@ func (s BrainStats) CacheHitRate() int {
 	return (s.TotalCacheReadTokens*100 + total/2) / total
 }
 
+func (s BrainStats) UncachedPromptTokens() int {
+	if normalizeProvider(s.Provider, ProviderClaude) == ProviderCodex {
+		uncached := s.TotalInputTokens - s.TotalCacheReadTokens
+		if uncached < 0 {
+			return 0
+		}
+		return uncached
+	}
+	return s.TotalInputTokens + s.TotalCacheCreationTokens
+}
+
 // Brain manages the CC subprocess.
 type Brain struct {
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	scanner *bufio.Scanner
-	stopped atomic.Bool
-	cfg     Config
-	statsMu sync.Mutex
-	stats   BrainStats
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	stdout         io.ReadCloser
+	scanner        *bufio.Scanner
+	stopped        atomic.Bool
+	cfg            Config
+	projectDir     string
+	jsonlPath      string
+	codexWorkDir   string
+	codexThreadID  string
+	accessibleDirs []string
+	statsMu        sync.Mutex
+	stats          BrainStats
 }
 
 // brainSystemPrompt returns the static system prompt for the brain.
-func brainSystemPrompt(projectDir, jsonlPath string) string {
-	return fmt.Sprintf(`You are TruPal, a continuous verification agent watching a Claude Code session.
+func brainSystemPrompt(projectDir, jsonlPath, sessionProvider string) string {
+	agentName := sessionProviderDisplayName(sessionProvider)
+	agentLabel := sessionProviderLabel(sessionProvider)
+	return fmt.Sprintf(`You are TruPal, a continuous verification agent watching a %s session.
 
-CC's session JSONL: %s
+%s session JSONL: %s
 Project directory: %s
 
-IMPORTANT — you are a STREAMING monitor with memory across turns. Be INCREMENTAL:
+IMPORTANT — you are a CONTINUOUS monitor receiving repeated notifications. Be INCREMENTAL:
 - Each notification includes ACTIVE FINDINGS you already flagged. Do NOT re-flag them.
 - Only generate nudges for NEW issues you haven't flagged before.
 - If active findings are still unresolved, that's fine — don't repeat them.
 - Every notification is a request to investigate. There is NO fast path.
 - Start with the notification context: recent session activity, edited files, git diff summary, and build status.
+- If BUILD OUTPUT is present, use it directly. Do not ask the agent to paste the error again unless the notification truly omitted it.
 - ALWAYS read every changed file named in the notification — the FULL file, not just the diff.
 - When reading a file, check for SYSTEMIC issues across the entire file, not just the latest changes:
   race conditions (global maps/slices without mutex), error swallowing, panic misuse,
   cache invalidation gaps, resource leaks, middleware ordering bugs.
+- For server, handler, or router files, explicitly audit:
+  unsupported methods returning 405, auth coverage on every route, manual path parsing edge cases,
+  shared mutable globals under concurrency, cache invalidation on update/delete,
+  rate-limit state cleanup, and ignored json encode/decode errors.
 - Use the RECENT SESSION ACTIVITY included in the notification for claim/action checks.
 - Do NOT reread the full JSONL file on every notification. Only open the JSONL directly if the notification excerpt is missing critical evidence.
-- Silence means bugs escape. Flag anything you find — even pre-existing bugs that CC didn't introduce.
-  CC is responsible for the code they're working in, including what was already there.
+- Silence means bugs escape. Flag anything you find — even pre-existing bugs that the watched agent didn't introduce.
+  %s is responsible for the code they're working in, including what was already there.
 
-You are a nudge engine. You talk like a senior dev sitting next to CC.
-Always start with "you" or "hey" — address CC directly. Never write like a linter.
+You are a nudge engine. You talk like a senior dev sitting next to %s.
+Always start with "you" or "hey" — address the watched agent directly. Never write like a linter.
 Say what's wrong, why it matters, and what to do about it. Be specific — name files, lines, functions.
 
 VOICE EXAMPLES (copy this tone):
@@ -123,7 +168,7 @@ NEVER write like this:
 - "Race condition detected in sessions map" (passive, no action)
 
 What to look for:
-- CLAIM-ACTION GAPS: CC said it did X but JSONL shows no corresponding tool call
+- CLAIM-ACTION GAPS: %s said it did X but the session log shows no corresponding tool call
 - ERROR HANDLING: swallowed errors, dropped return values, returns that hide failures
 - RACE CONDITIONS: unsynchronized global state, shared maps/slices without locks, concurrent access patterns
 - PANIC MISUSE: panic for expected errors, panics that skip cleanup, recover misuse
@@ -131,36 +176,41 @@ What to look for:
 - RESOURCE LEAKS: goroutines, timers, file handles, subprocesses, channels, memory growth
 - PROCESS QUALITY: edit without reading first? no tests after changes?
 - TRAJECTORY: same file edited repeatedly without progress
+- HTTP/API SAFETY: missing 405 handling, route parsing that accepts invalid paths, middleware/auth gaps, stale caches after update/delete
 
 CRITICAL RULE: If you find a code issue (bug, race condition, swallowed error, missing validation),
-ALWAYS generate a nudge for it. Do NOT suppress nudges because you think CC is "testing" or the bug
-is "intentional." Your job is to flag code problems. CC decides what to do with them.
+ALWAYS generate a nudge for it. Do NOT suppress nudges because you think the agent is "testing" or the bug
+is "intentional." Your job is to flag code problems. %s decides what to do with them.
 Another way to say it: silence means bugs escape, so investigate first and err on the side of speaking up.
 
 Respond with JSON only:
 {
   "observations": ["what you noticed — facts, patterns, context"],
-  "nudges": [{"severity": "warn|error", "message": "what CC should do", "reasoning": "why"}],
+  "nudges": [{"severity": "warn|error", "message": "operator-facing coaching line", "why": "short plain-language explanation for the human"}],
   "resolved_findings": ["<finding_id>"]
 }
 
 Observations are for things worth the human's attention — patterns, risks, notable decisions.
-NOT for: routine activity ("CC read a file"), internal state ("JSONL flushed"), timestamps.
+NOT for: routine activity ("the agent read a file"), internal state ("JSONL flushed"), timestamps.
 Max 2 observations per response. If nothing notable, return empty.
 
 Rules:
 - Observations: 1 sentence each. Only notable patterns or risks.
-- Nudges: conversational, addressed to CC. Include reasoning (1 sentence) for context.
+- Nudges: conversational, operator-facing coaching lines the human could say to the agent. They may be bug-specific, directional, principle-based, or process interventions, but must be grounded in evidence from the notification or files you read.
+- Why: 1 short plain-language sentence for the human operator. Not raw inner monologue.
 - Focus on real correctness and verification risks, not style nits.
-- After you investigate, if nothing important is wrong, return empty nudges.`, jsonlPath, projectDir)
+- Before returning empty, explicitly check for concurrency, cache invalidation, auth coverage, route parsing, method handling, and dropped JSON errors in the changed files.
+- After you investigate, if nothing important is wrong, return empty nudges.`, agentName, agentName, jsonlPath, projectDir, agentLabel, agentLabel, agentLabel, agentLabel)
 }
 
 func brainCommand(provider string) (string, error) {
 	switch provider {
-	case "", "claude":
-		return "claude", nil
+	case "", ProviderClaude:
+		return providerExecutable(ProviderClaude)
+	case ProviderCodex:
+		return providerExecutable(ProviderCodex)
 	default:
-		return "", fmt.Errorf("unsupported brain_provider %q (supported: claude)", provider)
+		return "", fmt.Errorf("unsupported brain_provider %q (supported: claude, codex)", provider)
 	}
 }
 
@@ -175,13 +225,30 @@ func brainNotifyMessage(reason, findingsJSON string) string {
 // StartBrain spawns the CC subprocess. extraDirs are additional directories
 // the brain can access (from CC's tool calls to files outside projectDir).
 func StartBrain(cfg Config, projectDir, jsonlPath string, initialStats BrainStats, extraDirs ...string) (*Brain, error) {
-	prompt := brainSystemPrompt(projectDir, jsonlPath)
+	accessibleDirs := brainAccessibleDirs(projectDir, extraDirs...)
+	if normalizeProvider(cfg.BrainProvider, ProviderClaude) == ProviderCodex {
+		if _, err := brainCommand(cfg.BrainProvider); err != nil {
+			return nil, err
+		}
+		codexWorkDir, err := ensureCodexBrainWorkDir(projectDir)
+		if err != nil {
+			return nil, err
+		}
+		return &Brain{
+			cfg:            cfg,
+			projectDir:     projectDir,
+			jsonlPath:      jsonlPath,
+			codexWorkDir:   codexWorkDir,
+			accessibleDirs: accessibleDirs,
+			stats:          initialStats,
+		}, nil
+	}
+
+	prompt := brainSystemPrompt(projectDir, jsonlPath, cfg.SessionProvider)
 	command, err := brainCommand(cfg.BrainProvider)
 	if err != nil {
 		return nil, err
 	}
-
-	accessibleDirs := brainAccessibleDirs(projectDir, extraDirs...)
 
 	args := []string{
 		"-p",
@@ -227,12 +294,15 @@ func StartBrain(cfg Config, projectDir, jsonlPath string, initialStats BrainStat
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 
 	return &Brain{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  stdout,
-		scanner: scanner,
-		cfg:     cfg,
-		stats:   initialStats,
+		cmd:            cmd,
+		stdin:          stdin,
+		stdout:         stdout,
+		scanner:        scanner,
+		cfg:            cfg,
+		projectDir:     projectDir,
+		jsonlPath:      jsonlPath,
+		accessibleDirs: accessibleDirs,
+		stats:          initialStats,
 	}, nil
 }
 
@@ -273,6 +343,9 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	if b.stopped.Load() {
 		return nil, fmt.Errorf("brain stopped")
 	}
+	if normalizeProvider(b.cfg.BrainProvider, ProviderClaude) == ProviderCodex {
+		return b.notifyCodex(reason, findingsJSON)
+	}
 
 	message := brainNotifyMessage(reason, findingsJSON)
 	Debugf("[brain] notify: %s", truncate(message, 200))
@@ -284,7 +357,7 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	}
 
 	// Read response lines until we see a "result" type (end of turn).
-	var lastText string
+	var textBuilder strings.Builder
 	var usage BrainUsage
 	var totalCostUSD float64
 	sawResult := false
@@ -312,7 +385,7 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 		if event.Type == "assistant" {
 			for _, block := range event.Message.Content {
 				if block.Type == "text" && block.Text != "" {
-					lastText = block.Text
+					textBuilder.WriteString(block.Text)
 				}
 			}
 		}
@@ -331,36 +404,282 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 		return nil, fmt.Errorf("brain read error: %w", err)
 	}
 
+	text := textBuilder.String()
 	elapsed := time.Since(start)
-	if lastText == "" {
+	if text == "" {
 		Debugf("[brain] no response after %s", elapsed)
 		// If scanner hit EOF without a "result" event, the subprocess likely died.
 		return nil, fmt.Errorf("brain exited unexpectedly (no response after %s)", elapsed)
 	}
+	if !sawResult {
+		Debugf("[brain] missing result event after %s", elapsed)
+		return nil, fmt.Errorf("brain exited unexpectedly (missing result event after %s)", elapsed)
+	}
 
-	Debugf("[brain] response received after %s (%d chars)", elapsed, len(lastText))
+	Debugf("[brain] response received after %s (%d chars)", elapsed, len(text))
 
-	resp, err := parseBrainJSON(lastText)
+	resp, err := parseBrainJSON(text)
 	if err != nil {
 		Debugf("[brain] JSON parse failed, using raw text: %v", err)
-		resp = &BrainResponse{Reasoning: lastText}
+		resp = &BrainResponse{Reasoning: text}
 	}
 	resp.Usage = usage
 	resp.TotalCostUSD = totalCostUSD
-	if sawResult {
-		b.statsMu.Lock()
-		b.stats.addTurn(usage, totalCostUSD)
-		b.statsMu.Unlock()
-		Debugf("[brain] usage: in=%d out=%d cache_read=%d cache_create=%d cost=$%.4f",
-			usage.InputTokens,
-			usage.OutputTokens,
-			usage.CacheReadInputTokens,
-			usage.CacheCreationInputTokens,
-			totalCostUSD,
-		)
-	}
+	b.statsMu.Lock()
+	b.stats.Provider = b.cfg.BrainProvider
+	b.stats.CostKnown = true
+	b.stats.noteTurn(elapsed, effectiveBrainEffort(b.cfg, reason))
+	b.stats.addTurn(usage, totalCostUSD)
+	b.statsMu.Unlock()
+	Debugf("[brain] usage: in=%d out=%d cache_read=%d cache_create=%d cost=$%.4f",
+		usage.InputTokens,
+		usage.OutputTokens,
+		usage.CacheReadInputTokens,
+		usage.CacheCreationInputTokens,
+		totalCostUSD,
+	)
 	Debugf("[brain] %d nudges, %d resolved, reasoning: %s", len(resp.Nudges), len(resp.ResolvedFindings), truncate(resp.Reasoning, 100))
 	return resp, nil
+}
+
+func (b *Brain) notifyCodex(reason, findingsJSON string) (*BrainResponse, error) {
+	message := brainNotifyMessage(reason, findingsJSON)
+	prompt := codexPromptForTurn(b, message)
+	effort := effectiveBrainEffort(b.cfg, reason)
+
+	args := buildCodexBrainArgs(b, prompt, effort)
+
+	Debugf("[brain] codex exec notify: %s", truncate(message, 200))
+	start := time.Now()
+	command, err := brainCommand(ProviderCodex)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), brainNotifyTimeout(b.cfg.BrainEffort))
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.CombinedOutput()
+	elapsed := time.Since(start)
+	if ctx.Err() == context.DeadlineExceeded {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil, fmt.Errorf("codex exec brain timed out after %s", elapsed)
+	}
+	if err != nil {
+		Debugf("[brain] codex exec failed after %s: %v", elapsed, err)
+		return nil, fmt.Errorf("codex exec brain: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	text, usage, threadID, parseErr := parseCodexExecOutput(out)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if text == "" {
+		return nil, fmt.Errorf("codex brain returned empty output after %s", elapsed)
+	}
+	if threadID != "" {
+		b.codexThreadID = threadID
+	}
+
+	Debugf("[brain] codex response received after %s (%d chars)", elapsed, len(text))
+	resp, parseErr := parseBrainJSON(text)
+	if parseErr != nil {
+		Debugf("[brain] codex JSON parse failed, using raw text: %v", parseErr)
+		resp = &BrainResponse{Reasoning: text}
+	}
+	resp.Usage = usage
+
+	b.statsMu.Lock()
+	b.stats.Provider = b.cfg.BrainProvider
+	b.stats.CostKnown = false
+	b.stats.noteTurn(elapsed, effort)
+	b.stats.addTurn(usage, 0)
+	b.statsMu.Unlock()
+	return resp, nil
+}
+
+func codexPromptForTurn(b *Brain, message string) string {
+	notification := "NOTIFICATION:\n" + message
+	if strings.TrimSpace(b.codexThreadID) != "" {
+		return notification
+	}
+	return brainSystemPrompt(b.projectDir, b.jsonlPath, b.cfg.SessionProvider) + "\n\n" + notification
+}
+
+func buildCodexBrainArgs(b *Brain, prompt, effort string) []string {
+	if strings.TrimSpace(b.codexThreadID) != "" {
+		args := []string{
+			"exec", "resume",
+			"--json",
+			"-c", fmt.Sprintf("model_reasoning_effort=%q", effort),
+			"--skip-git-repo-check",
+		}
+		if strings.TrimSpace(b.cfg.BrainModel) != "" {
+			args = append(args, "--model", b.cfg.BrainModel)
+		}
+		args = append(args, b.codexThreadID, prompt)
+		return args
+	}
+
+	args := []string{
+		"exec",
+		"--json",
+		"-c", fmt.Sprintf("model_reasoning_effort=%q", effort),
+		"--skip-git-repo-check",
+		"-C", b.codexWorkDir,
+		"-s", "read-only",
+	}
+	if strings.TrimSpace(b.cfg.BrainModel) != "" {
+		args = append(args, "--model", b.cfg.BrainModel)
+	}
+	for _, dir := range b.accessibleDirs {
+		if filepath.Clean(dir) == filepath.Clean(b.projectDir) {
+			continue
+		}
+		args = append(args, "--add-dir", dir)
+	}
+	args = append(args, prompt)
+	return args
+}
+
+func ensureCodexBrainWorkDir(projectDir string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	slug := strings.ReplaceAll(filepath.Clean(projectDir), string(os.PathSeparator), "_")
+	dir := filepath.Join(homeDir, ".trupal", "codex-brain", slug)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func effectiveBrainEffort(cfg Config, reason string) string {
+	if normalizeProvider(cfg.BrainProvider, ProviderClaude) != ProviderCodex {
+		return strings.ToLower(strings.TrimSpace(cfg.BrainEffort))
+	}
+	return codexEffortForReason(cfg.BrainEffort, reason)
+}
+
+func codexEffortForReason(configEffort, reason string) string {
+	maxEffort := normalizeCodexEffort(configEffort)
+	base := "low"
+	switch {
+	case strings.Contains(reason, "idle for 60s"), strings.Contains(reason, "build status changed"):
+		base = "high"
+	case strings.Contains(reason, "trajectory signal"), strings.Contains(reason, "working tree changed"):
+		base = "medium"
+	case strings.Contains(reason, "session switched"):
+		base = "low"
+	}
+	return minEffort(base, maxEffort)
+}
+
+func normalizeCodexEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low", "medium", "high", "max":
+		return strings.ToLower(strings.TrimSpace(effort))
+	default:
+		return "high"
+	}
+}
+
+func minEffort(base, max string) string {
+	order := map[string]int{"low": 0, "medium": 1, "high": 2, "max": 3}
+	if order[base] > order[max] {
+		return max
+	}
+	return base
+}
+
+func brainNotifyTimeout(effort string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low":
+		return 45 * time.Second
+	case "medium":
+		return 75 * time.Second
+	case "max":
+		return 150 * time.Second
+	default:
+		return 105 * time.Second
+	}
+}
+
+func parseCodexExecUsage(out []byte, usage *BrainUsage) {
+	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Type  string `json:"type"`
+			Usage struct {
+				InputTokens       int `json:"input_tokens"`
+				CachedInputTokens int `json:"cached_input_tokens"`
+				OutputTokens      int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		if event.Type != "turn.completed" {
+			continue
+		}
+		usage.InputTokens = event.Usage.InputTokens
+		usage.CacheReadInputTokens = event.Usage.CachedInputTokens
+		usage.OutputTokens = event.Usage.OutputTokens
+	}
+}
+
+func parseCodexExecOutput(out []byte) (text string, usage BrainUsage, threadID string, err error) {
+	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	var textBuilder strings.Builder
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Type     string `json:"type"`
+			ThreadID string `json:"thread_id"`
+			Item     struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"item"`
+			Usage struct {
+				InputTokens       int `json:"input_tokens"`
+				CachedInputTokens int `json:"cached_input_tokens"`
+				OutputTokens      int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil {
+			continue
+		}
+		switch event.Type {
+		case "thread.started":
+			if event.ThreadID != "" {
+				threadID = event.ThreadID
+			}
+		case "item.completed":
+			if event.Item.Type == "agent_message" && strings.TrimSpace(event.Item.Text) != "" {
+				textBuilder.WriteString(event.Item.Text)
+			}
+		case "turn.completed":
+			usage.InputTokens = event.Usage.InputTokens
+			usage.CacheReadInputTokens = event.Usage.CachedInputTokens
+			usage.OutputTokens = event.Usage.OutputTokens
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		return "", BrainUsage{}, "", scanErr
+	}
+	text = strings.TrimSpace(textBuilder.String())
+	return text, usage, threadID, nil
 }
 
 // Stats returns a snapshot of cumulative brain usage for the current trupal session.

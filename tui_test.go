@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,6 +166,170 @@ func TestNoScrollWhenContentFits(t *testing.T) {
 	}
 }
 
+func TestHeaderLinesFitWithinPaneWidth(t *testing.T) {
+	m := initialModel("very-long-project-name-that-would-otherwise-wrap")
+	m.width = 32
+	m.height = 12
+	m.elapsed = "12m"
+	m.ccStatus = "active"
+	m.buildState = sErr.Render("✗") + " build failing"
+	m.findings = 4
+	m.resolved = 2
+	m.brain.lastTime = time.Now()
+	m.brain.stats = BrainStats{
+		TotalInputTokens:         120000,
+		TotalOutputTokens:        5000,
+		TotalCacheReadTokens:     150000,
+		TotalCacheCreationTokens: 3000,
+		TotalCostUSD:             1.2345,
+	}
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected header lines in view, got %d lines", len(lines))
+	}
+	if got := lipgloss.Width(lines[0]); got > m.width {
+		t.Fatalf("header line 1 wrapped: got width %d want <= %d", got, m.width)
+	}
+	if got := lipgloss.Width(lines[1]); got > m.width {
+		t.Fatalf("header line 2 wrapped: got width %d want <= %d", got, m.width)
+	}
+}
+
+func TestFilesLineDisambiguatesDuplicateBasenames(t *testing.T) {
+	line := filesLine([]string{"pkg/a/main.go", "cmd/main.go"}, nil)
+	if !strings.Contains(line, "a/main.go") {
+		t.Fatalf("expected duplicate basename to show parent dir, got %q", line)
+	}
+	if !strings.Contains(line, "cmd/main.go") {
+		t.Fatalf("expected duplicate basename to show parent dir, got %q", line)
+	}
+}
+
+func TestFooterCanShowCurrentIssueSummary(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	newM, _ := m.Update(statusMsg{
+		issues: []CurrentIssue{{Nudge: "mutex missing"}, {Nudge: "marshal errors swallowed"}},
+	})
+	m = newM.(model)
+
+	view := m.View()
+	if containsStr(view, "mutex missing") {
+		t.Fatalf("expected issue panel to be hidden by default, got %q", view)
+	}
+}
+
+func TestIssuePanelReducesVisibleLogHeight(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	newM, _ := m.Update(statusMsg{
+		issues: []CurrentIssue{{Nudge: "mutex missing"}, {Nudge: "marshal errors swallowed"}},
+	})
+	m = newM.(model)
+	m.issuePanelVisible = true
+
+	view := m.View()
+	if !containsStr(view, "focus 1/2") || !containsStr(view, "Next Mutex missing") {
+		t.Fatalf("expected dedicated current-issues panel, got %q", view)
+	}
+}
+
+func TestFooterShowsControlsHintWhenNoToast(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	view := m.View()
+	if !containsStr(view, "j/k scroll") {
+		t.Fatalf("expected footer controls hint, got %q", view)
+	}
+}
+
+func TestFooterShowsIssueControlsWhenIssuesExist(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	newM, _ := m.Update(statusMsg{
+		issues: []CurrentIssue{{Nudge: "mutex missing"}, {Nudge: "marshal errors swallowed"}},
+	})
+	m = newM.(model)
+
+	view := m.View()
+	if !containsStr(view, "o focus") {
+		t.Fatalf("expected collapsed issue hint, got %q", view)
+	}
+
+	m.issuePanelVisible = true
+	view = m.View()
+	if !containsStr(view, "[ ] switch issue") || !containsStr(view, "o hide") {
+		t.Fatalf("expected issue controls hint, got %q", view)
+	}
+}
+
+func TestIssuePanelParticipatesInScrollableContent(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	newM, _ := m.Update(statusMsg{
+		issues: []CurrentIssue{{Nudge: "mutex missing"}, {Nudge: "marshal errors swallowed"}},
+	})
+	m = newM.(model)
+	m.issuePanelVisible = true
+
+	content := m.contentLines()
+	if len(content) == 0 || !containsStr(content[0], "focus 1/2") {
+		t.Fatalf("expected issue panel in content lines, got %#v", content)
+	}
+}
+
+func TestIssuePanelCanExpandWhy(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	newM, _ := m.Update(statusMsg{
+		issues: []CurrentIssue{{ID: "f-1", Nudge: "lock the sessions map", Why: "Both handlers touch the same global map."}},
+	})
+	m = newM.(model)
+	m.issuePanelVisible = true
+	m.issueOpen["f-1"] = true
+
+	view := m.View()
+	if !containsStr(view, "Why Both handlers touch the same global map.") {
+		t.Fatalf("expected expanded why text in issue panel, got %q", view)
+	}
+}
+
+func TestIssuePanelStaysVisibleAtBottomOfLog(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	newM, _ := m.Update(statusMsg{
+		issues: []CurrentIssue{{Nudge: "mutex missing"}, {Nudge: "marshal errors swallowed"}},
+	})
+	m = newM.(model)
+	m.issuePanelVisible = true
+
+	for i := 0; i < 20; i++ {
+		m.log(fmt.Sprintf("content-%02d", i))
+	}
+
+	view := m.View()
+	if !containsStr(view, "focus 1/2") || !containsStr(view, "Next Mutex missing") {
+		t.Fatalf("expected pinned issue panel, got %q", view)
+	}
+	if !containsStr(view, "content-19") {
+		t.Fatalf("expected newest log lines to remain visible, got %q", view)
+	}
+}
+
 func TestLineTrimming(t *testing.T) {
 	m := initialModel("test")
 	m.width = 50
@@ -292,6 +457,7 @@ func TestBrainStatsDisplaysCompactHeader(t *testing.T) {
 	m.height = 15
 
 	newM, _ := m.Update(brainStatsMsg{stats: BrainStats{
+		CostKnown:                true,
 		TotalInputTokens:         58,
 		TotalOutputTokens:        5053,
 		TotalCacheReadTokens:     392000,
@@ -301,20 +467,21 @@ func TestBrainStatsDisplaysCompactHeader(t *testing.T) {
 	m = newM.(model)
 
 	view := m.View()
-	if !containsStr(view, "in=58 out=5053 92% $0.1100") {
+	if !containsStr(view, "$0.1100 92% cache") {
 		t.Fatalf("expected compact brain stats in header, got %q", view)
 	}
-	if containsStr(view, "cache_read=") {
+	if containsStr(view, "cache_read=") || containsStr(view, "uncached=58") {
 		t.Fatalf("expected narrow header to avoid detailed cache counts, got %q", view)
 	}
 }
 
 func TestBrainStatsDisplaysMinimalCacheFallback(t *testing.T) {
 	m := initialModel("test")
-	m.width = 34
+	m.width = 40
 	m.height = 15
 
 	newM, _ := m.Update(brainStatsMsg{stats: BrainStats{
+		CostKnown:                true,
 		TotalInputTokens:         58,
 		TotalOutputTokens:        5053,
 		TotalCacheReadTokens:     392000,
@@ -327,7 +494,7 @@ func TestBrainStatsDisplaysMinimalCacheFallback(t *testing.T) {
 	if !containsStr(view, "$0.1100 92% cache") {
 		t.Fatalf("expected minimal cache fallback in header, got %q", view)
 	}
-	if containsStr(view, "in=58 out=5053") {
+	if containsStr(view, "uncached=58") {
 		t.Fatalf("expected minimal fallback to drop detailed token counts, got %q", view)
 	}
 }
@@ -338,6 +505,7 @@ func TestBrainStatsDisplaysDetailedHeaderWhenWide(t *testing.T) {
 	m.height = 15
 
 	newM, _ := m.Update(brainStatsMsg{stats: BrainStats{
+		CostKnown:                true,
 		TotalInputTokens:         58,
 		TotalOutputTokens:        5053,
 		TotalCacheReadTokens:     392000,
@@ -347,8 +515,54 @@ func TestBrainStatsDisplaysDetailedHeaderWhenWide(t *testing.T) {
 	m = newM.(model)
 
 	view := m.View()
-	if !containsStr(view, "in=58 out=5053 cache_read=392K cache_create=36K 92% cost=$0.1100") {
+	if !containsStr(view, "prompt=428K uncached=36.1K cache_read=392K cache_create=36K 92% out=5053 cost=$0.1100") {
 		t.Fatalf("expected detailed brain stats in wide header, got %q", view)
+	}
+}
+
+func TestBrainStatsOmitsCostWhenUnknown(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	newM, _ := m.Update(brainStatsMsg{stats: BrainStats{
+		Provider:                 ProviderCodex,
+		CostKnown:                false,
+		TotalInputTokens:         18128,
+		TotalOutputTokens:        21,
+		TotalCacheReadTokens:     3456,
+		TotalCacheCreationTokens: 0,
+	}})
+	m = newM.(model)
+
+	view := m.View()
+	if containsStr(view, "$0.00") || containsStr(view, "cost=") {
+		t.Fatalf("expected unknown cost to be omitted, got %q", view)
+	}
+	if !containsStr(view, "cached=3456 19%") {
+		t.Fatalf("expected explicit cache display, got %q", view)
+	}
+}
+
+func TestBrainStatsCanDisplayLastTurnDiagnostics(t *testing.T) {
+	m := initialModel("test")
+	m.width = 120
+	m.height = 15
+
+	newM, _ := m.Update(brainStatsMsg{stats: BrainStats{
+		Provider:             ProviderCodex,
+		CostKnown:            false,
+		LastDuration:         12 * time.Second,
+		LastEffort:           "medium",
+		TotalInputTokens:     36574,
+		TotalOutputTokens:    54,
+		TotalCacheReadTokens: 33792,
+	}})
+	m = newM.(model)
+
+	view := m.View()
+	if !containsStr(view, "last=12s/medium") {
+		t.Fatalf("expected last-turn diagnostics in header, got %q", view)
 	}
 }
 

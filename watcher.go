@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,11 +17,13 @@ import (
 // DisplayState holds state for the log file writer.
 type DisplayState struct {
 	ProjectDir         string
+	AgentLabel         string
 	Elapsed            string
 	ChangedFiles       []string
 	UntrackedFiles     []string
 	Build              *BuildDisplay
 	TrajectoryFindings []Finding
+	PatternFindings    []PatternFinding
 	DeletedTests       []string
 	BrainFindings      []BrainFinding
 	BrainThinking      bool
@@ -34,6 +37,7 @@ type BuildDisplay struct {
 	OK         bool
 	ErrorCount int
 	Trend      string
+	Output     string
 }
 
 func WriteLog(logPath string, state DisplayState) {
@@ -43,7 +47,11 @@ func WriteLog(logPath string, state DisplayState) {
 	}
 	defer f.Close()
 	t := time.Now().Format("15:04:05")
-	fmt.Fprintf(f, "%s cc:%s", t, state.CCStatus)
+	label := state.AgentLabel
+	if strings.TrimSpace(label) == "" {
+		label = "agent"
+	}
+	fmt.Fprintf(f, "%s %s:%s", t, label, state.CCStatus)
 	if state.Build != nil {
 		if state.Build.OK {
 			fmt.Fprintf(f, " build:ok")
@@ -54,15 +62,59 @@ func WriteLog(logPath string, state DisplayState) {
 	if len(state.ChangedFiles) > 0 {
 		fmt.Fprintf(f, " mod:%s", strings.Join(state.ChangedFiles, ","))
 	}
-	if state.BrainStats.TotalCostUSD > 0 {
+	if state.BrainStats.CostKnown && state.BrainStats.TotalCostUSD > 0 {
 		fmt.Fprintf(f, " brain:$%.4f", state.BrainStats.TotalCostUSD)
+	}
+	if state.BrainStats.PromptTokens() > 0 || state.BrainStats.TotalOutputTokens > 0 {
+		fmt.Fprintf(f, " brain:uncached=%d cached=%d(%d%%) out=%d turns=%d",
+			state.BrainStats.UncachedPromptTokens(),
+			state.BrainStats.TotalCacheReadTokens,
+			state.BrainStats.CacheHitRate(),
+			state.BrainStats.TotalOutputTokens,
+			state.BrainStats.TurnCount,
+		)
+	}
+	if state.BrainStats.LastDuration > 0 || state.BrainStats.LastEffort != "" {
+		fmt.Fprintf(f, " brain:last=%s/%s",
+			roundDuration(state.BrainStats.LastDuration),
+			defaultString(state.BrainStats.LastEffort, "?"),
+		)
+	}
+	if strings.TrimSpace(state.BrainStats.LastTriggerSummary) != "" {
+		fmt.Fprintf(f, "\n  i review: %s", state.BrainStats.LastTriggerSummary)
 	}
 	for _, bf := range state.BrainFindings {
 		if bf.Status == "shown" {
 			fmt.Fprintf(f, "\n  ⚠ %s", bf.Nudge)
 		}
 	}
+	for _, tf := range state.TrajectoryFindings {
+		fmt.Fprintf(f, "\n  ⚠ %s", tf.Message)
+	}
+	for _, pf := range state.PatternFindings {
+		fmt.Fprintf(f, "\n  ⚠ %s", pf.Message)
+	}
 	fmt.Fprintf(f, "\n")
+}
+
+func roundDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	if d < time.Second {
+		return "<1s"
+	}
+	if d < 10*time.Second {
+		return d.Round(100 * time.Millisecond).String()
+	}
+	return d.Round(time.Second).String()
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cancelCh <-chan struct{}) {
@@ -79,26 +131,32 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 	logPath := filepath.Join(repoRoot, ".trupal.log")
 	var lastLogHash uint64
 	var brainLastTime time.Time
-	brainStats := BrainStats{}
+	brainStats := BrainStats{Provider: cfg.BrainProvider}
 
 	os.WriteFile(logPath, nil, 0644)
+	agentName := sessionProviderDisplayName(cfg.SessionProvider)
+	agentLabel := sessionProviderLabel(cfg.SessionProvider)
 
-	// Find CC's session JSONL.
-	jsonlPath := FindSessionJSONL(sessionDir)
+	// Find the watched agent's session JSONL.
+	jsonlPath := FindSessionJSONLForProvider(sessionDir, cfg.SessionProvider)
 	Debugf("[watcher] JSONL path: %q", jsonlPath)
 	if jsonlPath == "" {
-		p.Send(logLineMsg{line: "no CC session found — waiting..."})
+		p.Send(logLineMsg{line: fmt.Sprintf("no %s session found — waiting...", agentName)})
 	} else {
 		sessionName := filepath.Base(jsonlPath)
 		if len(sessionName) > 12 {
 			sessionName = sessionName[:8] + "…"
 		}
-		p.Send(logLineMsg{line: fmt.Sprintf("watching session %s", sessionName)})
+		p.Send(logLineMsg{line: fmt.Sprintf("watching %s session %s", agentLabel, sessionName)})
 	}
 
 	recentEditedFiles := make([]string, 0, 8)
 	recentSessionEntries := make([]JSONLEntry, 0, 16)
-	extraDirs := make(map[string]bool) // directories CC works in (from JSONL tool calls)
+	extraDirs := make(map[string]bool) // directories the watched agent works in (from session tool calls)
+	loggedTrajectory := make(map[string]bool)
+	loggedPatterns := make(map[string]PatternFinding)
+	loggedDeletedTests := make(map[string]bool)
+	queuedTrajectory := make(map[string]bool)
 
 	extraDirSlice := func() []string {
 		dirs := make([]string, 0, len(extraDirs))
@@ -112,10 +170,15 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 		recentEditedFiles = recentEditedFiles[:0]
 		recentSessionEntries = recentSessionEntries[:0]
 		extraDirs = make(map[string]bool)
+		loggedTrajectory = make(map[string]bool)
+		queuedTrajectory = make(map[string]bool)
+		loggedPatterns = make(map[string]PatternFinding)
+		loggedDeletedTests = make(map[string]bool)
+		lastLogHash = 0
 	}
 
 	seedSessionContext := func(path string) string {
-		entries := ReadRecentJSONLEntries(path, 40)
+		entries := ReadRecentJSONLEntriesForProvider(path, 40, cfg.SessionProvider)
 		return absorbJSONLEntries(repoRoot, entries, extraDirs, &recentEditedFiles, &recentSessionEntries)
 	}
 
@@ -125,7 +188,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 	var jsonlWatcher *JSONLWatcher
 	if jsonlPath != "" {
 		var err error
-		jsonlWatcher, err = NewJSONLWatcher(jsonlPath)
+		jsonlWatcher, err = NewJSONLWatcherForProvider(jsonlPath, cfg.SessionProvider)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not watch JSONL: %v\n", err)
 		}
@@ -165,10 +228,15 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 	brainLastMsg := ""
 	restartNeeded := false
 	restartAt := time.Time{}
-	loggedTrajectory := make(map[string]bool)
 	pendingTrigger := initialSessionReason
 	shuttingDown := false
 	interval := time.Duration(cfg.PollInterval) * time.Second
+	lastSeenWorkHash := uint64(0)
+	lastQueuedWorkHash := uint64(0)
+	lastReviewedWorkHash := uint64(0)
+	inFlightWorkHash := uint64(0)
+	lastWorkChange := time.Time{}
+	lastBuildSignature := ""
 
 	// Main loop ticker.
 	ticker := time.NewTicker(interval)
@@ -252,7 +320,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 
 		// Check for idle (60s since last JSONL activity).
 		if jsonlWatcher != nil && !idleNotified && time.Since(lastJSONLActivity) > 60*time.Second {
-			queueTrigger("CC has been idle for 60s — good time for a session review")
+			queueTrigger(fmt.Sprintf("%s has been idle for 60s — good time for a session review", agentName))
 			idleNotified = true
 		}
 
@@ -271,13 +339,18 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			(len(changedFiles) > 0 || len(untrackedFiles) > 0) &&
 			ShouldRunBuild(changedFiles, untrackedFiles, cfg.BuildExtensions) {
 			result := RunBuildCheck(repoRoot, cfg.BuildCmd)
-			session.AppendErrorCount(result.ErrorCount)
+			signature := fmt.Sprintf("%t:%d:%s", result.OK, result.ErrorCount, buildOutputExcerpt(result.Output, 6, 600))
+			if signature != lastBuildSignature {
+				session.AppendErrorCount(result.ErrorCount)
+				lastBuildSignature = signature
+			}
 
 			trend := buildTrend(session.ErrorHistory, result.OK)
 			buildDisplay = &BuildDisplay{
 				OK:         result.OK,
 				ErrorCount: result.ErrorCount,
 				Trend:      trend,
+				Output:     buildOutputExcerpt(result.Output, 6, 600),
 			}
 
 			// Build status changed → trigger brain.
@@ -291,17 +364,31 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 		}
 
 		deletedTests := ScanDeletedTests(nameStatus)
+		patternFindings := ScanDiffPatterns(rawDiff)
 		trajectoryFindings := session.EvalTrajectory()
+		currentWorkHash := reviewableWorkHash(rawDiff, untrackedFiles, buildDisplay)
+		if currentWorkHash != lastSeenWorkHash {
+			lastSeenWorkHash = currentWorkHash
+			lastWorkChange = time.Now()
+		}
+		if shouldReviewWorkingTree(currentWorkHash, lastReviewedWorkHash, lastQueuedWorkHash, lastWorkChange, time.Now(), 5*time.Second) {
+			queueTrigger("working tree changed — review the latest diff and changed files")
+			lastQueuedWorkHash = currentWorkHash
+		}
 
 		// Trajectory signal → trigger brain.
 		if len(trajectoryFindings) > 0 {
-			queueTrigger("trajectory signal: " + trajectoryFindings[0].Message)
+			key := trajectoryFindings[0].Message
+			if !queuedTrajectory[key] {
+				queueTrigger("trajectory signal: " + key)
+				queuedTrajectory[key] = true
+			}
 		}
 
-		// CC status.
+		// Watched agent status.
 		ccStatus := ""
 		if jsonlPath != "" {
-			ccStatus = DetectCCStatus(jsonlPath)
+			ccStatus = DetectAgentStatus(jsonlPath, cfg.SessionProvider)
 		}
 
 		// Drain brain results (non-blocking).
@@ -314,18 +401,29 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				p.Send(brainStatsMsg{stats: brainStats})
 			}
 			if brainStale {
+				if result.brain != nil {
+					result.brain.Stop()
+				}
+				inFlightWorkHash = 0
 				break
 			}
 			if result.brain != brain && brain != nil {
 				Debugf("[watcher] ignoring brain result from stale instance")
+				if result.brain != nil {
+					result.brain.Stop()
+				}
+				inFlightWorkHash = 0
 				break
 			}
 			if brain == nil && result.resp == nil {
 				brain = result.brain
 				Debugf("[watcher] brain restarted successfully")
+				inFlightWorkHash = 0
 				break
 			}
 			if result.resp != nil {
+				lastReviewedWorkHash = inFlightWorkHash
+				inFlightWorkHash = 0
 				brainLastMsg = result.resp.Reasoning
 				brainLastTime = time.Now()
 				p.Send(brainStatusMsg{thinking: false, lastTime: brainLastTime})
@@ -336,11 +434,14 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 					p.Send(observationMsg{text: obs})
 				}
 				for _, nudge := range result.resp.Nudges {
-					reasoning := nudge.Reasoning
-					if reasoning == "" {
-						reasoning = result.resp.Reasoning
+					why := nudge.Why
+					if why == "" {
+						why = nudge.Reasoning
 					}
-					id := findings.Add(nudge.Severity, nudge.Message, reasoning)
+					if why == "" {
+						why = result.resp.Reasoning
+					}
+					id := findings.Add(nudge.Severity, nudge.Message, why)
 					Debugf("[brain] nudge: %s", nudge.Message)
 					for _, f := range findings.Recent(1) {
 						if f.ID == id {
@@ -350,10 +451,8 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				}
 				if len(result.resp.ResolvedFindings) > 0 {
 					for _, rid := range result.resp.ResolvedFindings {
-						for _, f := range findings.Recent(100) {
-							if f.ID == rid {
-								p.Send(resolvedMsg{finding: f})
-							}
+						if finding, ok := findings.Get(rid); ok {
+							p.Send(resolvedMsg{finding: finding})
 						}
 					}
 					findings.Resolve(result.resp.ResolvedFindings)
@@ -362,6 +461,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 		case result := <-brainErrCh:
 			brainBusy = false
 			brainThinking = false
+			inFlightWorkHash = 0
 			if brainStale {
 				break
 			}
@@ -377,25 +477,17 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				p.Send(brainStatsMsg{stats: brainStats})
 				brain.Stop()
 				brain = nil
-				restartDirs := extraDirSlice()
-				restartStats := brainStats
-				go func() {
-					newBrain, restartErr := RestartBrain(cfg, repoRoot, jsonlPath, restartStats, 5*time.Second, restartDirs...)
-					if restartErr != nil {
-						Debugf("[watcher] brain restart failed: %v", restartErr)
-						return
-					}
-					brainResultCh <- brainResult{brain: newBrain}
-				}()
+				restartNeeded = true
+				restartAt = time.Now().Add(5 * time.Second)
 			}
 		default:
 		}
 
-		// Check for new CC session — invalidate the current brain on switch.
+		// Check for a new agent session — invalidate the current brain on switch.
 		if jsonlPath != "" {
-			if newPath := CheckForNewSession(sessionDir, jsonlPath); newPath != "" {
+			if newPath := CheckForNewSessionForProvider(sessionDir, jsonlPath, cfg.SessionProvider); newPath != "" {
 				Debugf("[watcher] session switch: %s -> %s", filepath.Base(jsonlPath), filepath.Base(newPath))
-				newWatcher, err := NewJSONLWatcher(newPath)
+				newWatcher, err := NewJSONLWatcherForProvider(newPath, cfg.SessionProvider)
 				if err != nil {
 					Debugf("[watcher] failed to watch new session: %v", err)
 				} else {
@@ -413,7 +505,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 					idleNotified = false
 					resetSessionContext()
 					seedReason := seedSessionContext(newPath)
-					pendingTrigger = mergeTriggerReason(pendingTrigger, "CC session switched")
+					pendingTrigger = mergeTriggerReason(pendingTrigger, agentName+" session switched")
 					pendingTrigger = mergeTriggerReason(pendingTrigger, seedReason)
 					restartNeeded = false
 					restartAt = time.Time{}
@@ -429,10 +521,10 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			}
 		} else {
 			// No session yet — keep looking.
-			newPath := FindSessionJSONL(sessionDir)
+			newPath := FindSessionJSONLForProvider(sessionDir, cfg.SessionProvider)
 			if newPath != "" {
-				Debugf("[watcher] found CC session: %s", filepath.Base(newPath))
-				newWatcher, err := NewJSONLWatcher(newPath)
+				Debugf("[watcher] found %s session: %s", agentLabel, filepath.Base(newPath))
+				newWatcher, err := NewJSONLWatcherForProvider(newPath, cfg.SessionProvider)
 				if err != nil {
 					Debugf("[watcher] failed to watch session: %v", err)
 				} else {
@@ -445,7 +537,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 						triggerBrain = false
 						triggerReason = ""
 					}
-					pendingTrigger = mergeTriggerReason(pendingTrigger, "CC session switched")
+					pendingTrigger = mergeTriggerReason(pendingTrigger, agentName+" session switched")
 					pendingTrigger = mergeTriggerReason(pendingTrigger, seedReason)
 					restartNeeded = false
 					restartAt = time.Time{}
@@ -503,7 +595,11 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			Debugf("[watcher] triggering brain: %s", truncate(notification, 200))
 			brainBusy = true
 			brainThinking = true
+			brainStats.LastEffort = effectiveBrainEffort(cfg, triggerReason)
+			brainStats.LastTriggerSummary = truncate(triggerReason, 120)
+			beginWorkReview(currentWorkHash, &lastQueuedWorkHash, &inFlightWorkHash)
 			p.Send(brainStatusMsg{thinking: true})
+			p.Send(brainStatsMsg{stats: brainStats})
 			activeBrain := brain
 			findingsJSON := findings.ActiveJSON()
 
@@ -520,11 +616,13 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 		// Build display state.
 		state := DisplayState{
 			ProjectDir:         shortenPath(repoRoot),
+			AgentLabel:         agentLabel,
 			Elapsed:            session.Elapsed(),
 			ChangedFiles:       changedFiles,
 			UntrackedFiles:     untrackedFiles,
 			Build:              buildDisplay,
 			TrajectoryFindings: trajectoryFindings,
+			PatternFindings:    patternFindings,
 			DeletedTests:       deletedTests,
 			BrainFindings:      findings.Recent(10),
 			BrainThinking:      brainThinking,
@@ -534,14 +632,16 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			CCStatus:           ccStatus,
 		}
 
+		activeBrainFindings, resolvedBrainFindings := findings.Count()
 		buildOK := (*bool)(nil)
 		if state.Build != nil {
 			v := state.Build.OK
 			buildOK = &v
 		}
 		p.Send(statusMsg{
-			ccStatus: ccStatus,
-			buildOK:  buildOK,
+			agentLabel: agentLabel,
+			ccStatus:   ccStatus,
+			buildOK:    buildOK,
 			buildErrs: func() int {
 				if state.Build != nil {
 					return state.Build.ErrorCount
@@ -558,6 +658,9 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			newFiles: untrackedFiles,
 			elapsed:  session.Elapsed(),
 			project:  filepath.Base(repoRoot),
+			findings: activeBrainFindings + len(patternFindings),
+			resolved: resolvedBrainFindings,
+			issues:   collectCurrentIssues(findings.Active(), patternFindings, deletedTests, trajectoryFindings, 4),
 		})
 		// Log trajectory signals once.
 		for _, f := range trajectoryFindings {
@@ -565,6 +668,49 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			if !loggedTrajectory[key] {
 				p.Send(trajectoryMsg{message: f.Message})
 				loggedTrajectory[key] = true
+			}
+		}
+		activeTrajectory := make(map[string]bool, len(trajectoryFindings))
+		for _, f := range trajectoryFindings {
+			activeTrajectory[f.Message] = true
+		}
+		for key := range queuedTrajectory {
+			if !activeTrajectory[key] {
+				delete(queuedTrajectory, key)
+			}
+		}
+		activePatternKeys := make(map[string]bool, len(patternFindings))
+		for _, pf := range patternFindings {
+			activePatternKeys[pf.Key] = true
+			if _, ok := loggedPatterns[pf.Key]; ok {
+				continue
+			}
+			p.Send(patternMsg{finding: pf})
+			loggedPatterns[pf.Key] = pf
+		}
+		for key := range loggedPatterns {
+			if !activePatternKeys[key] {
+				delete(loggedPatterns, key)
+			}
+		}
+		activeDeletedTests := make(map[string]bool, len(deletedTests))
+		for _, file := range deletedTests {
+			activeDeletedTests[file] = true
+			if loggedDeletedTests[file] {
+				continue
+			}
+			p.Send(patternMsg{finding: PatternFinding{
+				Key:      "deleted-test:" + file,
+				Level:    "warn",
+				Message:  "deleted test file (" + file + ")",
+				File:     file,
+				Category: "deleted-test",
+			}})
+			loggedDeletedTests[file] = true
+		}
+		for file := range loggedDeletedTests {
+			if !activeDeletedTests[file] {
+				delete(loggedDeletedTests, file)
 			}
 		}
 		// Write full state to log file on any change.
@@ -623,6 +769,7 @@ func splitDiffByFile(rawDiff string) map[string]string {
 
 	lines := strings.Split(rawDiff, "\n")
 	var currentFile string
+	var fallbackFile string
 	var buf strings.Builder
 
 	flush := func() {
@@ -635,11 +782,16 @@ func splitDiffByFile(rawDiff string) map[string]string {
 		if strings.HasPrefix(line, "diff --git ") {
 			flush()
 			currentFile = ""
+			fallbackFile = diffHeaderPath(line)
 			buf.Reset()
 		}
 
 		if strings.HasPrefix(line, "+++ b/") {
 			currentFile = strings.TrimPrefix(line, "+++ b/")
+		} else if strings.HasPrefix(line, "--- a/") && currentFile == "" {
+			currentFile = strings.TrimPrefix(line, "--- a/")
+		} else if strings.HasPrefix(line, "+++ /dev/null") && currentFile == "" {
+			currentFile = fallbackFile
 		}
 
 		if currentFile != "" || strings.HasPrefix(line, "diff --git ") {
@@ -650,6 +802,14 @@ func splitDiffByFile(rawDiff string) map[string]string {
 	flush()
 
 	return result
+}
+
+func diffHeaderPath(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) >= 3 {
+		return strings.TrimPrefix(fields[2], "a/")
+	}
+	return ""
 }
 
 func isEditTool(tool string) bool {
@@ -710,7 +870,7 @@ func absorbJSONLEntries(projectDir string, entries []JSONLEntry, extraDirs map[s
 			key := "user:" + snip
 			if !seen[key] {
 				seen[key] = true
-				summary = append(summary, fmt.Sprintf("CC asked: %q", snip))
+				summary = append(summary, fmt.Sprintf("agent asked: %q", snip))
 			}
 		}
 
@@ -720,7 +880,7 @@ func absorbJSONLEntries(projectDir string, entries []JSONLEntry, extraDirs map[s
 			key := "assistant:" + snip
 			if !seen[key] {
 				seen[key] = true
-				summary = append(summary, fmt.Sprintf("CC said: %q", snip))
+				summary = append(summary, fmt.Sprintf("agent said: %q", snip))
 			}
 		}
 
@@ -747,11 +907,11 @@ func absorbJSONLEntries(projectDir string, entries []JSONLEntry, extraDirs map[s
 
 				switch {
 				case filePath != "":
-					summary = append(summary, fmt.Sprintf("CC used %s on %s", tool, filepath.Base(filePath)))
+					summary = append(summary, fmt.Sprintf("agent used %s on %s", tool, filepath.Base(filePath)))
 				case detail != "":
-					summary = append(summary, fmt.Sprintf("CC used %s (%s)", tool, detail))
+					summary = append(summary, fmt.Sprintf("agent used %s (%s)", tool, detail))
 				default:
-					summary = append(summary, fmt.Sprintf("CC used %s", tool))
+					summary = append(summary, fmt.Sprintf("agent used %s", tool))
 				}
 			}
 		}
@@ -761,7 +921,7 @@ func absorbJSONLEntries(projectDir string, entries []JSONLEntry, extraDirs map[s
 		return ""
 	}
 	if len(summary) == 0 {
-		return "CC session updated"
+		return "agent session updated"
 	}
 	return strings.Join(summary, "; ")
 }
@@ -781,9 +941,12 @@ func indexedValue(values []string, idx int) string {
 	return strings.TrimSpace(values[idx])
 }
 
-func summarizeRecentSessionActivity(projectDir string, entries []JSONLEntry) string {
+func summarizeRecentSessionActivity(projectDir string, entries []JSONLEntry, maxLines int) string {
 	if len(entries) == 0 {
 		return "- none captured yet"
+	}
+	if maxLines <= 0 {
+		maxLines = 10
 	}
 
 	var lines []string
@@ -812,8 +975,8 @@ func summarizeRecentSessionActivity(projectDir string, entries []JSONLEntry) str
 	if len(lines) == 0 {
 		return "- none captured yet"
 	}
-	if len(lines) > 10 {
-		lines = lines[len(lines)-10:]
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
 	}
 	return strings.Join(lines, "\n")
 }
@@ -822,15 +985,34 @@ func buildBrainNotification(projectDir, reason string, recentEntries []JSONLEntr
 	var sb strings.Builder
 	sb.WriteString(reason)
 	sb.WriteString("\n\nRECENT SESSION ACTIVITY:\n")
-	sb.WriteString(summarizeRecentSessionActivity(projectDir, recentEntries))
-	sb.WriteString("\n\nRECENT JSONL EDITS:\n")
-	if len(editedFiles) == 0 {
-		sb.WriteString("- none detected from recent Edit/Write tool calls\n")
-	} else {
-		for _, file := range editedFiles {
-			sb.WriteString("- ")
-			sb.WriteString(file)
-			sb.WriteByte('\n')
+	maxActivityLines := 6
+	includeEditedFiles := true
+	includeBuildOutput := build != nil && strings.TrimSpace(build.Output) != ""
+
+	switch {
+	case strings.Contains(reason, "session switched"):
+		maxActivityLines = 4
+		includeEditedFiles = false
+		includeBuildOutput = false
+	case strings.Contains(reason, "trajectory signal"):
+		maxActivityLines = 5
+	case strings.Contains(reason, "working tree changed"):
+		maxActivityLines = 4
+	case strings.Contains(reason, "idle for 60s"):
+		maxActivityLines = 5
+	}
+
+	sb.WriteString(summarizeRecentSessionActivity(projectDir, recentEntries, maxActivityLines))
+	if includeEditedFiles {
+		sb.WriteString("\n\nRECENT JSONL EDITS:\n")
+		if len(editedFiles) == 0 {
+			sb.WriteString("- none detected from recent Edit/Write tool calls\n")
+		} else {
+			for _, file := range editedFiles {
+				sb.WriteString("- ")
+				sb.WriteString(file)
+				sb.WriteByte('\n')
+			}
 		}
 	}
 
@@ -839,6 +1021,14 @@ func buildBrainNotification(projectDir, reason string, recentEntries []JSONLEntr
 	sb.WriteString("\n\nBUILD STATUS:\n")
 	sb.WriteString("- ")
 	sb.WriteString(formatBuildStatus(build))
+	if includeBuildOutput {
+		sb.WriteString("\n\nBUILD OUTPUT:\n")
+		for _, line := range strings.Split(strings.TrimSpace(build.Output), "\n") {
+			sb.WriteString("- ")
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+	}
 	return sb.String()
 }
 
@@ -895,11 +1085,6 @@ func summarizeGitDiff(nameStatus, rawDiff string, untrackedFiles []string) strin
 	if len(lines) == 0 {
 		return "- clean working tree"
 	}
-	const maxLines = 8
-	if len(lines) > maxLines {
-		extra := len(lines) - maxLines
-		lines = append(lines[:maxLines], fmt.Sprintf("- ... %d more changed files", extra))
-	}
 	return strings.Join(lines, "\n")
 }
 
@@ -921,6 +1106,237 @@ func formatBuildStatus(build *BuildDisplay) string {
 		return fmt.Sprintf("failing: %d errors (%s)", build.ErrorCount, build.Trend)
 	}
 	return fmt.Sprintf("failing: %d errors", build.ErrorCount)
+}
+
+func buildOutputExcerpt(output string, maxLines, maxChars int) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+
+	lines := strings.Split(output, "\n")
+	filtered := make([]string, 0, len(lines))
+	chars := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if maxLines > 0 && len(filtered) >= maxLines {
+			break
+		}
+		if maxChars > 0 && chars >= maxChars {
+			break
+		}
+		if maxChars > 0 && chars+len(line) > maxChars {
+			line = truncate(line, maxChars-chars)
+		}
+		filtered = append(filtered, line)
+		chars += len(line)
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+	if len(filtered) < len(lines) {
+		filtered = append(filtered, "...")
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func reviewableWorkHash(rawDiff string, untrackedFiles []string, build *BuildDisplay) uint64 {
+	if strings.TrimSpace(rawDiff) == "" && len(untrackedFiles) == 0 && build == nil {
+		return 0
+	}
+
+	h := fnv.New64a()
+	h.Write([]byte(rawDiff))
+
+	files := append([]string(nil), untrackedFiles...)
+	sort.Strings(files)
+	for _, file := range files {
+		h.Write([]byte(file))
+	}
+	if build != nil {
+		if build.OK {
+			h.Write([]byte("ok"))
+		} else {
+			fmt.Fprintf(h, "fail:%d:%s:%s", build.ErrorCount, build.Trend, buildOutputExcerpt(build.Output, 3, 240))
+		}
+	}
+	return h.Sum64()
+}
+
+func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFinding, deletedTests []string, trajectory []Finding, maxItems int) []CurrentIssue {
+	if maxItems <= 0 {
+		return nil
+	}
+
+	var items []CurrentIssue
+	appendItem := func(issue CurrentIssue) {
+		issue.Nudge = strings.TrimSpace(issue.Nudge)
+		issue.Why = strings.TrimSpace(issue.Why)
+		if issue.Nudge == "" {
+			return
+		}
+		if len(items) < maxItems {
+			items = append(items, issue)
+		}
+	}
+
+	for _, finding := range activeFindings {
+		appendItem(CurrentIssue{
+			ID:       finding.ID,
+			Severity: finding.Severity,
+			Status:   finding.Status,
+			Nudge:    shortIssueText(finding.Nudge),
+			Why:      shortIssueText(finding.Why),
+			Ref:      issueRef(finding.ID, finding.Timestamp),
+		})
+	}
+	for _, finding := range patterns {
+		appendItem(CurrentIssue{
+			ID:       finding.Key,
+			Severity: finding.Level,
+			Status:   "shown",
+			Nudge:    shortIssueText(finding.Message),
+			Why:      shortIssueWhy(finding),
+			Ref:      issueRef(finding.Key, time.Time{}),
+		})
+	}
+	for _, file := range deletedTests {
+		appendItem(CurrentIssue{
+			ID:       "deleted-test:" + file,
+			Severity: "warn",
+			Status:   "shown",
+			Nudge:    "deleted test: " + file,
+			Why:      "Removing test coverage can hide regressions unless the behavior is re-verified elsewhere.",
+			Ref:      "deleted-test",
+		})
+	}
+	for _, finding := range trajectory {
+		if finding.Level != "error" && finding.Message != "build errors increasing" {
+			continue
+		}
+		appendItem(CurrentIssue{
+			ID:       "trajectory:" + finding.Message,
+			Severity: finding.Level,
+			Status:   "shown",
+			Nudge:    shortIssueText(finding.Message),
+			Why:      "This is a process warning: the current session pattern suggests churn or non-progress, so the next step should be more deliberate.",
+			Ref:      "trajectory",
+		})
+	}
+	return items
+}
+
+func shortIssueText(text string) string {
+	return normalizeIssueText(text)
+}
+
+func issueRef(id string, ts time.Time) string {
+	id = strings.TrimSpace(id)
+	if ts.IsZero() {
+		return id
+	}
+	if id == "" {
+		return ts.Format("15:04")
+	}
+	return ts.Format("15:04") + " · " + id
+}
+
+func shortIssueWhy(finding PatternFinding) string {
+	switch finding.Category {
+	case "todo":
+		return "This introduces deferred work into the diff instead of resolving the issue now."
+	case "suppression":
+		return "This adds a lint or type suppression, which is often a sign of patching around the real problem."
+	case "swallowed-error":
+		return "Ignoring the error hides failures from callers and makes runtime problems look like success."
+	default:
+		return ""
+	}
+}
+
+func normalizeIssueText(text string) string {
+	text = strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+	text = strings.ReplaceAll(text, "`", "")
+
+	prefixes := []string{
+		"hey, ",
+		"hey ",
+		"you still ",
+		"you’re still ",
+		"you're still ",
+		"you’ve got ",
+		"you've got ",
+		"you need to ",
+		"you should ",
+	}
+	for {
+		trimmed := false
+		lower := strings.ToLower(text)
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(lower, prefix) {
+				text = strings.TrimSpace(text[len(prefix):])
+				trimmed = true
+				break
+			}
+		}
+		if !trimmed {
+			break
+		}
+	}
+	text = strings.Trim(text, " .")
+	if text == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "post /refresh") && strings.Contains(lower, "nothing to verify"):
+		return "Add POST /refresh"
+	case strings.Contains(lower, "only handle /state") && strings.Contains(lower, "post /refresh"):
+		return "Add POST /refresh"
+	case strings.Contains(lower, "expire()") && strings.Contains(lower, "expired") && (strings.Contains(lower, "written back") || strings.Contains(lower, "reassign") || strings.Contains(lower, "stay resident") || strings.Contains(lower, "never deletes")):
+		return "Fix Expire() so expired sessions are removed"
+	case strings.Contains(lower, "expire() is backwards"):
+		return "Fix Expire() so expired sessions are removed"
+	case strings.Contains(lower, "activejson()") && strings.Contains(lower, "json.marshal"):
+		return "Handle json.Marshal failures in ActiveJSON()"
+	case strings.Contains(lower, "byte-count/error") && strings.Contains(lower, "write"):
+		return "Check response write errors"
+	case strings.Contains(lower, "wrap sessions with a mutex") || (strings.Contains(lower, "sessions map") && strings.Contains(lower, "no lock")) || (strings.Contains(lower, "same package-level sessions map") && strings.Contains(lower, "different handlers")):
+		return "Protect sessions map with a mutex"
+	case strings.Contains(lower, "package-global map") && strings.Contains(lower, "no lock"):
+		return "Protect sessions map with a mutex"
+	case strings.Contains(lower, "allow: post"):
+		return "Add Allow: POST on /refresh 405"
+	case strings.Contains(lower, "/state") && strings.Contains(lower, "accepts every method"):
+		return "Restrict /state to GET"
+	case strings.Contains(lower, "listenandserve") && strings.Contains(lower, "silently"):
+		return "Handle ListenAndServe errors"
+	}
+
+	return strings.ToUpper(text[:1]) + text[1:]
+}
+
+func shouldReviewWorkingTree(currentHash, reviewedHash, queuedHash uint64, lastChange, now time.Time, quietPeriod time.Duration) bool {
+	if currentHash == 0 || currentHash == reviewedHash || currentHash == queuedHash {
+		return false
+	}
+	if lastChange.IsZero() {
+		return false
+	}
+	return now.Sub(lastChange) >= quietPeriod
+}
+
+func beginWorkReview(currentHash uint64, queuedHash *uint64, inFlightHash *uint64) {
+	if queuedHash != nil {
+		*queuedHash = 0
+	}
+	if inFlightHash != nil {
+		*inFlightHash = currentHash
+	}
 }
 
 // buildTrend computes the Trend string for BuildDisplay from the error history.
@@ -1008,6 +1424,10 @@ func stateHash(state DisplayState) uint64 {
 		}
 	}
 	for _, f := range state.TrajectoryFindings {
+		h.Write([]byte(f.Message))
+	}
+	for _, f := range state.PatternFindings {
+		h.Write([]byte(f.Key))
 		h.Write([]byte(f.Message))
 	}
 	for _, f := range state.DeletedTests {

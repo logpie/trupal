@@ -95,6 +95,45 @@ func (s *Selection) Clear() {
 	s.View = selectionRect{}
 }
 
+func (s *Selection) ShiftLines(delta int) {
+	if delta <= 0 {
+		return
+	}
+	if !s.Anchor.Valid() && !s.Start.Valid() && !s.End.Valid() {
+		return
+	}
+
+	s.Anchor.Line -= delta
+	s.Start.Line -= delta
+	s.End.Line -= delta
+	if s.Anchor.Line < 0 || s.Start.Line < 0 || s.End.Line < 0 {
+		s.Clear()
+	}
+}
+
+func (s *Selection) ShiftLinesAfter(offset, delta int) {
+	if delta <= 0 {
+		return
+	}
+	if !s.Anchor.Valid() && !s.Start.Valid() && !s.End.Valid() {
+		return
+	}
+
+	shift := func(p *selectionPoint) {
+		if !p.Valid() || p.Line < offset {
+			return
+		}
+		p.Line -= delta
+	}
+
+	shift(&s.Anchor)
+	shift(&s.Start)
+	shift(&s.End)
+	if s.Anchor.Line < 0 || s.Start.Line < 0 || s.End.Line < 0 {
+		s.Clear()
+	}
+}
+
 func (s *Selection) HasSelection() bool {
 	return s.Start.Valid() && s.End.Valid()
 }
@@ -229,7 +268,7 @@ func CopySelectedToClipboard(text string) error {
 	// Also set tmux buffer as an independent copy target.
 	if os.Getenv("TMUX") != "" {
 		if err := loadTmuxBuffer(text); err != nil {
-			return nil
+			return err
 		}
 	}
 

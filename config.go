@@ -14,34 +14,37 @@ type Config struct {
 	BuildCmd        string
 	BuildExtensions []string
 	PollInterval    int
-	BrainProvider   string // currently only "claude"
-	BrainModel      string // e.g. "sonnet", "opus", "haiku"
+	SessionProvider string // watched session provider: "claude" or "codex"
+	BrainProvider   string // brain provider: "claude" or "codex"
+	BrainModel      string // claude: haiku/sonnet/opus, codex: model id or empty for default
 	BrainEffort     string // "low", "medium", "high", "max"
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		PollInterval:  3,
-		BrainProvider: "claude",
-		BrainModel:    "sonnet",
-		BrainEffort:   "high",
+		PollInterval:    3,
+		SessionProvider: ProviderClaude,
+		BrainProvider:   ProviderClaude,
 	}
 }
 
 // loadConfig reads <projectDir>/.trupal.toml and returns a Config.
 // If the file does not exist, DefaultConfig is returned with no error.
-func loadConfig(projectDir string) Config {
+func loadConfig(projectDir string) (Config, error) {
 	cfg := DefaultConfig()
 
 	f, err := os.Open(filepath.Join(projectDir, ".trupal.toml"))
 	if err != nil {
-		// File absent or unreadable — use defaults.
-		return cfg
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return cfg, err
 	}
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 4096), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -63,6 +66,8 @@ func loadConfig(projectDir string) Config {
 			if err == nil {
 				cfg.PollInterval = n
 			}
+		case "session_provider":
+			cfg.SessionProvider = strings.ToLower(strings.TrimSpace(value))
 		case "brain_provider":
 			cfg.BrainProvider = strings.ToLower(strings.TrimSpace(value))
 		case "brain_model":
@@ -71,8 +76,11 @@ func loadConfig(projectDir string) Config {
 			cfg.BrainEffort = value
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return cfg, err
+	}
 
-	return cfg
+	return cfg, nil
 }
 
 func (cfg Config) String() string {
@@ -80,14 +88,23 @@ func (cfg Config) String() string {
 	if cfg.BuildCmd != "" {
 		parts = append(parts, "build="+cfg.BuildCmd)
 	}
-	parts = append(parts, "brain="+cfg.BrainProvider+"/"+cfg.BrainModel)
+	parts = append(parts, "session="+cfg.SessionProvider)
+	brainModel := cfg.BrainModel
+	if brainModel == "" {
+		brainModel = "default"
+	}
+	parts = append(parts, "brain="+cfg.BrainProvider+"/"+brainModel)
 	parts = append(parts, "effort="+cfg.BrainEffort)
 	parts = append(parts, fmt.Sprintf("poll=%ds", cfg.PollInterval))
 	return strings.Join(parts, " ")
 }
 
 func ReloadConfig(projectDir string) Config {
-	cfg := loadConfig(projectDir)
+	cfg, err := loadConfig(projectDir)
+	if err != nil {
+		Debugf("[config] failed to reload config: %v", err)
+		return DefaultConfig()
+	}
 	return cfg
 }
 
@@ -99,9 +116,19 @@ func SaveConfig(projectDir string, cfg Config) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "build_cmd = \"%s\"\n", cfg.BuildCmd)
-	fmt.Fprintf(f, "brain_model = \"%s\"\n", cfg.BrainModel)
-	fmt.Fprintf(f, "brain_effort = \"%s\"\n", cfg.BrainEffort)
+	if cfg.BuildCmd != "" {
+		fmt.Fprintf(f, "build_cmd = %q\n", cfg.BuildCmd)
+	}
+	if len(cfg.BuildExtensions) > 0 {
+		fmt.Fprintf(f, "build_extensions = [%s]\n", formatQuotedArray(cfg.BuildExtensions))
+	}
+	fmt.Fprintf(f, "poll_interval = %d\n", cfg.PollInterval)
+	fmt.Fprintf(f, "session_provider = %q\n", cfg.SessionProvider)
+	fmt.Fprintf(f, "brain_provider = %q\n", cfg.BrainProvider)
+	if cfg.BrainModel != "" {
+		fmt.Fprintf(f, "brain_model = %q\n", cfg.BrainModel)
+	}
+	fmt.Fprintf(f, "brain_effort = %q\n", cfg.BrainEffort)
 }
 
 // Validate normalizes and validates config values that must match runtime support.
@@ -112,21 +139,31 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("poll_interval must be between 1 and 60 seconds")
 	}
 
-	cfg.BrainProvider = strings.ToLower(strings.TrimSpace(cfg.BrainProvider))
+	cfg.SessionProvider = normalizeProvider(cfg.SessionProvider, defaults.SessionProvider)
+	cfg.BrainProvider = normalizeProvider(cfg.BrainProvider, defaults.BrainProvider)
+	switch cfg.SessionProvider {
+	case ProviderClaude, ProviderCodex:
+	default:
+		return fmt.Errorf("unsupported session_provider %q (supported: claude, codex)", cfg.SessionProvider)
+	}
+
 	if cfg.BrainProvider == "" {
 		cfg.BrainProvider = defaults.BrainProvider
 	}
 	cfg.BrainModel = strings.ToLower(strings.TrimSpace(cfg.BrainModel))
-	if cfg.BrainModel == "" {
-		cfg.BrainModel = defaults.BrainModel
-	}
 	cfg.BrainEffort = strings.ToLower(strings.TrimSpace(cfg.BrainEffort))
 	if cfg.BrainEffort == "" {
-		cfg.BrainEffort = defaults.BrainEffort
+		cfg.BrainEffort = "high"
 	}
 
 	switch cfg.BrainProvider {
-	case "claude":
+	case ProviderClaude:
+		if cfg.BrainModel == "" {
+			cfg.BrainModel = "sonnet"
+		}
+		if IsLikelyCodexModel(cfg.BrainModel) {
+			return fmt.Errorf("brain_provider %q conflicts with brain_model %q (looks like a Codex/OpenAI model)", cfg.BrainProvider, cfg.BrainModel)
+		}
 		if !IsValidModel(cfg.BrainModel) {
 			return fmt.Errorf("unsupported brain_model %q (supported: haiku, sonnet, opus)", cfg.BrainModel)
 		}
@@ -134,8 +171,16 @@ func (cfg *Config) Validate() error {
 			return fmt.Errorf("unsupported brain_effort %q (supported: low, medium, high, max)", cfg.BrainEffort)
 		}
 		return nil
+	case ProviderCodex:
+		if IsValidModel(cfg.BrainModel) {
+			return fmt.Errorf("brain_provider %q conflicts with brain_model %q (looks like a Claude model)", cfg.BrainProvider, cfg.BrainModel)
+		}
+		if !IsValidEffort(cfg.BrainEffort) {
+			return fmt.Errorf("unsupported brain_effort %q (supported: low, medium, high, max)", cfg.BrainEffort)
+		}
+		return nil
 	default:
-		return fmt.Errorf("unsupported brain_provider %q (supported: claude)", cfg.BrainProvider)
+		return fmt.Errorf("unsupported brain_provider %q (supported: claude, codex)", cfg.BrainProvider)
 	}
 }
 
@@ -148,7 +193,7 @@ func parseTomlLine(line string) (key, value string, ok bool) {
 		return "", "", false
 	}
 	key = strings.TrimSpace(line[:idx])
-	raw := strings.TrimSpace(line[idx+1:])
+	raw := strings.TrimSpace(stripTomlComment(line[idx+1:]))
 	if key == "" {
 		return "", "", false
 	}
@@ -167,6 +212,29 @@ func parseTomlLine(line string) (key, value string, ok bool) {
 	return key, raw, true
 }
 
+func stripTomlComment(raw string) string {
+	inSingle := false
+	inDouble := false
+	escaped := false
+
+	for i, r := range raw {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\' && inDouble:
+			escaped = true
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+		case r == '#' && !inSingle && !inDouble:
+			return strings.TrimSpace(raw[:i])
+		}
+	}
+
+	return strings.TrimSpace(raw)
+}
+
 // parseTomlArray parses a TOML inline array of strings, e.g. [".ts", ".tsx"].
 // Non-string elements and malformed input are silently skipped.
 func parseTomlArray(s string) []string {
@@ -182,4 +250,12 @@ func parseTomlArray(s string) []string {
 		}
 	}
 	return result
+}
+
+func formatQuotedArray(values []string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.Quote(value))
+	}
+	return strings.Join(parts, ", ")
 }

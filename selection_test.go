@@ -238,7 +238,7 @@ func TestMouseDragCopiesSelectionFromScrolledView(t *testing.T) {
 	}
 }
 
-func TestMouseMotionWithoutPressStillSelects(t *testing.T) {
+func TestMouseMotionWithoutPressDoesNotSelect(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
 	m.height = 15
@@ -272,13 +272,14 @@ func TestMouseMotionWithoutPressStillSelects(t *testing.T) {
 		Action: tea.MouseActionRelease,
 	})
 	m = newM.(model)
-	if cmd == nil {
-		t.Fatal("expected copy command when drag starts from motion")
+	if cmd != nil {
+		t.Fatal("did not expect copy command without a press")
 	}
-
-	_ = cmd()
-	if copied != "line11\nline12" {
-		t.Fatalf("expected copied text %q, got %q", "line11\nline12", copied)
+	if copied != "" {
+		t.Fatalf("expected no copied text, got %q", copied)
+	}
+	if m.sel.HasSelection() {
+		t.Fatal("selection should remain empty without a press")
 	}
 }
 
@@ -375,7 +376,7 @@ func TestSelectionPointAtAndSelectedTextHandleANSIAndTabs(t *testing.T) {
 	}
 }
 
-func TestCopySelectedToClipboardIgnoresTmuxErrorAfterOSC52Write(t *testing.T) {
+func TestCopySelectedToClipboardReturnsTmuxError(t *testing.T) {
 	t.Setenv("TMUX", "1")
 
 	wantErr := errors.New("tmux load-buffer failed")
@@ -390,7 +391,57 @@ func TestCopySelectedToClipboardIgnoresTmuxErrorAfterOSC52Write(t *testing.T) {
 		loadTmuxBuffer = prevLoad
 	}()
 
-	if err := CopySelectedToClipboard("hello"); err != nil {
-		t.Fatalf("expected nil error after OSC 52 write, got %v", err)
+	if err := CopySelectedToClipboard("hello"); !errors.Is(err, wantErr) {
+		t.Fatalf("expected tmux error %v, got %v", wantErr, err)
+	}
+}
+
+func TestTrimClearsSelectionWhenLinesEvicted(t *testing.T) {
+	m := initialModel("test")
+	m.width = 60
+	m.height = 20
+	m.sel.Start = selectionPoint{Line: 0, Col: 0}
+	m.sel.End = selectionPoint{Line: 1, Col: 1}
+	m.sel.Anchor = selectionPoint{Line: 0, Col: 0}
+
+	for i := 0; i < 520; i++ {
+		m.lines = append(m.lines, fmt.Sprintf("line-%03d", i))
+	}
+	m.trim()
+
+	if m.sel.HasSelection() {
+		t.Fatal("expected selection to clear after trim evicts selected lines")
+	}
+}
+
+func TestCurrentIssuesPanelTextIsSelectable(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	newM, _ := m.Update(statusMsg{
+		issues: []CurrentIssue{{Nudge: "mutex missing"}, {Nudge: "marshal errors swallowed"}},
+	})
+	m = newM.(model)
+	m.issuePanelVisible = true
+
+	lines := m.contentLines()
+	var issueLine int
+	for i, line := range lines {
+		if strings.Contains(line, "Mutex missing") {
+			issueLine = i
+			break
+		}
+	}
+
+	expanded := selectionDisplayLine(lines[issueLine], selectionTabWidth)
+	startCol := strings.Index(ansi.Strip(expanded), "Mutex missing")
+	if startCol < 0 {
+		t.Fatalf("expected Mutex missing in issue line %q", ansi.Strip(expanded))
+	}
+	m.sel.Start = selectionPoint{Line: issueLine, Col: max(0, startCol-2)}
+	m.sel.End = selectionPoint{Line: issueLine, Col: startCol + len("Mutex missing") + 2}
+	text := m.sel.SelectedText(lines, selectionTabWidth)
+	if !strings.Contains(text, "missing") {
+		t.Fatalf("expected selected text to include issue panel content, got %q", text)
 	}
 }

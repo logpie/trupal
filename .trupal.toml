@@ -1,6 +1,7 @@
 build_cmd = "/usr/local/go/bin/go vet ./..."
 build_extensions = [".go"]
 poll_interval = 3
-brain_provider = "claude"
-brain_model = "haiku"
-brain_effort = "medium"
+session_provider = "codex"
+brain_provider = "codex"
+brain_model = "gpt-5.4"
+brain_effort = "high"

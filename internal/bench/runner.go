@@ -145,6 +145,12 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 		return nil, err
 	}
 
+	sessionName, err := r.startTrupal(projectDir, scenario.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer r.stopTmuxSession(sessionName)
+
 	ccStartedAt, ccFinishedAt, err := r.runClaude(result)
 	if err != nil {
 		return nil, err
@@ -153,12 +159,6 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 	if result.SessionJSONL == "" {
 		result.SessionJSONL, _ = FindLatestClaudeSessionJSONL(projectDir)
 	}
-
-	sessionName, err := r.startTrupal(projectDir, scenario.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer r.stopTmuxSession(sessionName)
 
 	brainFinishedAt, err := r.waitForBrain(result, ccFinishedAt)
 	if err != nil {
@@ -199,7 +199,7 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse session edits: %w", err)
 	}
-	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Findings), edits, debugSummary)
+	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Nudges), edits, debugSummary)
 
 	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
 		return nil, fmt.Errorf("write report: %w", err)
@@ -234,13 +234,18 @@ func (r *Runner) writeScenarioConfig(projectDir string, cfg TrupalConfig) error 
 	if cfg.BuildCmd != "" {
 		lines = append(lines, fmt.Sprintf("build_cmd = %q", cfg.BuildCmd))
 	}
+	if cfg.SessionProvider != "" {
+		lines = append(lines, fmt.Sprintf("session_provider = %q", cfg.SessionProvider))
+	}
+	if cfg.BrainProvider != "" {
+		lines = append(lines, fmt.Sprintf("brain_provider = %q", cfg.BrainProvider))
+	}
 	if cfg.BrainModel != "" {
 		lines = append(lines, fmt.Sprintf("brain_model = %q", cfg.BrainModel))
 	}
 	if cfg.BrainEffort != "" {
 		lines = append(lines, fmt.Sprintf("brain_effort = %q", cfg.BrainEffort))
 	}
-	lines = append(lines, `brain_provider = "claude"`)
 	lines = append(lines, "")
 	return os.WriteFile(filepath.Join(projectDir, ".trupal.toml"), []byte(strings.Join(lines, "\n")), 0644)
 }
@@ -361,7 +366,7 @@ func (r *Runner) runClaude(result *RunResult) (time.Time, time.Time, error) {
 		"-p",
 		"--model", result.Scenario.ClaudeModel,
 		"--dangerously-skip-permissions",
-		result.Scenario.TaskPrompt,
+		benchmarkClaudePrompt(result.Scenario.TaskPrompt),
 	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = result.ProjectDir
@@ -404,13 +409,27 @@ func (r *Runner) runClaude(result *RunResult) (time.Time, time.Time, error) {
 	}
 }
 
+func benchmarkClaudePrompt(task string) string {
+	task = strings.TrimSpace(task)
+	return strings.TrimSpace(`
+You are running inside a non-interactive benchmark harness.
+
+Requirements for this run:
+- Do not ask clarifying questions.
+- Do not stop at planning, brainstorming, or design.
+- Do not invoke brainstorming or planning skills that require user approval before implementation.
+- Make reasonable assumptions yourself and implement the task end-to-end in the current working directory.
+- Verify the resulting code with focused commands before you finish.
+- End with a brief summary of what you changed and what you verified.
+
+Task:
+` + "\n" + task)
+}
+
 func (r *Runner) waitForBrain(result *RunResult, ccFinishedAt time.Time) (time.Time, error) {
 	debugPath := filepath.Join(result.ProjectDir, ".trupal.debug")
-	deadline := result.StartedAt.Add(result.Scenario.Timeout)
+	deadline := ccFinishedAt.Add(30 * time.Second)
 	minAnalysisUntil := ccFinishedAt.Add(30 * time.Second)
-	if minAnalysisUntil.After(deadline) {
-		minAnalysisUntil = deadline
-	}
 
 	var lastResponseAt time.Time
 	for {

@@ -33,7 +33,8 @@ type BrainResponseEvent struct {
 type DebugSummary struct {
 	ResponseCount     int
 	ResponseEvents    []BrainResponseEvent
-	Findings          []ObservedFinding
+	Observations      []ObservedFinding
+	Nudges            []ObservedFinding
 	InputTokens       int
 	OutputTokens      int
 	CacheReadTokens   int
@@ -78,6 +79,7 @@ var (
 	debugResultPattern  = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2}\.\d{3}) \[brain\] (\d+) nudges, (\d+) resolved, reasoning: (.*)$`)
 	debugFindingPattern = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2}\.\d{3}) \[brain\] (observation|nudge): (.*)$`)
 	logHeaderPattern    = regexp.MustCompile(`^(\d{2}:\d{2}:\d{2})\s`)
+	applyPatchFileRE    = regexp.MustCompile(`(?m)^\*\*\* (?:Add|Update|Delete) File: (.+)$`)
 	stopWords           = map[string]struct{}{"the": {}, "and": {}, "for": {}, "with": {}, "without": {}, "into": {}, "from": {}, "this": {}, "that": {}, "should": {}, "not": {}, "flagged": {}, "global": {}, "missing": {}, "accessed": {}, "write": {}, "reads": {}, "uses": {}, "used": {}, "file": {}, "correct": {}, "flag": {}, "under": {}, "best": {}, "effort": {}, "are": {}, "all": {}, "one": {}, "two": {}, "api": {}, "http": {}, "user": {}, "users": {}}
 )
 
@@ -134,7 +136,8 @@ func ParseDebugLog(path string, baseDate time.Time) (DebugSummary, error) {
 	defer f.Close()
 
 	var summary DebugSummary
-	seenFindings := make(map[string]int)
+	seenObservations := make(map[string]int)
+	seenNudges := make(map[string]int)
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -157,22 +160,38 @@ func ParseDebugLog(path string, baseDate time.Time) (DebugSummary, error) {
 			continue
 		}
 		if matches := debugFindingPattern.FindStringSubmatch(line); len(matches) == 4 {
+			kind := strings.TrimSpace(matches[2])
 			message := strings.TrimSpace(matches[3])
 			if message == "" {
 				continue
 			}
 			firstSeen := combineClock(baseDate, matches[1], true)
-			if idx, ok := seenFindings[message]; ok {
-				if summary.Findings[idx].FirstSeen.IsZero() || (!firstSeen.IsZero() && firstSeen.Before(summary.Findings[idx].FirstSeen)) {
-					summary.Findings[idx].FirstSeen = firstSeen
+			switch kind {
+			case "observation":
+				if idx, ok := seenObservations[message]; ok {
+					if summary.Observations[idx].FirstSeen.IsZero() || (!firstSeen.IsZero() && firstSeen.Before(summary.Observations[idx].FirstSeen)) {
+						summary.Observations[idx].FirstSeen = firstSeen
+					}
+					continue
 				}
-				continue
+				seenObservations[message] = len(summary.Observations)
+				summary.Observations = append(summary.Observations, ObservedFinding{
+					Message:   message,
+					FirstSeen: firstSeen,
+				})
+			default:
+				if idx, ok := seenNudges[message]; ok {
+					if summary.Nudges[idx].FirstSeen.IsZero() || (!firstSeen.IsZero() && firstSeen.Before(summary.Nudges[idx].FirstSeen)) {
+						summary.Nudges[idx].FirstSeen = firstSeen
+					}
+					continue
+				}
+				seenNudges[message] = len(summary.Nudges)
+				summary.Nudges = append(summary.Nudges, ObservedFinding{
+					Message:   message,
+					FirstSeen: firstSeen,
+				})
 			}
-			seenFindings[message] = len(summary.Findings)
-			summary.Findings = append(summary.Findings, ObservedFinding{
-				Message:   message,
-				FirstSeen: firstSeen,
-			})
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -226,6 +245,7 @@ func ParseSessionEdits(path string) ([]EditEvent, error) {
 		Type      string          `json:"type"`
 		Timestamp string          `json:"timestamp"`
 		Message   json.RawMessage `json:"message"`
+		Payload   json.RawMessage `json:"payload"`
 	}
 
 	var edits []EditEvent
@@ -236,38 +256,7 @@ func ParseSessionEdits(path string) ([]EditEvent, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &parsed); err != nil {
 			continue
 		}
-		if parsed.Type != "assistant" {
-			continue
-		}
-
-		var msg message
-		if err := json.Unmarshal(parsed.Message, &msg); err != nil {
-			continue
-		}
-
-		var files []string
-		var tool string
-		for _, content := range msg.Content {
-			name := strings.ToLower(strings.TrimSpace(content.Name))
-			if name != "edit" && name != "multiedit" && name != "write" {
-				continue
-			}
-			tool = name
-			var input struct {
-				FilePath string `json:"file_path"`
-				Path     string `json:"path"`
-			}
-			if err := json.Unmarshal(content.Input, &input); err != nil {
-				continue
-			}
-			file := strings.TrimSpace(input.FilePath)
-			if file == "" {
-				file = strings.TrimSpace(input.Path)
-			}
-			if file != "" {
-				files = append(files, filepath.Base(file))
-			}
-		}
+		files, tool := parseEditEvent(parsed)
 		if len(files) == 0 {
 			continue
 		}
@@ -289,6 +278,114 @@ func ParseSessionEdits(path string) ([]EditEvent, error) {
 		return edits[i].Time.Before(edits[j].Time)
 	})
 	return edits, nil
+}
+
+func parseEditEvent(parsed struct {
+	Type      string          `json:"type"`
+	Timestamp string          `json:"timestamp"`
+	Message   json.RawMessage `json:"message"`
+	Payload   json.RawMessage `json:"payload"`
+}) ([]string, string) {
+	if parsed.Type == "assistant" {
+		type block struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		type message struct {
+			Content []block `json:"content"`
+		}
+		var msg message
+		if err := json.Unmarshal(parsed.Message, &msg); err != nil {
+			return nil, ""
+		}
+		var files []string
+		var tool string
+		for _, content := range msg.Content {
+			name := strings.ToLower(strings.TrimSpace(content.Name))
+			if name != "edit" && name != "multiedit" && name != "write" {
+				continue
+			}
+			tool = name
+			var input struct {
+				FilePath string `json:"file_path"`
+				Path     string `json:"path"`
+			}
+			if err := json.Unmarshal(content.Input, &input); err != nil {
+				continue
+			}
+			file := strings.TrimSpace(input.FilePath)
+			if file == "" {
+				file = strings.TrimSpace(input.Path)
+			}
+			if file != "" {
+				files = append(files, file)
+			}
+		}
+		return files, tool
+	}
+
+	if parsed.Type == "response_item" {
+		var payload struct {
+			Type      string          `json:"type"`
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+			Input     json.RawMessage `json:"input"`
+		}
+		if json.Unmarshal(parsed.Payload, &payload) != nil || payload.Type != "function_call" {
+			if json.Unmarshal(parsed.Payload, &payload) != nil || payload.Type != "custom_tool_call" {
+				return nil, ""
+			}
+			switch strings.TrimSpace(payload.Name) {
+			case "apply_patch":
+				files := applyPatchFiles(string(normalizeRawJSON(payload.Input)))
+				return files, "apply_patch"
+			default:
+				return nil, ""
+			}
+		}
+		switch strings.TrimSpace(payload.Name) {
+		case "apply_patch":
+			files := applyPatchFiles(string(normalizeRawJSON(payload.Arguments)))
+			return files, "apply_patch"
+		case "function.exec_command", "exec_command":
+			return nil, ""
+		default:
+			return nil, ""
+		}
+	}
+
+	return nil, ""
+}
+
+func normalizeRawJSON(raw json.RawMessage) json.RawMessage {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 {
+		return raw
+	}
+	var encoded string
+	if err := json.Unmarshal(raw, &encoded); err == nil {
+		return json.RawMessage(encoded)
+	}
+	return raw
+}
+
+func applyPatchFiles(raw string) []string {
+	matches := applyPatchFileRE.FindAllStringSubmatch(raw, -1)
+	var files []string
+	seen := make(map[string]bool)
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		file := strings.TrimSpace(match[1])
+		if file == "" || seen[file] {
+			continue
+		}
+		seen[file] = true
+		files = append(files, file)
+	}
+	return files
 }
 
 func ScoreFindings(truth GroundTruth, findings []ObservedFinding, edits []EditEvent, debug DebugSummary) Scorecard {
@@ -431,9 +528,9 @@ func latencyForFinding(finding ObservedFinding, preferredFile string, edits []Ed
 }
 
 func editTouchesFile(edit EditEvent, file string) bool {
-	file = filepath.Base(strings.TrimSpace(file))
+	file = normalizeText(strings.TrimSpace(file))
 	for _, candidate := range edit.Files {
-		if filepath.Base(candidate) == file {
+		if strings.Contains(normalizeText(candidate), file) {
 			return true
 		}
 	}
@@ -451,7 +548,7 @@ func matchesTrap(traps []FalsePositiveTrap, message string) bool {
 
 func matchScore(bug TruthBug, message string) float64 {
 	score := scoreDescription(bug.Description, message)
-	file := filepath.Base(strings.ToLower(strings.TrimSpace(bug.File)))
+	file := normalizeText(filepath.Base(strings.TrimSpace(bug.File)))
 	if file != "" && strings.Contains(normalizeText(message), file) {
 		score += 0.35
 	}

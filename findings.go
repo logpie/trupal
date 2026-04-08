@@ -13,7 +13,7 @@ type BrainFinding struct {
 	Timestamp time.Time `json:"timestamp"`
 	Severity  string    `json:"severity"` // "warn" or "error"
 	Nudge     string    `json:"nudge"`
-	Reasoning string    `json:"reasoning"`
+	Why       string    `json:"why"`
 	Status    string    `json:"status"` // "new" / "shown" / "resolved" / "waived"
 }
 
@@ -31,7 +31,7 @@ func NewFindingStore() *FindingStore {
 
 // Add creates a new finding with an auto-incremented ID, status "shown", and timestamp now.
 // Returns the new finding's ID.
-func (fs *FindingStore) Add(severity, nudge, reasoning string) string {
+func (fs *FindingStore) Add(severity, nudge, why string) string {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -42,7 +42,7 @@ func (fs *FindingStore) Add(severity, nudge, reasoning string) string {
 		Timestamp: time.Now(),
 		Severity:  severity,
 		Nudge:     nudge,
-		Reasoning: reasoning,
+		Why:       why,
 		Status:    "shown",
 	})
 	return id
@@ -83,6 +83,18 @@ func (fs *FindingStore) Resolve(ids []string) {
 			fs.findings[i].Status = "resolved"
 		}
 	}
+}
+
+func (fs *FindingStore) Get(id string) (BrainFinding, bool) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	for _, finding := range fs.findings {
+		if finding.ID == id {
+			return finding, true
+		}
+	}
+	return BrainFinding{}, false
 }
 
 // Active returns all findings with status "shown".

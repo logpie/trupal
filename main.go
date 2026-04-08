@@ -47,6 +47,15 @@ func cmdStart() {
 	}
 
 	sessionDir, gitRoot := resolveStartTarget()
+	cfg, err := loadConfig(gitRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
+		os.Exit(1)
+	}
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Check if already running
 	pidFile := filepath.Join(gitRoot, ".trupal.pid")
@@ -62,14 +71,14 @@ func cmdStart() {
 		os.Exit(1)
 	}
 
-	// Find CC's pane to split alongside it (match by project dir).
-	ccPane := findCCPane(sessionDir)
+	// Find the watched agent's pane to split alongside it (match by project dir).
+	agentPane := findAgentPane(gitRoot, cfg.SessionProvider)
 
 	// Launch watch command in a new tmux split pane.
 	// Use "--" so tmux execs directly without shell (avoids word-splitting on paths with spaces).
 	args := []string{"split-window", "-h", "-l", "30%", "-d"}
-	if ccPane != "" {
-		args = append(args, "-t", ccPane)
+	if agentPane != "" {
+		args = append(args, "-t", agentPane)
 	}
 	args = append(args, "--", self, "watch", sessionDir, gitRoot)
 	if err := exec.Command("tmux", args...).Run(); err != nil {
@@ -152,7 +161,11 @@ func cmdWatch(sessionDir, gitRoot string) {
 	}()
 
 	// Load config before creating state that requires deferred cleanup.
-	cfg := loadConfig(gitRoot)
+	cfg, err := loadConfig(gitRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
+		os.Exit(1)
+	}
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -248,23 +261,24 @@ func findGitRoot(dir string) (string, error) {
 	}
 }
 
-// findCCPane searches all tmux panes for one running `claude` in the given project directory.
-// Returns "" if not found (falls back to splitting the current pane).
-func findCCPane(projectDir string) string {
+// findAgentPane searches all tmux panes for one running the watched agent in the
+// given project directory. Returns "" if not found (falls back to splitting the current pane).
+func findAgentPane(projectDir, provider string) string {
+	command := providerPaneCommand(provider)
 	out, err := exec.Command("tmux", "list-panes", "-s", "-F", "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}").Output()
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) == 3 && parts[1] == "claude" && parts[2] == projectDir {
+		if len(parts) == 3 && parts[1] == command && pathsOverlap(parts[2], projectDir) {
 			return parts[0]
 		}
 	}
-	// Fallback: any claude pane (better than nothing).
+	// Fallback: any pane for the configured provider (better than nothing).
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) >= 2 && parts[1] == "claude" {
+		if len(parts) >= 2 && parts[1] == command {
 			return parts[0]
 		}
 	}
