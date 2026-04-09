@@ -1,6 +1,8 @@
 package bench
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -156,6 +158,123 @@ func FindLatestClaudeSessionJSONL(projectDir string) (string, error) {
 	}
 
 	return bestPath, nil
+}
+
+func FindLatestSessionJSONL(projectDir, provider string) (string, error) {
+	switch normalizeBenchProvider(provider) {
+	case "codex":
+		return findLatestCodexSessionJSONL(projectDir)
+	default:
+		return FindLatestClaudeSessionJSONL(projectDir)
+	}
+}
+
+func findLatestCodexSessionJSONL(projectDir string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	sessionsRoot := filepath.Join(homeDir, ".codex", "sessions")
+	targets := sessionSearchDirs(projectDir)
+	var bestPath string
+	var bestTime time.Time
+	_ = filepath.WalkDir(sessionsRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		cwd, ok := codexSessionCWD(path)
+		if !ok || !codexSessionMatchesTargets(cwd, targets) {
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return nil
+		}
+		if info.ModTime().After(bestTime) {
+			bestTime = info.ModTime()
+			bestPath = path
+		}
+		return nil
+	})
+	return bestPath, nil
+}
+
+func sessionSearchDirs(projectDir string) []string {
+	projectDir = filepath.Clean(projectDir)
+	dirs := []string{projectDir}
+	if gitRoot, err := findGitRoot(projectDir); err == nil && gitRoot != projectDir {
+		dirs = append(dirs, gitRoot)
+	}
+	return dirs
+}
+
+func findGitRoot(dir string) (string, error) {
+	current := filepath.Clean(dir)
+	for {
+		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", fmt.Errorf("no git repository found from %s", dir)
+		}
+		current = parent
+	}
+}
+
+func codexSessionMatchesTargets(cwd string, targets []string) bool {
+	cwd = filepath.Clean(strings.TrimSpace(cwd))
+	if cwd == "" {
+		return false
+	}
+	cwdRoot, err := findGitRoot(cwd)
+	if err != nil {
+		cwdRoot = cwd
+	}
+	for _, target := range targets {
+		target = filepath.Clean(strings.TrimSpace(target))
+		if target == "" {
+			continue
+		}
+		targetRoot, err := findGitRoot(target)
+		if err != nil {
+			targetRoot = target
+		}
+		if cwd == target || cwd == targetRoot || cwdRoot == target || cwdRoot == targetRoot {
+			return true
+		}
+	}
+	return false
+}
+
+func codexSessionCWD(path string) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var raw struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Cwd string `json:"cwd"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &raw) != nil {
+			continue
+		}
+		if (raw.Type == "session_meta" || raw.Type == "turn_context") && strings.TrimSpace(raw.Payload.Cwd) != "" {
+			return raw.Payload.Cwd, true
+		}
+	}
+	return "", false
 }
 
 func ReadPaneID(pidFile string) (string, error) {

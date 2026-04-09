@@ -1950,7 +1950,7 @@ func renderHeaderTitle(project, elapsed string, width int) string {
 		return ""
 	}
 
-	brand := sBrandChip.Render("TRUPAL")
+	brand := sBrandChip.Render("◉☰ TRUPAL")
 	elapsedChip := ""
 	if strings.TrimSpace(elapsed) != "" {
 		elapsedChip = sMetaChip.Render(elapsed)
@@ -2029,94 +2029,6 @@ func styleHeaderBuildValue(text string) string {
 		return sErr.Render(plain)
 	case strings.Contains(plain, "✓"):
 		return sOk.Render(plain)
-	default:
-		return sHeaderValueText.Render(plain)
-	}
-}
-
-func renderHeaderIndicators(indicators []string, width int) string {
-	contentWidth := width - 1
-	if contentWidth <= 0 {
-		return ""
-	}
-
-	if len(indicators) == 0 {
-		return ""
-	}
-	styled := make([]string, 0, len(indicators))
-	for _, indicator := range indicators {
-		styled = append(styled, styleHeaderIndicator(indicator))
-	}
-
-	var visible []string
-	for _, indicator := range styled {
-		candidate := append(append([]string{}, visible...), indicator)
-		if joinWidth(candidate, " ") <= contentWidth {
-			visible = candidate
-			continue
-		}
-
-		if len(visible) == 0 {
-			return " " + truncateWidth(indicator, contentWidth)
-		}
-
-		withEllipsis := append(append([]string{}, visible...), sDim.Render("…"))
-		for len(withEllipsis) > 0 && joinWidth(withEllipsis, " ") > contentWidth {
-			withEllipsis = withEllipsis[:len(withEllipsis)-1]
-		}
-		if len(withEllipsis) == 0 {
-			return " " + truncateWidth(indicator, contentWidth)
-		}
-		return " " + strings.Join(withEllipsis, " ")
-	}
-
-	// Prefer keeping the rightmost (usually brain stats) visible on narrow widths.
-	last := styled[len(styled)-1]
-	if len(visible) > 0 && !containsStyled(visible, last) && lipgloss.Width(last) <= contentWidth {
-		withLast := append([]string{}, visible...)
-		withLast = append(withLast, last)
-		for len(withLast) > 1 && joinWidth(withLast, " ") > contentWidth {
-			withLast = withLast[1:]
-		}
-		if joinWidth(withLast, " ") <= contentWidth {
-			visible = withLast
-		}
-	}
-
-	return " " + strings.Join(visible, " ")
-}
-
-func containsStyled(parts []string, target string) bool {
-	for _, part := range parts {
-		if part == target {
-			return true
-		}
-	}
-	return false
-}
-
-func styleHeaderIndicator(indicator string) string {
-	plain := ansi.Strip(indicator)
-	switch {
-	case strings.HasPrefix(plain, "watch "):
-		value := strings.TrimPrefix(plain, "watch ")
-		return sHeaderLabelText.Render("watch ") + sHeaderValueText.Render(value)
-	case strings.Contains(plain, "build") && strings.Contains(plain, "✗"):
-		return sErr.Render(plain)
-	case strings.Contains(plain, "build"):
-		return sOk.Render(plain)
-	case strings.HasPrefix(plain, "brain "):
-		value := strings.TrimPrefix(plain, "brain ")
-		if strings.Contains(value, "analyzing") {
-			return sHeaderLabelText.Render("brain ") + sCyan.Render(value)
-		}
-		return sHeaderLabelText.Render("brain ") + sHeaderValueText.Render(value)
-	case strings.HasPrefix(plain, "issues "):
-		return sWarn.Render(plain)
-	case strings.HasSuffix(plain, " resolved"):
-		return sOk.Render(plain)
-	case strings.Contains(plain, "agent") || strings.Contains(plain, "codex") || strings.Contains(plain, "claude"):
-		return sHeaderValueText.Render(plain)
 	default:
 		return sHeaderValueText.Render(plain)
 	}

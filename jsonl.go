@@ -121,14 +121,7 @@ func findCodexSessionJSONL(projectDir string) string {
 		if !ok {
 			return nil
 		}
-		matches := false
-		for _, target := range targetDirs {
-			if pathsOverlap(cwd, target) {
-				matches = true
-				break
-			}
-		}
-		if !matches {
+		if !codexSessionMatchesTargets(cwd, targetDirs) {
 			return nil
 		}
 
@@ -144,6 +137,31 @@ func findCodexSessionJSONL(projectDir string) string {
 	})
 
 	return bestFile
+}
+
+func codexSessionMatchesTargets(cwd string, targets []string) bool {
+	cwd = filepath.Clean(strings.TrimSpace(cwd))
+	if cwd == "" {
+		return false
+	}
+	cwdRoot, err := findGitRoot(cwd)
+	if err != nil {
+		cwdRoot = cwd
+	}
+	for _, target := range targets {
+		target = filepath.Clean(strings.TrimSpace(target))
+		if target == "" {
+			continue
+		}
+		targetRoot, err := findGitRoot(target)
+		if err != nil {
+			targetRoot = target
+		}
+		if cwd == target || cwd == targetRoot || cwdRoot == target || cwdRoot == targetRoot {
+			return true
+		}
+	}
+	return false
 }
 
 func sessionSearchDirs(projectDir string) []string {

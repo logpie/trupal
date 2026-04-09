@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -115,6 +116,7 @@ type Brain struct {
 	stdin          io.WriteCloser
 	stdout         io.ReadCloser
 	scanner        *bufio.Scanner
+	stderr         *bytes.Buffer
 	stopped        atomic.Bool
 	cfg            Config
 	projectDir     string
@@ -294,7 +296,8 @@ func StartBrain(cfg Config, projectDir, jsonlPath string, initialStats BrainStat
 		stdin.Close()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = nil
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
 
 	Debugf("[brain] starting subprocess")
 	if err := cmd.Start(); err != nil {
@@ -312,6 +315,7 @@ func StartBrain(cfg Config, projectDir, jsonlPath string, initialStats BrainStat
 		stdin:          stdin,
 		stdout:         stdout,
 		scanner:        scanner,
+		stderr:         stderr,
 		cfg:            cfg,
 		projectDir:     projectDir,
 		jsonlPath:      jsonlPath,
@@ -415,7 +419,7 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	// Check scanner error (EOF, broken pipe, etc.)
 	if err := b.scanner.Err(); err != nil {
 		Debugf("[brain] scanner error: %v", err)
-		return nil, fmt.Errorf("brain read error: %w", err)
+		return nil, fmt.Errorf("brain read error: %w%s", err, b.stderrSuffix())
 	}
 
 	text := textBuilder.String()
@@ -423,11 +427,11 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	if text == "" {
 		Debugf("[brain] no response after %s", elapsed)
 		// If scanner hit EOF without a "result" event, the subprocess likely died.
-		return nil, fmt.Errorf("brain exited unexpectedly (no response after %s)", elapsed)
+		return nil, fmt.Errorf("brain exited unexpectedly (no response after %s)%s", elapsed, b.stderrSuffix())
 	}
 	if !sawResult {
 		Debugf("[brain] missing result event after %s", elapsed)
-		return nil, fmt.Errorf("brain exited unexpectedly (missing result event after %s)", elapsed)
+		return nil, fmt.Errorf("brain exited unexpectedly (missing result event after %s)%s", elapsed, b.stderrSuffix())
 	}
 
 	Debugf("[brain] response received after %s (%d chars)", elapsed, len(text))
@@ -454,6 +458,17 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	)
 	Debugf("[brain] %d nudges, %d resolved, reasoning: %s", len(resp.Nudges), len(resp.ResolvedFindings), truncate(resp.Reasoning, 100))
 	return resp, nil
+}
+
+func (b *Brain) stderrSuffix() string {
+	if b == nil || b.stderr == nil {
+		return ""
+	}
+	text := strings.TrimSpace(b.stderr.String())
+	if text == "" {
+		return ""
+	}
+	return ": " + truncate(text, 400)
 }
 
 func (b *Brain) notifyCodex(reason, findingsJSON string) (*BrainResponse, error) {

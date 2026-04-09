@@ -66,7 +66,7 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("find go binary: %w", err)
 	}
-	required := []string{"git", "tmux", "claude"}
+	required := []string{"git", "tmux"}
 	for _, name := range required {
 		if _, err := exec.LookPath(name); err != nil {
 			return nil, fmt.Errorf("required binary %q not found: %w", name, err)
@@ -151,13 +151,13 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 	}
 	defer r.stopTmuxSession(sessionName)
 
-	ccStartedAt, ccFinishedAt, err := r.runClaude(result)
+	ccStartedAt, ccFinishedAt, err := r.runAgent(result)
 	if err != nil {
 		return nil, err
 	}
 	result.StartedAt = ccStartedAt
 	if result.SessionJSONL == "" {
-		result.SessionJSONL, _ = FindLatestClaudeSessionJSONL(projectDir)
+		result.SessionJSONL, _ = FindLatestSessionJSONL(projectDir, scenario.SessionProvider())
 	}
 
 	brainFinishedAt, err := r.waitForBrain(result, ccFinishedAt)
@@ -175,7 +175,7 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 	pidFile := filepath.Join(projectDir, ".trupal.pid")
 	paneID, _ := ReadPaneID(pidFile)
 	if result.SessionJSONL == "" {
-		result.SessionJSONL, _ = FindLatestClaudeSessionJSONL(projectDir)
+		result.SessionJSONL, _ = FindLatestSessionJSONL(projectDir, scenario.SessionProvider())
 	}
 	if err := CollectArtifacts(projectDir, result.Artifacts, result.SessionJSONL, paneID); err != nil {
 		return nil, err
@@ -344,7 +344,16 @@ func (r *Runner) stopTrupal(projectDir string) error {
 	return nil
 }
 
-func (r *Runner) runClaude(result *RunResult) (time.Time, time.Time, error) {
+func benchAgentCommand(provider string) string {
+	switch normalizeBenchProvider(provider) {
+	case "codex":
+		return "codex"
+	default:
+		return "claude"
+	}
+}
+
+func (r *Runner) runAgent(result *RunResult) (time.Time, time.Time, error) {
 	if err := os.MkdirAll(result.Artifacts.RootDir, 0755); err != nil {
 		return time.Time{}, time.Time{}, err
 	}
@@ -362,13 +371,13 @@ func (r *Runner) runClaude(result *RunResult) (time.Time, time.Time, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), result.Scenario.Timeout)
 	defer cancel()
 
-	args := []string{
-		"-p",
-		"--model", result.Scenario.ClaudeModel,
-		"--dangerously-skip-permissions",
-		benchmarkClaudePrompt(result.Scenario.TaskPrompt),
+	provider := result.Scenario.SessionProvider()
+	command := benchAgentCommand(provider)
+	if _, err := exec.LookPath(command); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("required binary %q not found: %w", command, err)
 	}
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	args := benchmarkAgentArgs(provider, result.Scenario.EffectiveAgentModel(), result.Scenario.TaskPrompt, result.ProjectDir)
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = result.ProjectDir
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
@@ -386,7 +395,7 @@ func (r *Runner) runClaude(result *RunResult) (time.Time, time.Time, error) {
 	var waitErr error
 	for {
 		if result.SessionJSONL == "" {
-			result.SessionJSONL, _ = FindLatestClaudeSessionJSONL(result.ProjectDir)
+			result.SessionJSONL, _ = FindLatestSessionJSONL(result.ProjectDir, provider)
 		}
 
 		select {
@@ -409,7 +418,31 @@ func (r *Runner) runClaude(result *RunResult) (time.Time, time.Time, error) {
 	}
 }
 
-func benchmarkClaudePrompt(task string) string {
+func benchmarkAgentArgs(provider, model, task, projectDir string) []string {
+	prompt := benchmarkAgentPrompt(task)
+	switch normalizeBenchProvider(provider) {
+	case "codex":
+		args := []string{
+			"exec",
+			"--skip-git-repo-check",
+			"-C", projectDir,
+		}
+		if strings.TrimSpace(model) != "" {
+			args = append(args, "--model", model)
+		}
+		args = append(args, prompt)
+		return args
+	default:
+		return []string{
+			"-p",
+			"--model", model,
+			"--dangerously-skip-permissions",
+			prompt,
+		}
+	}
+}
+
+func benchmarkAgentPrompt(task string) string {
 	task = strings.TrimSpace(task)
 	return strings.TrimSpace(`
 You are running inside a non-interactive benchmark harness.
@@ -428,7 +461,7 @@ Task:
 
 func (r *Runner) waitForBrain(result *RunResult, ccFinishedAt time.Time) (time.Time, error) {
 	debugPath := filepath.Join(result.ProjectDir, ".trupal.debug")
-	deadline := ccFinishedAt.Add(30 * time.Second)
+	deadline := ccFinishedAt.Add(benchBrainWaitTimeout(result.Scenario.TrupalConfig.BrainEffort))
 	minAnalysisUntil := ccFinishedAt.Add(30 * time.Second)
 
 	var lastResponseAt time.Time
@@ -470,6 +503,19 @@ func (r *Runner) waitForBrain(result *RunResult, ccFinishedAt time.Time) (time.T
 			return lastResponseAt, nil
 		}
 		time.Sleep(sleepFor)
+	}
+}
+
+func benchBrainWaitTimeout(effort string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low":
+		return 45 * time.Second
+	case "medium":
+		return 75 * time.Second
+	case "max":
+		return 150 * time.Second
+	default:
+		return 105 * time.Second
 	}
 }
 

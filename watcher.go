@@ -172,6 +172,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 	}
 
 	resetSessionContext := func() {
+		session.Reset()
 		recentEditedFiles = recentEditedFiles[:0]
 		recentSessionEntries = recentSessionEntries[:0]
 		extraDirs = make(map[string]bool)

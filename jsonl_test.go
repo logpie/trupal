@@ -138,6 +138,37 @@ func TestFindSessionJSONLForProviderFindsMatchingCodexSession(t *testing.T) {
 	}
 }
 
+func TestFindSessionJSONLForProviderIgnoresParentCodexSession(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	parent := filepath.Join(homeDir, "work")
+	repoRoot := filepath.Join(parent, "project")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+
+	codexDir := filepath.Join(homeDir, ".codex", "sessions", "2026", "04", "07")
+	if err := os.MkdirAll(codexDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(codexDir) error = %v", err)
+	}
+
+	parentMatch := filepath.Join(codexDir, "parent.jsonl")
+	parentData := `{"timestamp":"2026-04-08T00:00:00Z","type":"session_meta","payload":{"cwd":"` + parent + `"}}` + "\n"
+	if err := os.WriteFile(parentMatch, []byte(parentData), 0644); err != nil {
+		t.Fatalf("WriteFile(parentMatch) error = %v", err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(parentMatch, now, now); err != nil {
+		t.Fatalf("Chtimes(parentMatch) error = %v", err)
+	}
+
+	got := FindSessionJSONLForProvider(repoRoot, ProviderCodex)
+	if got != "" {
+		t.Fatalf("FindSessionJSONLForProvider(%q, codex) = %q, want empty", repoRoot, got)
+	}
+}
+
 func TestParseCodexFunctionCallsAndMessages(t *testing.T) {
 	toolLine := []byte(`{"timestamp":"2026-04-08T00:00:01Z","type":"response_item","payload":{"type":"function_call","name":"multi_tool_use.parallel","arguments":"{\"tool_uses\":[{\"recipient_name\":\"functions.exec_command\",\"parameters\":{\"cmd\":\"rg hello\"}},{\"recipient_name\":\"functions.apply_patch\",\"parameters\":\"*** Begin Patch\\n*** Update File: foo.go\\n*** End Patch\\n\"}]}"}}`)
 	toolEntry, ok := parseJSONLEntryForProvider(ProviderCodex, toolLine)

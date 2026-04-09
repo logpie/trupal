@@ -50,12 +50,12 @@ func (s AgentUsageStats) LastCacheHitRate() int {
 
 func ReadAgentUsageStats(path, provider string) AgentUsageStats {
 	stats := AgentUsageStats{Provider: normalizeProvider(provider, ProviderClaude)}
-	lines := readTailJSONLLines(path, 256*1024)
 	switch stats.Provider {
 	case ProviderCodex:
+		lines := readTailJSONLLines(path, 256*1024)
 		parseCodexAgentUsage(lines, &stats)
 	default:
-		parseClaudeAgentUsage(lines, &stats)
+		parseClaudeAgentUsage(path, &stats)
 	}
 	return stats
 }
@@ -144,7 +144,7 @@ func parseCodexAgentUsage(lines []string, stats *AgentUsageStats) {
 	}
 }
 
-func parseClaudeAgentUsage(lines []string, stats *AgentUsageStats) {
+func parseClaudeAgentUsage(path string, stats *AgentUsageStats) {
 	type claudeUsage struct {
 		InputTokens              int `json:"input_tokens"`
 		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
@@ -161,26 +161,36 @@ func parseClaudeAgentUsage(lines []string, stats *AgentUsageStats) {
 		Message   claudeMessage `json:"message"`
 	}
 
-	for i := len(lines) - 1; i >= 0; i-- {
-		var entry claudeEntry
-		if err := json.Unmarshal([]byte(lines[i]), &entry); err != nil {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
 			continue
 		}
-		if entry.Type != "assistant" && entry.Type != "user" && entry.Type != "system" {
-			// claude JSONL often uses its own envelope but still exposes message.role/usage.
+		var entry claudeEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
 		}
 		if entry.Message.Role != "assistant" {
 			continue
 		}
-		lastInput := entry.Message.Usage.InputTokens + entry.Message.Usage.CacheCreationInputTokens
-		stats.LastInputTokens = lastInput
-		stats.LastCachedTokens = entry.Message.Usage.CacheReadInputTokens
-		stats.LastOutputTokens = entry.Message.Usage.OutputTokens
-		stats.TotalInputTokens = lastInput
-		stats.TotalCachedTokens = entry.Message.Usage.CacheReadInputTokens
-		stats.TotalOutputTokens = entry.Message.Usage.OutputTokens
+		input := entry.Message.Usage.InputTokens + entry.Message.Usage.CacheCreationInputTokens
+		cached := entry.Message.Usage.CacheReadInputTokens
+		output := entry.Message.Usage.OutputTokens
+		stats.LastInputTokens = input
+		stats.LastCachedTokens = cached
+		stats.LastOutputTokens = output
+		stats.TotalInputTokens += input
+		stats.TotalCachedTokens += cached
+		stats.TotalOutputTokens += output
 		stats.UpdatedAt, _ = time.Parse(time.RFC3339Nano, entry.Timestamp)
-		return
 	}
 }
 

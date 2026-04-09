@@ -16,6 +16,7 @@ type Scenario struct {
 	Category     string
 	Timeout      time.Duration
 	ClaudeModel  string
+	AgentModel   string
 	TrupalConfig TrupalConfig
 
 	RootDir     string
@@ -50,6 +51,25 @@ type TruthBug struct {
 
 type FalsePositiveTrap struct {
 	Description string `json:"description"`
+}
+
+func normalizeBenchProvider(provider string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return "claude"
+	}
+	return provider
+}
+
+func (s Scenario) SessionProvider() string {
+	return normalizeBenchProvider(s.TrupalConfig.SessionProvider)
+}
+
+func (s Scenario) EffectiveAgentModel() string {
+	if strings.TrimSpace(s.AgentModel) != "" {
+		return strings.TrimSpace(s.AgentModel)
+	}
+	return strings.TrimSpace(s.ClaudeModel)
 }
 
 func LoadScenario(rootDir, name string) (Scenario, error) {
@@ -140,8 +160,8 @@ func loadScenarioDir(dir string) (Scenario, error) {
 	if scenario.ID == "" {
 		return Scenario{}, fmt.Errorf("scenario in %s is missing id", dir)
 	}
-	if scenario.ClaudeModel == "" {
-		return Scenario{}, fmt.Errorf("scenario %s is missing claude_model", scenario.ID)
+	if scenario.EffectiveAgentModel() == "" {
+		return Scenario{}, fmt.Errorf("scenario %s is missing agent model", scenario.ID)
 	}
 
 	return scenario, nil
@@ -194,6 +214,8 @@ func parseScenarioYAML(raw []byte) (Scenario, error) {
 				scenario.Timeout = d
 			case "claude_model":
 				scenario.ClaudeModel = value
+			case "codex_model", "agent_model":
+				scenario.AgentModel = value
 			default:
 				return Scenario{}, fmt.Errorf("unsupported scenario key %q on line %d", key, lineNo+1)
 			}
