@@ -33,19 +33,19 @@ type CodexAuditResult struct {
 }
 
 type RunResult struct {
-	Scenario       Scenario
-	StartedAt      time.Time
-	FinishedAt     time.Time
-	Duration       time.Duration
-	ProjectDir     string
-	TimedOut       bool
-	ClaudeDuration time.Duration
-	ClaudeExitCode int
-	ClaudeError    string
-	SessionJSONL   string
-	Artifacts      ArtifactSet
-	Score          Scorecard
-	CodexAudit     *CodexAuditResult
+	Scenario      Scenario
+	StartedAt     time.Time
+	FinishedAt    time.Time
+	Duration      time.Duration
+	ProjectDir    string
+	TimedOut      bool
+	AgentDuration time.Duration
+	AgentExitCode int
+	AgentError    string
+	SessionJSONL  string
+	Artifacts     ArtifactSet
+	Score         Scorecard
+	CodexAudit    *CodexAuditResult
 }
 
 func NewRunner(opts RunnerOptions) (*Runner, error) {
@@ -357,14 +357,14 @@ func (r *Runner) runAgent(result *RunResult) (time.Time, time.Time, error) {
 	if err := os.MkdirAll(result.Artifacts.RootDir, 0755); err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	stdoutFile, err := os.Create(result.Artifacts.ClaudeStdoutPath)
+	stdoutFile, err := os.Create(result.Artifacts.AgentStdoutPath)
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("create claude stdout log: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("create agent stdout log: %w", err)
 	}
 	defer stdoutFile.Close()
-	stderrFile, err := os.Create(result.Artifacts.ClaudeStderrPath)
+	stderrFile, err := os.Create(result.Artifacts.AgentStderrPath)
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("create claude stderr log: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("create agent stderr log: %w", err)
 	}
 	defer stderrFile.Close()
 
@@ -384,7 +384,7 @@ func (r *Runner) runAgent(result *RunResult) (time.Time, time.Time, error) {
 
 	started := time.Now()
 	if err := cmd.Start(); err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("start claude: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("start agent: %w", err)
 	}
 
 	waitCh := make(chan error, 1)
@@ -401,13 +401,13 @@ func (r *Runner) runAgent(result *RunResult) (time.Time, time.Time, error) {
 		select {
 		case waitErr = <-waitCh:
 			finished := time.Now()
-			result.ClaudeDuration = finished.Sub(started)
-			result.ClaudeExitCode = exitCode(waitErr)
+			result.AgentDuration = finished.Sub(started)
+			result.AgentExitCode = exitCode(waitErr)
 			if ctx.Err() == context.DeadlineExceeded {
 				result.TimedOut = true
 			}
 			if waitErr != nil {
-				result.ClaudeError = waitErr.Error()
+				result.AgentError = waitErr.Error()
 			}
 			return started, finished, nil
 		case <-time.After(1 * time.Second):

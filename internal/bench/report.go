@@ -17,12 +17,12 @@ func WriteReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- Duration: `%s`\n", result.Duration)
 	fmt.Fprintf(&b, "- Agent provider: `%s`\n", result.Scenario.SessionProvider())
 	fmt.Fprintf(&b, "- Agent model: `%s`\n", result.Scenario.EffectiveAgentModel())
-	fmt.Fprintf(&b, "- Agent exit code: `%d`\n", result.ClaudeExitCode)
+	fmt.Fprintf(&b, "- Agent exit code: `%d`\n", result.AgentExitCode)
 	if result.TimedOut {
 		fmt.Fprintf(&b, "- Timed out: `yes`\n")
 	}
-	if result.ClaudeError != "" {
-		fmt.Fprintf(&b, "- Agent error: `%s`\n", result.ClaudeError)
+	if result.AgentError != "" {
+		fmt.Fprintf(&b, "- Agent error: `%s`\n", result.AgentError)
 	}
 
 	fmt.Fprintf(&b, "\n## Metrics\n\n")
@@ -91,8 +91,8 @@ func WriteReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- Pane capture: `%s`\n", result.Artifacts.PaneCapturePath)
 	fmt.Fprintf(&b, "- Debug log: `%s`\n", result.Artifacts.DebugLogPath)
 	fmt.Fprintf(&b, "- TruPal log: `%s`\n", result.Artifacts.TrupalLogPath)
-	fmt.Fprintf(&b, "- Agent stdout: `%s`\n", result.Artifacts.ClaudeStdoutPath)
-	fmt.Fprintf(&b, "- Agent stderr: `%s`\n", result.Artifacts.ClaudeStderrPath)
+	fmt.Fprintf(&b, "- Agent stdout: `%s`\n", result.Artifacts.AgentStdoutPath)
+	fmt.Fprintf(&b, "- Agent stderr: `%s`\n", result.Artifacts.AgentStderrPath)
 	fmt.Fprintf(&b, "- Session JSONL: `%s`\n", result.Artifacts.SessionJSONLPath)
 	fmt.Fprintf(&b, "- Final project copy: `%s`\n", result.Artifacts.ProjectCopyDir)
 

@@ -20,8 +20,8 @@ type ArtifactSet struct {
 	TrupalLogPath    string
 	SessionJSONLPath string
 	ProjectCopyDir   string
-	ClaudeStdoutPath string
-	ClaudeStderrPath string
+	AgentStdoutPath  string
+	AgentStderrPath  string
 	ScenarioYAMLPath string
 	TaskPath         string
 	TruthPath        string
@@ -39,8 +39,8 @@ func NewArtifactSet(rootDir string) ArtifactSet {
 		TrupalLogPath:    filepath.Join(rootDir, "trupal.log"),
 		SessionJSONLPath: filepath.Join(rootDir, "session.jsonl"),
 		ProjectCopyDir:   filepath.Join(rootDir, "project"),
-		ClaudeStdoutPath: filepath.Join(rootDir, "claude.stdout.log"),
-		ClaudeStderrPath: filepath.Join(rootDir, "claude.stderr.log"),
+		AgentStdoutPath:  filepath.Join(rootDir, "agent.stdout.log"),
+		AgentStderrPath:  filepath.Join(rootDir, "agent.stderr.log"),
 		ScenarioYAMLPath: filepath.Join(rootDir, "scenario.yaml"),
 		TaskPath:         filepath.Join(rootDir, "task.md"),
 		TruthPath:        filepath.Join(rootDir, "truth.json"),

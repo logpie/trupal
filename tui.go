@@ -25,18 +25,10 @@ var (
 	sNudgeMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	sNudgeText   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
-	sHeaderTitle     = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
-	sHeaderLine      = lipgloss.NewStyle().PaddingLeft(1)
 	sBrandChip       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 	sMetaChip        = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
 	sHeaderLabelText = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	sHeaderValueText = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true)
-	sStatusChip      = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("238")).Padding(0, 1)
-	sStatusChipOk    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("22")).Padding(0, 1)
-	sStatusChipHi    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("17")).Padding(0, 1)
-	sStatusChipWr    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("94")).Padding(0, 1)
-	sStatusChipEr    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("88")).Padding(0, 1)
-	sIndicatorGap    = lipgloss.NewStyle().PaddingRight(2)
 	sFooterLine      = lipgloss.NewStyle().Faint(true).PaddingLeft(1)
 
 	sLogTimeCell   = lipgloss.NewStyle().Faint(true).Width(logTimeWidth).Align(lipgloss.Right)
@@ -50,7 +42,6 @@ var (
 	sIssueWhy       = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	sIssuePreview   = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
 	sFocusLabel     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	sFocusBody      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
 	sSelectedRow    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Bold(true)
 	sTimelineInfo   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	sTimelineWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
@@ -200,6 +191,34 @@ func tickEvery() tea.Cmd {
 
 func (m model) popupVisible() bool { return m.issuesPopupVisible || m.issuePanelVisible }
 
+func (m *model) setPopupVisible(visible bool) {
+	m.issuesPopupVisible = visible
+	m.issuePanelVisible = visible
+}
+
+func (m model) watchStatus() string {
+	switch m.ccStatus {
+	case "active", "thinking":
+		return "active"
+	case "starting":
+		return "starting"
+	case "":
+		return "idle"
+	default:
+		return m.ccStatus
+	}
+}
+
+func (m model) selectionAreaAt(x, y int) (selectionRect, bool) {
+	if m.footerRect().Contains(x, y) {
+		return m.footerRect(), true
+	}
+	if m.bodyRect().Contains(x, y) {
+		return m.bodyRect(), true
+	}
+	return selectionRect{}, false
+}
+
 // --- Update ---
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -250,8 +269,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "o":
 			if m.popupVisible() {
-				m.issuesPopupVisible = false
-				m.issuePanelVisible = false
+				m.setPopupVisible(false)
 			}
 			if len(m.entries) > 0 {
 				entry := m.entries[m.selectedEntry]
@@ -269,8 +287,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.detailOpen[key] = false
 				}
 				next := !m.popupVisible()
-				m.issuesPopupVisible = next
-				m.issuePanelVisible = next
+				m.setPopupVisible(next)
 				if next {
 					m.syncIssueCursorToSelection()
 				}
@@ -284,13 +301,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.issueCursor = (m.issueCursor - 1 + len(m.issueItems)) % len(m.issueItems)
 			}
 		case "esc":
-			m.issuesPopupVisible = false
-			m.issuePanelVisible = false
+			m.setPopupVisible(false)
 		case "enter", " ":
 			if m.popupVisible() && len(m.issueItems) > 0 {
 				m.jumpToIssue(m.issueItems[m.issueCursor].Key())
-				m.issuesPopupVisible = false
-				m.issuePanelVisible = false
+				m.setPopupVisible(false)
 			}
 		}
 
@@ -315,10 +330,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sel.Clear()
 				return m, nil
 			}
-			view := m.bodyRect()
-			if m.footerRect().Contains(msg.X, msg.Y) {
-				view = m.footerRect()
-			}
+			view, _ := m.selectionAreaAt(msg.X, msg.Y)
 			m.sel.PrepareDrag(point.Line, point.Col, view)
 		case msg.Action == tea.MouseActionMotion && (msg.Button == tea.MouseButtonLeft || (msg.Button == tea.MouseButtonNone && m.sel.Anchor.Valid())):
 			if m.sel.Anchor.Valid() && m.sel.View == m.bodyRect() {
@@ -1573,7 +1585,7 @@ func (m model) View() string {
 	w := m.width
 
 	// ── Header line 1: brand · elapsed ──
-	h1 := renderHeaderTitle(m.project, m.elapsed, w)
+	h1 := renderHeaderTitle(m.elapsed, w)
 
 	// ── Header line 2: watched session ──
 	agentLabel := m.agentLabel
@@ -1591,34 +1603,10 @@ func (m model) View() string {
 	default:
 		watchStatus = m.ccStatus
 	}
-	h2Parts := []string{
-		sHeaderValueText.Render(agentLabel),
-	}
-	if strings.TrimSpace(m.sessionModel) != "" {
-		h2Parts = append(h2Parts, sHeaderValueText.Render(m.sessionModel))
-	}
-	if strings.TrimSpace(m.project) != "" {
-		h2Parts = append(h2Parts, sHeaderValueText.Render(truncateWidth(m.project, max(18, w/3))))
-	}
-	h2Parts = append(h2Parts, styleHeaderStatusValue(watchStatus))
-	h2 := renderHeaderRoleLine("watch", h2Parts, w)
+	h2 := renderHeaderRoleLine("watch", m.headerWatchParts(agentLabel, watchStatus, w), w)
 
 	// ── Header line 3: trupal brain / build / issue summary ──
-	h3Parts := []string{}
-	if strings.TrimSpace(m.brainIdentity) != "" {
-		h3Parts = append(h3Parts, sHeaderValueText.Render(m.brainIdentity))
-	}
-	h3Parts = append(h3Parts, styleHeaderStatusValue(ansi.Strip(m.brainIndicator())))
-	if m.buildState != "" {
-		h3Parts = append(h3Parts, styleHeaderBuildValue(ansi.Strip(m.buildState)))
-	}
-	if m.findings > 0 {
-		h3Parts = append(h3Parts, sWarn.Render(fmt.Sprintf("%d open", m.findings)))
-	}
-	if m.resolved > 0 {
-		h3Parts = append(h3Parts, sOk.Render(fmt.Sprintf("%d resolved", m.resolved)))
-	}
-	h3 := renderHeaderRoleLine("brain", h3Parts, w)
+	h3 := renderHeaderRoleLine("brain", m.headerBrainParts(), w)
 
 	sep := sSep.Render(strings.Repeat("─", w))
 
@@ -1944,7 +1932,7 @@ func truncateRunes(text string, max int) string {
 	return string(runes[:max-3]) + "..."
 }
 
-func renderHeaderTitle(project, elapsed string, width int) string {
+func renderHeaderTitle(elapsed string, width int) string {
 	contentWidth := width - 1
 	if contentWidth <= 0 {
 		return ""
@@ -1970,6 +1958,36 @@ func renderHeaderTitle(project, elapsed string, width int) string {
 		line = candidate
 	}
 	return " " + line
+}
+
+func (m model) headerWatchParts(agentLabel, watchStatus string, width int) []string {
+	parts := []string{sHeaderValueText.Render(agentLabel)}
+	if strings.TrimSpace(m.sessionModel) != "" {
+		parts = append(parts, sHeaderValueText.Render(m.sessionModel))
+	}
+	if strings.TrimSpace(m.project) != "" {
+		parts = append(parts, sHeaderValueText.Render(truncateWidth(m.project, max(18, width/3))))
+	}
+	parts = append(parts, styleHeaderStatusValue(watchStatus))
+	return parts
+}
+
+func (m model) headerBrainParts() []string {
+	var parts []string
+	if strings.TrimSpace(m.brainIdentity) != "" {
+		parts = append(parts, sHeaderValueText.Render(m.brainIdentity))
+	}
+	parts = append(parts, styleHeaderStatusValue(ansi.Strip(m.brainIndicator())))
+	if m.buildState != "" {
+		parts = append(parts, styleHeaderBuildValue(ansi.Strip(m.buildState)))
+	}
+	if m.findings > 0 {
+		parts = append(parts, sWarn.Render(fmt.Sprintf("%d open", m.findings)))
+	}
+	if m.resolved > 0 {
+		parts = append(parts, sOk.Render(fmt.Sprintf("%d resolved", m.resolved)))
+	}
+	return parts
 }
 
 func renderHeaderRoleLine(label string, parts []string, width int) string {
