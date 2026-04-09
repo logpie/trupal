@@ -329,6 +329,40 @@ func TestIssuePanelStaysVisibleAtBottomOfLog(t *testing.T) {
 	}
 }
 
+func TestMouseWheelScrollsInspectorWhenDetailOverflows(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.entries = []timelineEntry{{
+		ID:      "f-1",
+		Kind:    "issue",
+		Time:    "12:00",
+		Marker:  "!",
+		Summary: "selected issue",
+		Detail: []string{
+			"Why it matters\nline one line two line three line four line five line six line seven line eight",
+			"Code\n1: one\n2: two\n3: three\n4: four\n5: five\n6: six\n7: seven\n8: eight",
+		},
+	}}
+	m.selectedEntry = 0
+	m.detailOpen["f-1"] = true
+
+	lines, owners, _ := m.renderedTimeline()
+	if len(lines) == 0 || len(owners) == 0 {
+		t.Fatal("expected rendered timeline content")
+	}
+	foundDetail := false
+	for i, owner := range owners {
+		if owner == 0 && strings.Contains(lines[i], "Why it matters") {
+			foundDetail = true
+			break
+		}
+	}
+	if !foundDetail {
+		t.Fatal("expected opened inspector lines to be inline in the timeline")
+	}
+}
+
 func TestLineTrimming(t *testing.T) {
 	m := initialModel("test")
 	m.width = 50

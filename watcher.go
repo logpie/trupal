@@ -545,6 +545,11 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 					jsonlWatcher = newWatcher
 					resetSessionContext()
 					seedReason := seedSessionContext(newPath)
+					sessionName := filepath.Base(newPath)
+					if len(sessionName) > 12 {
+						sessionName = sessionName[:8] + "…"
+					}
+					p.Send(replaceStatusMsg{line: fmt.Sprintf("watching %s session %s", agentLabel, sessionName)})
 					if triggerBrain {
 						pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
 						triggerBrain = false

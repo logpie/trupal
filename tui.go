@@ -91,6 +91,7 @@ type brainStatusMsg struct {
 }
 type brainStatsMsg struct{ stats BrainStats }
 type logLineMsg struct{ line string }
+type replaceStatusMsg struct{ line string }
 type tickMsg time.Time
 
 var copySelectedText = CopySelectedToClipboard
@@ -228,7 +229,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scrollOffset = 0
 			}
 		case "o":
-			if !m.popupVisible() && len(m.entries) > 0 {
+			if m.popupVisible() {
+				m.issuesPopupVisible = false
+				m.issuePanelVisible = false
+			}
+			if len(m.entries) > 0 {
 				entry := m.entries[m.selectedEntry]
 				if len(entry.Detail) > 0 {
 					key := entry.ID
@@ -240,6 +245,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "p":
 			if len(m.issueItems) > 0 {
+				for key := range m.detailOpen {
+					m.detailOpen[key] = false
+				}
 				next := !m.popupVisible()
 				m.issuesPopupVisible = next
 				m.issuePanelVisible = next
@@ -268,9 +276,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		switch {
-		case msg.Button == tea.MouseButtonWheelUp && m.logRect().Contains(msg.X, msg.Y):
+		case msg.Button == tea.MouseButtonWheelUp && m.popupVisible() && msg.Y >= 3 && msg.Y < 3+len(m.issuePinnedLines()):
+			if len(m.issueItems) > 0 {
+				m.issueCursor = (m.issueCursor - 1 + len(m.issueItems)) % len(m.issueItems)
+			}
+		case msg.Button == tea.MouseButtonWheelDown && m.popupVisible() && msg.Y >= 3 && msg.Y < 3+len(m.issuePinnedLines()):
+			if len(m.issueItems) > 0 {
+				m.issueCursor = (m.issueCursor + 1) % len(m.issueItems)
+			}
+		case msg.Button == tea.MouseButtonWheelUp && m.bodyRect().Contains(msg.X, msg.Y):
 			m.scroll(3)
-		case msg.Button == tea.MouseButtonWheelDown && m.logRect().Contains(msg.X, msg.Y):
+		case msg.Button == tea.MouseButtonWheelDown && m.bodyRect().Contains(msg.X, msg.Y):
 			m.scroll(-3)
 		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
 			Debugf("[sel] press x=%d y=%d", msg.X, msg.Y)
@@ -279,7 +295,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sel.Clear()
 				return m, nil
 			}
-			m.sel.PrepareDrag(point.Line, point.Col, m.logRect())
+			m.sel.PrepareDrag(point.Line, point.Col, m.bodyRect())
 		case msg.Action == tea.MouseActionMotion && (msg.Button == tea.MouseButtonLeft || (msg.Button == tea.MouseButtonNone && m.sel.Anchor.Valid())):
 			if m.sel.Anchor.Valid() {
 				m.autoScrollSelection(msg.Y)
@@ -301,6 +317,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					text := m.sel.SelectedText(m.contentLines(), selectionTabWidth)
 					Debugf("[sel] copied %d chars", len(text))
 					if text != "" {
+						m.sel.Clear()
 						return m, func() tea.Msg {
 							return SelectionCopiedMsg{
 								Text: text,
@@ -310,6 +327,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
+				m.sel.Clear()
 			}
 		}
 		return m, nil
@@ -430,6 +448,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case logLineMsg:
+		m.appendEntry(timelineEntry{
+			Kind:    "log",
+			Time:    time.Now().Format("15:04"),
+			Marker:  "",
+			Summary: msg.line,
+		})
+
+	case replaceStatusMsg:
+		for i := len(m.entries) - 1; i >= 0; i-- {
+			if m.entries[i].Kind == "log" {
+				m.entries[i].Time = time.Now().Format("15:04")
+				m.entries[i].Summary = msg.line
+				return m, nil
+			}
+		}
 		m.appendEntry(timelineEntry{
 			Kind:    "log",
 			Time:    time.Now().Format("15:04"),
@@ -699,7 +732,7 @@ func (m *model) scroll(delta int) {
 
 func (m model) maxScroll() int {
 	lh := m.logViewportH()
-	lines, _ := m.renderedTimeline()
+	lines, _, _ := m.renderedTimeline()
 	if len(lines) <= lh {
 		return 0
 	}
@@ -722,7 +755,7 @@ func (m model) contentW() int {
 	return w
 }
 
-func (m model) renderEntry(entry timelineEntry, width int, open, selected bool) []string {
+func (m model) renderEntry(entry timelineEntry, width int, selected bool) []string {
 	textW := logTextWidth(width)
 	if textW < 18 {
 		textW = 18
@@ -755,50 +788,46 @@ func (m model) renderEntry(entry timelineEntry, width int, open, selected bool) 
 		}
 	}
 
-	if open {
-		for _, block := range entry.Detail {
-			parts := strings.SplitN(block, "\n", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			label := parts[0]
-			value := parts[1]
-			style := sIssueWhy
-			if label == "Seen" {
-				style = sIssuePreview
-			}
-			lines = append(lines, renderDetailField(label, value, width-lipgloss.Width(logPrefix("", ""))-logGapWidth, style)...)
-		}
-	}
 	return lines
 }
 
-func (m model) renderedTimeline() ([]string, []int) {
+func (m model) renderedTimeline() ([]string, []int, []bool) {
 	if len(m.entries) == 0 {
 		owners := make([]int, len(m.lines))
+		heads := make([]bool, len(m.lines))
 		for i := range owners {
 			owners[i] = -1
 		}
-		return append([]string{}, m.lines...), owners
+		return append([]string{}, m.lines...), owners, heads
 	}
 	var lines []string
 	var owners []int
+	var heads []bool
 	for i, entry := range m.entries {
 		key := entry.ID
 		if key == "" {
 			key = fmt.Sprintf("entry-%d", i)
 		}
-		entryLines := m.renderEntry(entry, m.width, m.detailOpen[key], i == m.selectedEntry)
-		for _, line := range entryLines {
+		entryLines := m.renderEntry(entry, m.width, i == m.selectedEntry)
+		for j, line := range entryLines {
 			lines = append(lines, line)
 			owners = append(owners, i)
+			heads = append(heads, j == 0)
+		}
+		if detail := m.selectedInspectorLinesForEntry(i, key); len(detail) > 0 {
+			for _, line := range detail {
+				lines = append(lines, line)
+				owners = append(owners, i)
+				heads = append(heads, false)
+			}
 		}
 		if i < len(m.entries)-1 {
 			lines = append(lines, "")
 			owners = append(owners, -1)
+			heads = append(heads, false)
 		}
 	}
-	return lines, owners
+	return lines, owners, heads
 }
 
 func (m *model) moveSelection(delta int) {
@@ -820,7 +849,7 @@ func (m *model) scrollSelectedIntoView() {
 	if len(m.entries) == 0 {
 		return
 	}
-	lines, owners := m.renderedTimeline()
+	lines, owners, _ := m.renderedTimeline()
 	if len(lines) == 0 || len(owners) == 0 {
 		m.scrollOffset = 0
 		return
@@ -856,7 +885,15 @@ func (m *model) scrollSelectedIntoView() {
 }
 
 func (m *model) toggleEntryDetail(key string) {
-	m.detailOpen[key] = !m.detailOpen[key]
+	if m.detailOpen[key] {
+		delete(m.detailOpen, key)
+		m.scrollSelectedIntoView()
+		return
+	}
+	for existing := range m.detailOpen {
+		delete(m.detailOpen, existing)
+	}
+	m.detailOpen[key] = true
 	m.scrollSelectedIntoView()
 }
 
@@ -868,6 +905,65 @@ func (m *model) jumpToIssue(key string) {
 			return
 		}
 	}
+}
+
+func (m model) selectedInspectorLines() []string {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	entry := m.entries[m.selectedEntry]
+	key := entry.ID
+	if key == "" {
+		key = fmt.Sprintf("entry-%d", m.selectedEntry)
+	}
+	return m.selectedInspectorLinesForEntry(m.selectedEntry, key)
+}
+
+func (m model) selectedInspectorLinesForEntry(entryIdx int, key string) []string {
+	return m.selectedInspectorAllLinesForEntry(entryIdx, key)
+}
+
+func (m model) selectedInspectorAllLines() []string {
+	if len(m.entries) == 0 {
+		return nil
+	}
+	entry := m.entries[m.selectedEntry]
+	key := entry.ID
+	if key == "" {
+		key = fmt.Sprintf("entry-%d", m.selectedEntry)
+	}
+	return m.selectedInspectorAllLinesForEntry(m.selectedEntry, key)
+}
+
+func (m model) selectedInspectorAllLinesForEntry(entryIdx int, key string) []string {
+	if len(m.entries) == 0 || entryIdx < 0 || entryIdx >= len(m.entries) {
+		return nil
+	}
+	entry := m.entries[entryIdx]
+	if !m.detailOpen[key] || len(entry.Detail) == 0 {
+		return nil
+	}
+
+	width := m.width - 2
+	if width < 20 {
+		width = 20
+	}
+	lines := []string{}
+	for _, block := range entry.Detail {
+		parts := strings.SplitN(block, "\n", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		label := parts[0]
+		value := parts[1]
+		style := sIssueWhy
+		if label == "Seen" {
+			style = sIssuePreview
+		}
+		lines = append(lines, renderDetailField(label, value, width-lipgloss.Width(logPrefix("", ""))-logGapWidth, style)...)
+	}
+	lines = append(lines, sSep.Render(strings.Repeat("─", m.width)))
+	return lines
 }
 
 func (m *model) syncIssueCursorToSelection() {
@@ -1089,14 +1185,14 @@ func (m model) logViewportH() int {
 }
 
 func (m model) contentLines() []string {
-	lines, _ := m.renderedTimeline()
+	lines, _, _ := m.renderedTimeline()
 	content := append([]string{}, m.issuesPopupLines()...)
 	content = append(content, lines...)
 	return content
 }
 
 func (m model) visibleLogRange() (start, end int) {
-	lines, _ := m.renderedTimeline()
+	lines, _, _ := m.renderedTimeline()
 	total := len(lines)
 	end = total - m.scrollOffset
 	if end > total {
@@ -1113,7 +1209,7 @@ func (m model) visibleLogRange() (start, end int) {
 }
 
 func (m *model) autoScrollSelection(y int) {
-	rect := m.logRect()
+	rect := m.bodyRect()
 	if rect.H <= 0 {
 		return
 	}
@@ -1143,9 +1239,9 @@ func (m model) selectionPointAt(x, y int, clamp bool) (selectionPoint, bool) {
 		return selectionPoint{}, false
 	}
 
-	pinnedCount := len(m.issuesPopupLines())
+	popupCount := len(m.issuesPopupLines())
 	start, end := m.visibleLogRange()
-	visibleCount := pinnedCount + (end - start)
+	visibleCount := popupCount + (end - start)
 	if visibleCount <= 0 {
 		return selectionPoint{}, false
 	}
@@ -1164,8 +1260,8 @@ func (m model) selectionPointAt(x, y int, clamp bool) (selectionPoint, bool) {
 		row = visibleCount - 1
 	}
 	lineIdx := row
-	if row >= pinnedCount {
-		lineIdx = pinnedCount + start + (row - pinnedCount)
+	if row >= popupCount {
+		lineIdx = popupCount + start + (row - popupCount)
 	}
 
 	relX := x - rect.X
@@ -1231,7 +1327,7 @@ func (m model) View() string {
 	issueLines := m.issuePinnedLines()
 	lh := m.logViewportH()
 	start, end := m.visibleLogRange()
-	content, owners := m.renderedTimeline()
+	content, owners, heads := m.renderedTimeline()
 	pinnedCount := len(issueLines)
 
 	bodyLines := make([]string, 0, pinnedCount+lh)
@@ -1253,7 +1349,7 @@ func (m model) View() string {
 				startCol, endCol := m.sel.GetLineSelectionCols(absIdx)
 				line = InjectCharacterRangeBackground(line, startCol, endCol)
 			}
-			if !m.sel.HasSelection() && start+i < len(owners) && owners[start+i] == m.selectedEntry {
+			if !m.sel.HasSelection() && start+i < len(owners) && owners[start+i] == m.selectedEntry && start+i < len(heads) && heads[start+i] {
 				line = InjectCharacterRangeBackground(line, 0, -1)
 			}
 			visible = append(visible, line)

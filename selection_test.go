@@ -162,6 +162,9 @@ func TestMouseDragCopiesSelection(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected copy command on drag release")
 	}
+	if m.sel.HasSelection() {
+		t.Fatal("selection should clear immediately on release")
+	}
 
 	msg := cmd()
 	copiedMsg, ok := msg.(SelectionCopiedMsg)
@@ -230,6 +233,9 @@ func TestMouseDragCopiesSelectionFromScrolledView(t *testing.T) {
 	m = newM.(model)
 	if cmd == nil {
 		t.Fatal("expected copy command on drag release")
+	}
+	if m.sel.HasSelection() {
+		t.Fatal("selection should clear immediately on release")
 	}
 
 	_ = cmd()
