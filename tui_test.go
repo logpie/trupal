@@ -220,7 +220,7 @@ func TestHeaderCanShowWatchedSessionModel(t *testing.T) {
 }
 
 func TestFilesLineDisambiguatesDuplicateBasenames(t *testing.T) {
-	line := filesLine([]string{"pkg/a/main.go", "cmd/main.go"}, nil)
+	line := filesLine([]string{"pkg/a/main.go", "cmd/main.go"})
 	if !strings.Contains(line, "a/main.go") {
 		t.Fatalf("expected duplicate basename to show parent dir, got %q", line)
 	}
@@ -711,9 +711,8 @@ func TestStatusMsgClearsBuildAndFileState(t *testing.T) {
 
 	buildOK := true
 	newM, _ := m.Update(statusMsg{
-		buildOK:  &buildOK,
-		files:    []string{"a.go"},
-		newFiles: []string{"b.go"},
+		buildOK: &buildOK,
+		files:   []string{"a.go"},
 	})
 	m = newM.(model)
 	if m.buildState == "" {
@@ -724,9 +723,8 @@ func TestStatusMsgClearsBuildAndFileState(t *testing.T) {
 	}
 
 	newM, _ = m.Update(statusMsg{
-		buildOK:  nil,
-		files:    nil,
-		newFiles: nil,
+		buildOK: nil,
+		files:   nil,
 	})
 	m = newM.(model)
 	if m.buildState != "" {

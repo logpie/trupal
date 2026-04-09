@@ -79,7 +79,6 @@ type statusMsg struct {
 	buildErrs     int
 	buildTrend    string
 	files         []string
-	newFiles      []string
 	elapsed       string
 	project       string
 	findings      int
@@ -411,7 +410,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Update footer files (shown in footer, not logged to chat).
-		m.fileLine = filesLine(msg.files, msg.newFiles)
+		m.fileLine = filesLine(msg.files)
 		prevKey := ""
 		if len(m.issueItems) > 0 && m.issueCursor < len(m.issueItems) {
 			prevKey = m.issueItems[m.issueCursor].Key()
@@ -1732,7 +1731,7 @@ func (m *model) shouldLogEvent(kind, text string) bool {
 
 // --- Helpers ---
 
-func filesLine(files, newFiles []string) string {
+func filesLine(files []string) string {
 	parts := []string{}
 	if len(files) > 0 {
 		parts = append(parts, fmt.Sprintf("%d mod: %s", len(files), joinDisplayPaths(files, 3)))

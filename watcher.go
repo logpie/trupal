@@ -290,6 +290,42 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			triggerReason = mergeTriggerReason(triggerReason, reason)
 		}
 
+		attachSession := func(newPath string, newWatcher *JSONLWatcher, announce bool) {
+			if jsonlWatcher != nil && jsonlWatcher != newWatcher {
+				jsonlWatcher.Close()
+			}
+			if triggerBrain {
+				pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
+				triggerBrain = false
+				triggerReason = ""
+			}
+			jsonlPath = newPath
+			jsonlWatcher = newWatcher
+			lastJSONLActivity = time.Now()
+			idleNotified = false
+			resetSessionContext()
+			seedReason := seedSessionContext(newPath)
+			if announce {
+				sessionName := filepath.Base(newPath)
+				if len(sessionName) > 12 {
+					sessionName = sessionName[:8] + "…"
+				}
+				p.Send(replaceStatusMsg{line: fmt.Sprintf("watching %s session %s", agentLabel, sessionName)})
+			}
+			pendingTrigger = mergeTriggerReason(pendingTrigger, agentName+" session switched")
+			pendingTrigger = mergeTriggerReason(pendingTrigger, seedReason)
+			restartNeeded = false
+			restartAt = time.Time{}
+			brainStale = true
+			clearBrainState()
+			if brain != nil {
+				brainStats = brain.Stats()
+				p.Send(brainStatsMsg{stats: brainStats})
+				brain.Stop()
+				brain = nil
+			}
+		}
+
 		// Drain any pending debounce signal.
 		select {
 		case reason := <-debounceCh:
@@ -515,32 +551,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				if err != nil {
 					Debugf("[watcher] failed to watch new session: %v", err)
 				} else {
-					if jsonlWatcher != nil {
-						jsonlWatcher.Close()
-					}
-					if triggerBrain {
-						pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
-						triggerBrain = false
-						triggerReason = ""
-					}
-					jsonlPath = newPath
-					jsonlWatcher = newWatcher
-					lastJSONLActivity = time.Now()
-					idleNotified = false
-					resetSessionContext()
-					seedReason := seedSessionContext(newPath)
-					pendingTrigger = mergeTriggerReason(pendingTrigger, agentName+" session switched")
-					pendingTrigger = mergeTriggerReason(pendingTrigger, seedReason)
-					restartNeeded = false
-					restartAt = time.Time{}
-					brainStale = true
-					clearBrainState()
-					if brain != nil {
-						brainStats = brain.Stats()
-						p.Send(brainStatsMsg{stats: brainStats})
-						brain.Stop()
-						brain = nil
-					}
+					attachSession(newPath, newWatcher, false)
 				}
 			}
 		} else {
@@ -552,26 +563,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				if err != nil {
 					Debugf("[watcher] failed to watch session: %v", err)
 				} else {
-					jsonlPath = newPath
-					jsonlWatcher = newWatcher
-					resetSessionContext()
-					seedReason := seedSessionContext(newPath)
-					sessionName := filepath.Base(newPath)
-					if len(sessionName) > 12 {
-						sessionName = sessionName[:8] + "…"
-					}
-					p.Send(replaceStatusMsg{line: fmt.Sprintf("watching %s session %s", agentLabel, sessionName)})
-					if triggerBrain {
-						pendingTrigger = mergeTriggerReason(pendingTrigger, triggerReason)
-						triggerBrain = false
-						triggerReason = ""
-					}
-					pendingTrigger = mergeTriggerReason(pendingTrigger, agentName+" session switched")
-					pendingTrigger = mergeTriggerReason(pendingTrigger, seedReason)
-					restartNeeded = false
-					restartAt = time.Time{}
-					brainStale = true
-					clearBrainState()
+					attachSession(newPath, newWatcher, true)
 				}
 			}
 		}
@@ -689,7 +681,6 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				return ""
 			}(),
 			files:    changedFiles,
-			newFiles: untrackedFiles,
 			elapsed:  session.Elapsed(),
 			project:  filepath.Base(repoRoot),
 			findings: activeBrainFindings + len(patternFindings),
