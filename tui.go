@@ -394,15 +394,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.findings = 0
 		}
 		m.resolved++
-		text := "resolved: " + normalizeIssueText(msg.finding.Nudge)
-		if m.shouldLogEvent("resolved", text) {
-			m.appendEntry(timelineEntry{
-				ID:      msg.finding.ID,
-				Kind:    "resolved",
-				Time:    time.Now().Format("15:04"),
-				Marker:  "✓",
-				Summary: "resolved: " + normalizeIssueText(msg.finding.Nudge),
-			})
+		resolved := false
+		for i := range m.entries {
+			if m.entries[i].ID != msg.finding.ID {
+				continue
+			}
+			m.entries[i].Kind = "resolved"
+			m.entries[i].Time = time.Now().Format("15:04")
+			m.entries[i].Marker = "✓"
+			m.entries[i].Summary = normalizeIssueText(msg.finding.Nudge)
+			delete(m.detailOpen, msg.finding.ID)
+			resolved = true
+			break
+		}
+		if !resolved {
+			text := "resolved: " + normalizeIssueText(msg.finding.Nudge)
+			if m.shouldLogEvent("resolved", text) {
+				m.appendEntry(timelineEntry{
+					ID:      msg.finding.ID,
+					Kind:    "resolved",
+					Time:    time.Now().Format("15:04"),
+					Marker:  "✓",
+					Summary: normalizeIssueText(msg.finding.Nudge),
+				})
+			}
 		}
 
 	case trajectoryMsg:
@@ -776,10 +791,9 @@ func (m model) renderEntry(entry timelineEntry, width int, selected bool) []stri
 		}
 		marker := entry.Marker
 		if selected {
-			body = sFocusBody.Render(ansi.Strip(line))
-			marker = "›"
-		} else if entry.Kind == "issue" {
-			marker = ""
+			body = sFocusBody.Render("› " + ansi.Strip(line))
+		} else if entry.Kind == "log" && marker == "" {
+			marker = "·"
 		}
 		if i == 0 {
 			lines = append(lines, renderLogLine(entry.Time, marker, body))
