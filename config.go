@@ -99,6 +99,26 @@ func (cfg Config) String() string {
 	return strings.Join(parts, " ")
 }
 
+func (cfg Config) BrainIdentityDisplay() string {
+	provider := normalizeProvider(cfg.BrainProvider, DefaultConfig().BrainProvider)
+	model := strings.TrimSpace(cfg.BrainModel)
+	switch provider {
+	case ProviderClaude:
+		if model == "" {
+			model = "sonnet"
+		}
+	case ProviderCodex:
+		if model == "" {
+			model = "auto"
+		}
+	default:
+		if model == "" {
+			model = "default"
+		}
+	}
+	return provider + "/" + model
+}
+
 func ReloadConfig(projectDir string) Config {
 	cfg, err := loadConfig(projectDir)
 	if err != nil {

@@ -25,58 +25,75 @@ var (
 	sNudgeMarker = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	sNudgeText   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
-	sHeaderTitle  = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
-	sHeaderLine   = lipgloss.NewStyle().PaddingLeft(1)
-	sBrandChip    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
-	sMetaChip     = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
-	sStatusChip   = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("238")).Padding(0, 1)
-	sStatusChipOk = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("22")).Padding(0, 1)
-	sStatusChipHi = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("17")).Padding(0, 1)
-	sStatusChipWr = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("94")).Padding(0, 1)
-	sStatusChipEr = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("88")).Padding(0, 1)
-	sIndicatorGap = lipgloss.NewStyle().PaddingRight(2)
-	sFooterLine   = lipgloss.NewStyle().Faint(true).PaddingLeft(1)
+	sHeaderTitle     = lipgloss.NewStyle().Bold(true).PaddingLeft(1)
+	sHeaderLine      = lipgloss.NewStyle().PaddingLeft(1)
+	sBrandChip       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	sMetaChip        = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236")).Padding(0, 1)
+	sHeaderLabelText = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	sHeaderValueText = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true)
+	sStatusChip      = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("238")).Padding(0, 1)
+	sStatusChipOk    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("22")).Padding(0, 1)
+	sStatusChipHi    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("17")).Padding(0, 1)
+	sStatusChipWr    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("94")).Padding(0, 1)
+	sStatusChipEr    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("88")).Padding(0, 1)
+	sIndicatorGap    = lipgloss.NewStyle().PaddingRight(2)
+	sFooterLine      = lipgloss.NewStyle().Faint(true).PaddingLeft(1)
 
 	sLogTimeCell   = lipgloss.NewStyle().Faint(true).Width(logTimeWidth).Align(lipgloss.Right)
 	sLogGapCell    = lipgloss.NewStyle().Width(logGapWidth)
 	sLogMarkerCell = lipgloss.NewStyle().Width(logMarkerWidth).Align(lipgloss.Center)
 	sLogGutterCell = lipgloss.NewStyle().Faint(true).Width(logMarkerWidth).Align(lipgloss.Center)
 
-	sIssueTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24"))
-	sIssueBullet  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	sIssueText    = lipgloss.NewStyle().Foreground(lipgloss.Color("230"))
-	sIssueWhy     = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	sIssuePreview = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
-	sFocusLabel   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
-	sFocusBody    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
-	sDetailCode   = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236"))
-	sDetailCodeNo = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	sIssueTitle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24"))
+	sIssueBullet    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	sIssueText      = lipgloss.NewStyle().Foreground(lipgloss.Color("230"))
+	sIssueWhy       = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	sIssuePreview   = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+	sFocusLabel     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	sFocusBody      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	sSelectedRow    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Bold(true)
+	sTimelineInfo   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	sTimelineWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	sTimelineOk     = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
+	sTimelineNote   = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
+	sTimelineSel    = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
+	sDetailCode     = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("236"))
+	sDetailCodeNo   = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	sDockLabel      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	sDockValue      = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	sDockMuted      = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	sDockAccent     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	sDockWarn       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	sInspectorTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
 	sInspectorBox   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("239")).Padding(0, 1).Foreground(lipgloss.Color("252"))
 	sInspectorCode  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Background(lipgloss.Color("235")).Padding(0, 1).Foreground(lipgloss.Color("252"))
 )
 
 const (
-	logTimeWidth   = 5
-	logGapWidth    = 2
-	logMarkerWidth = 2
+	headerLineCount = 3
+	logTimeWidth    = 5
+	logGapWidth     = 2
+	logMarkerWidth  = 2
 )
 
 // --- Messages ---
 
 type statusMsg struct {
-	agentLabel string
-	ccStatus   string
-	buildOK    *bool
-	buildErrs  int
-	buildTrend string
-	files      []string
-	newFiles   []string
-	elapsed    string
-	project    string
-	findings   int
-	resolved   int
-	issues     []CurrentIssue
+	agentLabel    string
+	ccStatus      string
+	sessionModel  string
+	brainIdentity string
+	agentStats    AgentUsageStats
+	buildOK       *bool
+	buildErrs     int
+	buildTrend    string
+	files         []string
+	newFiles      []string
+	elapsed       string
+	project       string
+	findings      int
+	resolved      int
+	issues        []CurrentIssue
 }
 type nudgeMsg struct {
 	finding BrainFinding
@@ -112,22 +129,25 @@ type model struct {
 	entries       []timelineEntry
 	selectedEntry int
 	scrollOffset  int
-	recentEvents []string
-	lines        []string // legacy raw line buffer used by low-level log/selection tests
+	recentEvents  []string
+	lines         []string // legacy raw line buffer used by low-level log/selection tests
 
 	// Layout
 	width  int
 	height int
 
 	// Header state
-	project    string
-	elapsed    string
-	agentLabel string
-	ccStatus   string
-	buildState string
-	findings   int // active count
-	resolved   int
-	brain      brainIndicatorState
+	project       string
+	elapsed       string
+	agentLabel    string
+	ccStatus      string
+	buildState    string
+	findings      int // active count
+	resolved      int
+	brain         brainIndicatorState
+	agentUsage    AgentUsageStats
+	sessionModel  string
+	brainIdentity string
 
 	// Footer state
 	fileLine           string // current files summary
@@ -135,9 +155,9 @@ type model struct {
 	issueCursor        int
 	issuesPopupVisible bool
 	issuePanelVisible  bool // compatibility alias for existing tests while popup work lands
-	detailOpen  map[string]bool
-	toastMsg    string // transient message (e.g. "copied!")
-	toastExpiry time.Time
+	detailOpen         map[string]bool
+	toastMsg           string // transient message (e.g. "copied!")
+	toastExpiry        time.Time
 
 	// Selection
 	sel *Selection
@@ -295,9 +315,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sel.Clear()
 				return m, nil
 			}
-			m.sel.PrepareDrag(point.Line, point.Col, m.bodyRect())
+			view := m.bodyRect()
+			if m.footerRect().Contains(msg.X, msg.Y) {
+				view = m.footerRect()
+			}
+			m.sel.PrepareDrag(point.Line, point.Col, view)
 		case msg.Action == tea.MouseActionMotion && (msg.Button == tea.MouseButtonLeft || (msg.Button == tea.MouseButtonNone && m.sel.Anchor.Valid())):
-			if m.sel.Anchor.Valid() {
+			if m.sel.Anchor.Valid() && m.sel.View == m.bodyRect() {
 				m.autoScrollSelection(msg.Y)
 			}
 			point, ok := m.selectionPointAt(msg.X, msg.Y, true)
@@ -348,6 +372,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ccStatus != "" {
 			m.ccStatus = msg.ccStatus
 		}
+		if msg.sessionModel != "" {
+			m.sessionModel = msg.sessionModel
+		}
+		if msg.brainIdentity != "" {
+			m.brainIdentity = msg.brainIdentity
+		}
+		m.agentUsage = msg.agentStats
 		if msg.elapsed != "" {
 			m.elapsed = msg.elapsed
 		}
@@ -403,7 +434,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.entries[i].Time = time.Now().Format("15:04")
 			m.entries[i].Marker = "✓"
 			m.entries[i].Summary = normalizeIssueText(msg.finding.Nudge)
-			delete(m.detailOpen, msg.finding.ID)
 			resolved = true
 			break
 		}
@@ -603,6 +633,165 @@ func chooseBrainStatsIndicator(stats BrainStats, maxWidth int) string {
 	return candidates[len(candidates)-1]
 }
 
+func (m model) brainUsageCandidates() []string {
+	stats := m.brain.stats
+	if stats.PromptTokens() == 0 && stats.TotalOutputTokens == 0 {
+		return []string{sDockMuted.Render("no brain usage yet")}
+	}
+
+	metrics := []dockMetric{
+		{Label: "in", Value: formatTokenCount(stats.UncachedPromptTokens()), Accent: false},
+		{Label: "cache", Value: formatTokenCount(stats.TotalCacheReadTokens), Accent: false},
+		{Label: "hit", Value: fmt.Sprintf("%d%%", stats.CacheHitRate()), Accent: true},
+		{Label: "out", Value: formatTokenCount(stats.TotalOutputTokens), Accent: false},
+	}
+	if stats.LastDuration > 0 || strings.TrimSpace(stats.LastEffort) != "" {
+		metrics = append(metrics, dockMetric{Label: "turn", Value: fmt.Sprintf("%s/%s", roundDuration(stats.LastDuration), defaultString(stats.LastEffort, "?"))})
+	}
+	if stats.CostKnown && stats.TotalCostUSD > 0 {
+		metrics = append(metrics, dockMetric{Label: "cost", Value: formatCostUSD(stats.TotalCostUSD)})
+	}
+	return dockMetricCandidates(metrics)
+}
+
+func (m model) agentUsageCandidates() []string {
+	stats := m.agentUsage
+	if !stats.Available() {
+		return []string{sDockMuted.Render("usage unavailable")}
+	}
+
+	metrics := []dockMetric{
+		{Label: "in", Value: formatTokenCount(stats.TotalInputTokens)},
+		{Label: "cache", Value: formatTokenCount(stats.TotalCachedTokens)},
+		{Label: "hit", Value: fmt.Sprintf("%d%%", stats.CacheHitRate()), Accent: true},
+		{Label: "out", Value: formatTokenCount(stats.TotalOutputTokens)},
+	}
+	return dockMetricCandidates(metrics)
+}
+
+type dockMetric struct {
+	Label  string
+	Value  string
+	Accent bool
+}
+
+func renderDockMetric(metric dockMetric) string {
+	if strings.TrimSpace(metric.Value) == "" {
+		return ""
+	}
+	valueStyle := sDockValue
+	if metric.Accent {
+		valueStyle = sDockAccent
+	}
+	return sDockMuted.Render(metric.Label) + " " + valueStyle.Render(metric.Value)
+}
+
+func dockMetricCandidates(metrics []dockMetric) []string {
+	if len(metrics) == 0 {
+		return []string{""}
+	}
+	var candidates []string
+	for n := len(metrics); n >= 1; n-- {
+		candidates = append(candidates, joinDockColumns(metrics[:n]))
+	}
+	return candidates
+}
+
+var dockColumnWidths = []int{9, 11, 7, 7, 11}
+
+const dockLabelWidth = 8
+
+func joinDockColumns(metrics []dockMetric) string {
+	if len(metrics) == 0 {
+		return ""
+	}
+	padded := make([]string, 0, len(metrics))
+	for i, metric := range metrics {
+		part := renderDockMetric(metric)
+		if part == "" {
+			continue
+		}
+		if i == len(metrics)-1 {
+			padded = append(padded, part)
+			continue
+		}
+		target := 14
+		if i < len(dockColumnWidths) {
+			target = dockColumnWidths[i]
+		}
+		width := lipgloss.Width(part)
+		if width < target {
+			part += strings.Repeat(" ", target-width)
+		}
+		padded = append(padded, part)
+	}
+	return strings.Join(padded, "  ")
+}
+
+func chooseUsageCandidate(candidates []string, maxWidth int) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	if maxWidth <= 0 {
+		return candidates[len(candidates)-1]
+	}
+	for _, candidate := range candidates {
+		if lipgloss.Width(candidate) <= maxWidth {
+			return candidate
+		}
+	}
+	return truncateWidth(candidates[len(candidates)-1], maxWidth)
+}
+
+func (m model) renderUsageDockLine(label string, candidates []string, width int) string {
+	labelText := sDockLabel.Render(label)
+	labelWidth := lipgloss.Width(label)
+	if labelWidth < dockLabelWidth {
+		labelText += strings.Repeat(" ", dockLabelWidth-labelWidth)
+		labelWidth = dockLabelWidth
+	}
+	summary := chooseUsageCandidate(candidates, width-lipgloss.Width(labelText)-3)
+	if strings.TrimSpace(summary) == "" {
+		summary = sDockMuted.Render("no data")
+	}
+	content := labelText + "  " + summary
+	if lipgloss.Width(content) <= width-1 {
+		return content
+	}
+	maxSummary := width - labelWidth - 3
+	if maxSummary < 10 {
+		maxSummary = 10
+	}
+	return labelText + "  " + truncateWidth(summary, maxSummary)
+}
+
+func (m model) footerDockLines() []string {
+	return m.footerDockLinesWithState("", m.width)
+}
+
+func (m model) footerDockLinesWithState(controls string, width int) []string {
+	footerParts := []string{}
+	if controls != "" {
+		footerParts = append(footerParts, controls)
+	} else {
+		footerParts = append(footerParts, "")
+	}
+
+	agentLabel := sessionProviderDisplayName(m.agentUsage.Provider)
+	if strings.TrimSpace(agentLabel) == "" {
+		agentLabel = defaultString(m.agentLabel, "agent")
+		if agentLabel != "" {
+			agentLabel = strings.ToUpper(agentLabel[:1]) + agentLabel[1:]
+		}
+	}
+
+	return []string{
+		sFooterLine.Render(footerParts[0]),
+		sFooterLine.Render(m.renderUsageDockLine("TruPal", m.brainUsageCandidates(), width)),
+		sFooterLine.Render(m.renderUsageDockLine(agentLabel, m.agentUsageCandidates(), width)),
+	}
+}
+
 // --- Log helpers ---
 
 // logStyled renders a compact event lane tuned for narrow panes:
@@ -755,7 +944,7 @@ func (m model) maxScroll() int {
 }
 
 func (m model) logH() int {
-	h := m.height - 6
+	h := m.height - (headerLineCount + 2 + len(m.footerDockLines()))
 	if h < 1 {
 		return 1
 	}
@@ -789,11 +978,10 @@ func (m model) renderEntry(entry timelineEntry, width int, selected bool) []stri
 		} else if entry.Kind == "resolved" {
 			body = sDim.Render(line)
 		}
-		marker := entry.Marker
+		marker := styledTimelineMarker(entry.Kind, entry.Marker)
 		if selected {
-			body = sFocusBody.Render("› " + ansi.Strip(line))
-		} else if entry.Kind == "log" && marker == "" {
-			marker = "·"
+			body = sSelectedRow.Render(ansi.Strip(line))
+			marker = sTimelineSel.Render("›")
 		}
 		if i == 0 {
 			lines = append(lines, renderLogLine(entry.Time, marker, body))
@@ -803,6 +991,22 @@ func (m model) renderEntry(entry timelineEntry, width int, selected bool) []stri
 	}
 
 	return lines
+}
+
+func styledTimelineMarker(kind, marker string) string {
+	switch kind {
+	case "issue":
+		return sTimelineWarn.Render("●")
+	case "resolved":
+		return sTimelineOk.Render("✓")
+	case "note":
+		return sTimelineNote.Render("→")
+	default:
+		if marker == "" {
+			return sTimelineInfo.Render("○")
+		}
+		return sTimelineInfo.Render(marker)
+	}
 }
 
 func (m model) renderedTimeline() ([]string, []int, []bool) {
@@ -849,6 +1053,7 @@ func (m *model) moveSelection(delta int) {
 		m.scroll(-delta)
 		return
 	}
+	hadOpen := len(m.detailOpen) > 0
 	m.selectedEntry += delta
 	if m.selectedEntry < 0 {
 		m.selectedEntry = 0
@@ -856,11 +1061,17 @@ func (m *model) moveSelection(delta int) {
 	if m.selectedEntry >= len(m.entries) {
 		m.selectedEntry = len(m.entries) - 1
 	}
+	if hadOpen {
+		m.openSelectedEntryDetail()
+	}
 	m.scrollSelectedIntoView()
 }
 
 func (m *model) scrollSelectedIntoView() {
 	if len(m.entries) == 0 {
+		if m.scrollOffset > m.maxScroll() {
+			m.scrollOffset = m.maxScroll()
+		}
 		return
 	}
 	lines, owners, _ := m.renderedTimeline()
@@ -882,6 +1093,14 @@ func (m *model) scrollSelectedIntoView() {
 		return
 	}
 	lh := m.logViewportH()
+	blockHeight := endLine - startLine + 1
+	if blockHeight >= lh {
+		m.scrollOffset = len(lines) - (startLine + lh)
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
+		return
+	}
 	start, end := m.visibleLogRange()
 	if startLine < start {
 		m.scrollOffset = len(lines) - (startLine + lh)
@@ -896,6 +1115,9 @@ func (m *model) scrollSelectedIntoView() {
 			m.scrollOffset = 0
 		}
 	}
+	if m.scrollOffset > m.maxScroll() {
+		m.scrollOffset = m.maxScroll()
+	}
 }
 
 func (m *model) toggleEntryDetail(key string) {
@@ -909,6 +1131,24 @@ func (m *model) toggleEntryDetail(key string) {
 	}
 	m.detailOpen[key] = true
 	m.scrollSelectedIntoView()
+}
+
+func (m *model) openSelectedEntryDetail() {
+	for existing := range m.detailOpen {
+		delete(m.detailOpen, existing)
+	}
+	if len(m.entries) == 0 {
+		return
+	}
+	entry := m.entries[m.selectedEntry]
+	if len(entry.Detail) == 0 {
+		return
+	}
+	key := entry.ID
+	if key == "" {
+		key = fmt.Sprintf("entry-%d", m.selectedEntry)
+	}
+	m.detailOpen[key] = true
 }
 
 func (m *model) jumpToIssue(key string) {
@@ -999,9 +1239,18 @@ func (m *model) syncIssueCursorToSelection() {
 func (m model) bodyRect() selectionRect {
 	return selectionRect{
 		X: 0,
-		Y: 3,
+		Y: headerLineCount + 1,
 		W: m.width,
 		H: m.logH(),
+	}
+}
+
+func (m model) footerRect() selectionRect {
+	return selectionRect{
+		X: 0,
+		Y: headerLineCount + 2 + m.logH(),
+		W: m.width,
+		H: len(m.footerDockLines()),
 	}
 }
 
@@ -1016,11 +1265,11 @@ func (m model) logRect() selectionRect {
 }
 
 func controlsHint() string {
-	return "j/k scroll  pgup/pgdn  drag copy  ctrl+c quit"
+	return "move j/k  page pgup/pgdn  details o  issues p  copy drag  quit ctrl+c"
 }
 
 func issueControlsHint() string {
-	return "j/k move  enter jump  p hide"
+	return "issues j/k  jump enter  close p"
 }
 
 func renderLabeledField(label, text string, width int, bodyStyle lipgloss.Style) []string {
@@ -1199,6 +1448,12 @@ func (m model) logViewportH() int {
 }
 
 func (m model) contentLines() []string {
+	content := m.baseContentLines()
+	content = append(content, m.footerDockLines()...)
+	return content
+}
+
+func (m model) baseContentLines() []string {
 	lines, _, _ := m.renderedTimeline()
 	content := append([]string{}, m.issuesPopupLines()...)
 	content = append(content, lines...)
@@ -1237,48 +1492,68 @@ func (m *model) autoScrollSelection(y int) {
 }
 
 func (m model) selectionPointAt(x, y int, clamp bool) (selectionPoint, bool) {
-	rect := m.bodyRect()
-	if rect.W <= 0 || rect.H <= 0 {
-		return selectionPoint{}, false
-	}
-	if !rect.Contains(x, y) {
-		if !clamp {
-			return selectionPoint{}, false
-		}
-		x, y = rect.Clamp(x, y)
-	}
-
 	content := m.contentLines()
 	if len(content) == 0 {
 		return selectionPoint{}, false
 	}
 
+	body := m.bodyRect()
+	footer := m.footerRect()
+	inBody := body.Contains(x, y)
+	inFooter := footer.Contains(x, y)
+	if !inBody && !inFooter {
+		if !clamp {
+			return selectionPoint{}, false
+		}
+		switch {
+		case y < footer.Y:
+			x, y = body.Clamp(x, y)
+			inBody = true
+		default:
+			x, y = footer.Clamp(x, y)
+			inFooter = true
+		}
+	}
+
 	popupCount := len(m.issuesPopupLines())
 	start, end := m.visibleLogRange()
 	visibleCount := popupCount + (end - start)
-	if visibleCount <= 0 {
+	baseCount := len(m.baseContentLines())
+	if visibleCount <= 0 && !inFooter {
 		return selectionPoint{}, false
 	}
 
-	row := y - rect.Y
-	if row < 0 {
-		if !clamp {
-			return selectionPoint{}, false
+	var lineIdx int
+	if inFooter {
+		row := y - footer.Y
+		if row < 0 {
+			row = 0
 		}
-		row = 0
-	}
-	if row >= visibleCount {
-		if !clamp {
-			return selectionPoint{}, false
+		if row >= footer.H {
+			row = footer.H - 1
 		}
-		row = visibleCount - 1
-	}
-	lineIdx := row
-	if row >= popupCount {
-		lineIdx = popupCount + start + (row - popupCount)
+		lineIdx = baseCount + row
+	} else {
+		row := y - body.Y
+		if row < 0 {
+			if !clamp {
+				return selectionPoint{}, false
+			}
+			row = 0
+		}
+		if row >= visibleCount {
+			if !clamp {
+				return selectionPoint{}, false
+			}
+			row = visibleCount - 1
+		}
+		lineIdx = row
+		if row >= popupCount {
+			lineIdx = popupCount + start + (row - popupCount)
+		}
 	}
 
-	relX := x - rect.X
+	relX := x
 	if relX < 0 {
 		relX = 0
 	}
@@ -1297,43 +1572,53 @@ func (m model) View() string {
 	}
 	w := m.width
 
-	// ── Header line 1: trupal · project · 5m ──
+	// ── Header line 1: brand · elapsed ──
 	h1 := renderHeaderTitle(m.project, m.elapsed, w)
 
-	// ── Header line 2: status indicators ──
-	indicators := []string{}
+	// ── Header line 2: watched session ──
 	agentLabel := m.agentLabel
 	if agentLabel == "" {
 		agentLabel = "agent"
 	}
+	watchStatus := "idle"
 	switch m.ccStatus {
 	case "active", "thinking":
-		indicators = append(indicators, "● "+agentLabel)
+		watchStatus = "active"
+	case "starting":
+		watchStatus = "starting"
+	case "":
+		watchStatus = "idle"
 	default:
-		indicators = append(indicators, "○ "+agentLabel)
+		watchStatus = m.ccStatus
 	}
+	h2Parts := []string{
+		sHeaderValueText.Render(agentLabel),
+	}
+	if strings.TrimSpace(m.sessionModel) != "" {
+		h2Parts = append(h2Parts, sHeaderValueText.Render(m.sessionModel))
+	}
+	if strings.TrimSpace(m.project) != "" {
+		h2Parts = append(h2Parts, sHeaderValueText.Render(truncateWidth(m.project, max(18, w/3))))
+	}
+	h2Parts = append(h2Parts, styleHeaderStatusValue(watchStatus))
+	h2 := renderHeaderRoleLine("watch", h2Parts, w)
+
+	// ── Header line 3: trupal brain / build / issue summary ──
+	h3Parts := []string{}
+	if strings.TrimSpace(m.brainIdentity) != "" {
+		h3Parts = append(h3Parts, sHeaderValueText.Render(m.brainIdentity))
+	}
+	h3Parts = append(h3Parts, styleHeaderStatusValue(ansi.Strip(m.brainIndicator())))
 	if m.buildState != "" {
-		indicators = append(indicators, m.buildState)
+		h3Parts = append(h3Parts, styleHeaderBuildValue(ansi.Strip(m.buildState)))
 	}
 	if m.findings > 0 {
-		indicators = append(indicators, fmt.Sprintf("⚠ %d", m.findings))
+		h3Parts = append(h3Parts, sWarn.Render(fmt.Sprintf("%d open", m.findings)))
 	}
 	if m.resolved > 0 {
-		indicators = append(indicators, fmt.Sprintf("✓ %d", m.resolved))
+		h3Parts = append(h3Parts, sOk.Render(fmt.Sprintf("%d resolved", m.resolved)))
 	}
-	indicators = append(indicators, m.brainIndicator())
-
-	statsMaxWidth := w - 1
-	if used := joinWidth(indicators, " "); used > 0 {
-		statsMaxWidth -= used + 2
-	}
-	statsIndicator := chooseBrainStatsIndicator(m.brain.stats, statsMaxWidth)
-	indicators = append(indicators, statsIndicator)
-	if w < 44 {
-		indicators = []string{statsIndicator}
-	}
-
-	h2 := renderHeaderIndicators(indicators, w)
+	h3 := renderHeaderRoleLine("brain", h3Parts, w)
 
 	sep := sSep.Render(strings.Repeat("─", w))
 
@@ -1341,7 +1626,7 @@ func (m model) View() string {
 	issueLines := m.issuePinnedLines()
 	lh := m.logViewportH()
 	start, end := m.visibleLogRange()
-	content, owners, heads := m.renderedTimeline()
+	content, _, _ := m.renderedTimeline()
 	pinnedCount := len(issueLines)
 
 	bodyLines := make([]string, 0, pinnedCount+lh)
@@ -1363,9 +1648,6 @@ func (m model) View() string {
 				startCol, endCol := m.sel.GetLineSelectionCols(absIdx)
 				line = InjectCharacterRangeBackground(line, startCol, endCol)
 			}
-			if !m.sel.HasSelection() && start+i < len(owners) && owners[start+i] == m.selectedEntry && start+i < len(heads) && heads[start+i] {
-				line = InjectCharacterRangeBackground(line, 0, -1)
-			}
 			visible = append(visible, line)
 		}
 	}
@@ -1374,7 +1656,7 @@ func (m model) View() string {
 	}
 	bodyLines = append(bodyLines, visible...)
 
-	// ── Footer — truncate to fit pane width ──
+	// ── Footer dock ──
 	footerParts := []string{}
 	if m.scrollOffset > 0 {
 		footerParts = append(footerParts, fmt.Sprintf("↑%d", m.scrollOffset))
@@ -1411,15 +1693,25 @@ func (m model) View() string {
 				if m.popupVisible() {
 					hint = issueControlsHint()
 				} else {
-					hint = "o focus  j/k scroll  pgup/pgdn"
+					hint = "move j/k  details o  issues p  page pgup/pgdn"
 				}
 			}
 			footerParts = append(footerParts, truncateWidth(hint, remaining))
 		}
 	}
-	footer := sFooterLine.Render(strings.Join(footerParts, "  "))
+	footerLines := m.footerDockLinesWithState(strings.Join(footerParts, "  "), w)
+	footerBase := len(m.baseContentLines())
+	for i, line := range footerLines {
+		if m.sel.IsLineSelected(footerBase + i) {
+			startCol, endCol := m.sel.GetLineSelectionCols(footerBase + i)
+			footerLines[i] = InjectCharacterRangeBackground(selectionDisplayLine(line, selectionTabWidth), startCol, endCol)
+		}
+	}
+	controlsLine := footerLines[0]
+	brainLine := footerLines[1]
+	agentLine := footerLines[2]
 
-	parts := []string{h1, h2, sep, strings.Join(bodyLines, "\n"), sep, footer}
+	parts := []string{h1, h2, h3, sep, strings.Join(bodyLines, "\n"), sep, controlsLine, brainLine, agentLine}
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
@@ -1456,9 +1748,6 @@ func filesLine(files, newFiles []string) string {
 	parts := []string{}
 	if len(files) > 0 {
 		parts = append(parts, fmt.Sprintf("%d mod: %s", len(files), joinDisplayPaths(files, 3)))
-	}
-	if len(newFiles) > 0 {
-		parts = append(parts, fmt.Sprintf("%d new: %s", len(newFiles), joinDisplayPaths(newFiles, 2)))
 	}
 	return strings.Join(parts, "  ")
 }
@@ -1662,16 +1951,12 @@ func renderHeaderTitle(project, elapsed string, width int) string {
 	}
 
 	brand := sBrandChip.Render("TRUPAL")
-	projectText := sTitle.Render(truncateWidth(project, max(10, contentWidth/2)))
 	elapsedChip := ""
 	if strings.TrimSpace(elapsed) != "" {
 		elapsedChip = sMetaChip.Render(elapsed)
 	}
 
 	parts := []string{brand}
-	if projectText != "" {
-		parts = append(parts, projectText)
-	}
 	if elapsedChip != "" {
 		parts = append(parts, elapsedChip)
 	}
@@ -1685,6 +1970,68 @@ func renderHeaderTitle(project, elapsed string, width int) string {
 		line = candidate
 	}
 	return " " + line
+}
+
+func renderHeaderRoleLine(label string, parts []string, width int) string {
+	contentWidth := width - 1
+	if contentWidth <= 0 {
+		return ""
+	}
+
+	line := sHeaderLabelText.Render(label + "  ")
+	first := true
+	for _, part := range parts {
+		if strings.TrimSpace(ansi.Strip(part)) == "" {
+			continue
+		}
+		candidate := line
+		if !first {
+			candidate += sDim.Render(" · ")
+		}
+		candidate += part
+		if lipgloss.Width(candidate) > contentWidth {
+			break
+		}
+		if !first {
+			line += sDim.Render(" · ")
+		}
+		line += part
+		first = false
+	}
+
+	return " " + line
+}
+
+func styleHeaderStatusValue(status string) string {
+	plain := strings.TrimSpace(status)
+	switch {
+	case plain == "":
+		return ""
+	case strings.Contains(plain, "analyzing"):
+		return sCyan.Render(plain)
+	case strings.Contains(plain, "active"):
+		return sCyan.Render(plain)
+	case strings.Contains(plain, "starting"):
+		return sHeaderValueText.Render(plain)
+	case strings.Contains(plain, "ago"):
+		return sHeaderValueText.Render(plain)
+	case strings.Contains(plain, "idle"):
+		return sDim.Render(plain)
+	default:
+		return sHeaderValueText.Render(plain)
+	}
+}
+
+func styleHeaderBuildValue(text string) string {
+	plain := strings.TrimSpace(text)
+	switch {
+	case strings.Contains(plain, "✗"):
+		return sErr.Render(plain)
+	case strings.Contains(plain, "✓"):
+		return sOk.Render(plain)
+	default:
+		return sHeaderValueText.Render(plain)
+	}
 }
 
 func renderHeaderIndicators(indicators []string, width int) string {
@@ -1751,20 +2098,27 @@ func containsStyled(parts []string, target string) bool {
 func styleHeaderIndicator(indicator string) string {
 	plain := ansi.Strip(indicator)
 	switch {
+	case strings.HasPrefix(plain, "watch "):
+		value := strings.TrimPrefix(plain, "watch ")
+		return sHeaderLabelText.Render("watch ") + sHeaderValueText.Render(value)
 	case strings.Contains(plain, "build") && strings.Contains(plain, "✗"):
-		return sStatusChipEr.Render(plain)
+		return sErr.Render(plain)
 	case strings.Contains(plain, "build"):
-		return sStatusChipOk.Render(plain)
-	case strings.Contains(plain, "analyzing") || strings.Contains(plain, "ago") || strings.Contains(plain, "starting") || strings.Contains(plain, "brain idle"):
-		return sStatusChipHi.Render(plain)
-	case strings.Contains(plain, "⚠"):
-		return sStatusChipWr.Render(plain)
-	case strings.Contains(plain, "✓"):
-		return sStatusChipOk.Render(plain)
+		return sOk.Render(plain)
+	case strings.HasPrefix(plain, "brain "):
+		value := strings.TrimPrefix(plain, "brain ")
+		if strings.Contains(value, "analyzing") {
+			return sHeaderLabelText.Render("brain ") + sCyan.Render(value)
+		}
+		return sHeaderLabelText.Render("brain ") + sHeaderValueText.Render(value)
+	case strings.HasPrefix(plain, "issues "):
+		return sWarn.Render(plain)
+	case strings.HasSuffix(plain, " resolved"):
+		return sOk.Render(plain)
 	case strings.Contains(plain, "agent") || strings.Contains(plain, "codex") || strings.Contains(plain, "claude"):
-		return sStatusChip.Render(plain)
+		return sHeaderValueText.Render(plain)
 	default:
-		return sMetaChip.Render(plain)
+		return sHeaderValueText.Render(plain)
 	}
 }
 

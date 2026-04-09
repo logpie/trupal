@@ -13,18 +13,18 @@ import (
 func TestSelectionPointAtUsesVisibleWindow(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
-	m.height = 15 // logH = 9
+	m.height = 15 // logH = 7 with 3-line header + 3-line footer
 
 	for i := 0; i < 20; i++ {
 		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
 	}
 
-	point, ok := m.selectionPointAt(0, 3, false)
+	point, ok := m.selectionPointAt(0, m.bodyRect().Y, false)
 	if !ok {
 		t.Fatal("expected selection point in log area")
 	}
-	if point.Line != 11 {
-		t.Fatalf("expected first visible line to map to absolute line 11, got %d", point.Line)
+	if point.Line != 13 {
+		t.Fatalf("expected first visible line to map to absolute line 13, got %d", point.Line)
 	}
 	if point.Col != 0 {
 		t.Fatalf("expected col 0, got %d", point.Col)
@@ -34,29 +34,30 @@ func TestSelectionPointAtUsesVisibleWindow(t *testing.T) {
 func TestSelectionPointAtUsesScrollOffset(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
-	m.height = 15 // logH = 9
+	m.height = 15 // logH = 7 with 3-line header + 3-line footer
 	m.scrollOffset = 5
 
 	for i := 0; i < 20; i++ {
 		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
 	}
 
-	point, ok := m.selectionPointAt(0, 3, false)
+	point, ok := m.selectionPointAt(0, m.bodyRect().Y, false)
 	if !ok {
 		t.Fatal("expected selection point in log area")
 	}
-	if point.Line != 6 {
-		t.Fatalf("expected first visible line to map to absolute line 6, got %d", point.Line)
+	if point.Line != 8 {
+		t.Fatalf("expected first visible line to map to absolute line 8, got %d", point.Line)
 	}
 }
 
 func TestSelectionPointAtUsesVisibleRangeWhenContentShort(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
-	m.height = 15 // logH = 9
+	m.height = 15
 	m.lines = []string{"first", "second"}
+	y := m.bodyRect().Y
 
-	point, ok := m.selectionPointAt(0, 3, false)
+	point, ok := m.selectionPointAt(0, y, false)
 	if !ok {
 		t.Fatal("expected first visible line to map")
 	}
@@ -64,7 +65,7 @@ func TestSelectionPointAtUsesVisibleRangeWhenContentShort(t *testing.T) {
 		t.Fatalf("expected row 0 to map to line 0, got %d", point.Line)
 	}
 
-	point, ok = m.selectionPointAt(0, 4, false)
+	point, ok = m.selectionPointAt(0, y+1, false)
 	if !ok {
 		t.Fatal("expected second visible line to map")
 	}
@@ -72,11 +73,11 @@ func TestSelectionPointAtUsesVisibleRangeWhenContentShort(t *testing.T) {
 		t.Fatalf("expected row 1 to map to line 1, got %d", point.Line)
 	}
 
-	if _, ok := m.selectionPointAt(0, 5, false); ok {
+	if _, ok := m.selectionPointAt(0, y+2, false); ok {
 		t.Fatal("expected blank viewport rows to be non-selectable")
 	}
 
-	point, ok = m.selectionPointAt(0, 5, true)
+	point, ok = m.selectionPointAt(0, y+2, true)
 	if !ok {
 		t.Fatal("expected clamped blank-row selection to succeed")
 	}
@@ -89,6 +90,7 @@ func TestMouseWheelScrollsOnlyInsideLogArea(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
 	m.height = 15
+	y := m.bodyRect().Y
 
 	for i := 0; i < 20; i++ {
 		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
@@ -107,7 +109,7 @@ func TestMouseWheelScrollsOnlyInsideLogArea(t *testing.T) {
 
 	newM, _ = m.Update(tea.MouseMsg{
 		X:      0,
-		Y:      3,
+		Y:      y,
 		Button: tea.MouseButtonWheelUp,
 		Action: tea.MouseActionPress,
 	})
@@ -121,6 +123,7 @@ func TestMouseDragCopiesSelection(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
 	m.height = 15
+	y := m.bodyRect().Y
 
 	for i := 0; i < 20; i++ {
 		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
@@ -138,7 +141,7 @@ func TestMouseDragCopiesSelection(t *testing.T) {
 
 	newM, _ := m.Update(tea.MouseMsg{
 		X:      0,
-		Y:      3,
+		Y:      y,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionPress,
 	})
@@ -146,7 +149,7 @@ func TestMouseDragCopiesSelection(t *testing.T) {
 
 	newM, _ = m.Update(tea.MouseMsg{
 		X:      20,
-		Y:      4,
+		Y:      y + 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionMotion,
 	})
@@ -154,7 +157,7 @@ func TestMouseDragCopiesSelection(t *testing.T) {
 
 	newM, cmd := m.Update(tea.MouseMsg{
 		X:      20,
-		Y:      4,
+		Y:      y + 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionRelease,
 	})
@@ -171,8 +174,8 @@ func TestMouseDragCopiesSelection(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SelectionCopiedMsg, got %T", msg)
 	}
-	if copied != "line11\nline12" {
-		t.Fatalf("expected copied text %q, got %q", "line11\nline12", copied)
+	if copied != "line13\nline14" {
+		t.Fatalf("expected copied text %q, got %q", "line13\nline14", copied)
 	}
 	if copiedMsg.Err != nil {
 		t.Fatalf("unexpected copy error: %v", copiedMsg.Err)
@@ -193,6 +196,7 @@ func TestMouseDragCopiesSelectionFromScrolledView(t *testing.T) {
 	m.width = 40
 	m.height = 15
 	m.scrollOffset = 5
+	y := m.bodyRect().Y
 
 	for i := 0; i < 20; i++ {
 		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
@@ -210,7 +214,7 @@ func TestMouseDragCopiesSelectionFromScrolledView(t *testing.T) {
 
 	newM, _ := m.Update(tea.MouseMsg{
 		X:      0,
-		Y:      3,
+		Y:      y,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionPress,
 	})
@@ -218,7 +222,7 @@ func TestMouseDragCopiesSelectionFromScrolledView(t *testing.T) {
 
 	newM, _ = m.Update(tea.MouseMsg{
 		X:      20,
-		Y:      4,
+		Y:      y + 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionMotion,
 	})
@@ -226,7 +230,7 @@ func TestMouseDragCopiesSelectionFromScrolledView(t *testing.T) {
 
 	newM, cmd := m.Update(tea.MouseMsg{
 		X:      20,
-		Y:      4,
+		Y:      y + 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionRelease,
 	})
@@ -239,8 +243,8 @@ func TestMouseDragCopiesSelectionFromScrolledView(t *testing.T) {
 	}
 
 	_ = cmd()
-	if copied != "line06\nline07" {
-		t.Fatalf("expected copied text %q, got %q", "line06\nline07", copied)
+	if copied != "line08\nline09" {
+		t.Fatalf("expected copied text %q, got %q", "line08\nline09", copied)
 	}
 }
 
@@ -248,6 +252,7 @@ func TestMouseMotionWithoutPressDoesNotSelect(t *testing.T) {
 	m := initialModel("test")
 	m.width = 40
 	m.height = 15
+	y := m.bodyRect().Y
 
 	for i := 0; i < 20; i++ {
 		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
@@ -265,7 +270,7 @@ func TestMouseMotionWithoutPressDoesNotSelect(t *testing.T) {
 
 	newM, _ := m.Update(tea.MouseMsg{
 		X:      0,
-		Y:      3,
+		Y:      y,
 		Button: tea.MouseButtonNone,
 		Action: tea.MouseActionMotion,
 	})
@@ -273,7 +278,7 @@ func TestMouseMotionWithoutPressDoesNotSelect(t *testing.T) {
 
 	newM, cmd := m.Update(tea.MouseMsg{
 		X:      20,
-		Y:      4,
+		Y:      y + 1,
 		Button: tea.MouseButtonNone,
 		Action: tea.MouseActionRelease,
 	})
@@ -294,6 +299,7 @@ func TestMouseDragAutoScrollsAboveViewport(t *testing.T) {
 	m.width = 40
 	m.height = 15
 	m.scrollOffset = 3
+	y := m.bodyRect().Y
 
 	for i := 0; i < 20; i++ {
 		m.lines = append(m.lines, fmt.Sprintf("line%02d", i))
@@ -311,7 +317,7 @@ func TestMouseDragAutoScrollsAboveViewport(t *testing.T) {
 
 	newM, _ := m.Update(tea.MouseMsg{
 		X:      0,
-		Y:      3,
+		Y:      y,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionPress,
 	})
@@ -319,7 +325,7 @@ func TestMouseDragAutoScrollsAboveViewport(t *testing.T) {
 
 	newM, _ = m.Update(tea.MouseMsg{
 		X:      0,
-		Y:      2,
+		Y:      y - 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionMotion,
 	})
@@ -330,7 +336,7 @@ func TestMouseDragAutoScrollsAboveViewport(t *testing.T) {
 
 	newM, cmd := m.Update(tea.MouseMsg{
 		X:      0,
-		Y:      2,
+		Y:      y - 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionRelease,
 	})
@@ -340,8 +346,8 @@ func TestMouseDragAutoScrollsAboveViewport(t *testing.T) {
 	}
 
 	_ = cmd()
-	if copied != "line07\nl" {
-		t.Fatalf("expected copied text %q, got %q", "line07\nl", copied)
+	if copied != "line09\nl" {
+		t.Fatalf("expected copied text %q, got %q", "line09\nl", copied)
 	}
 }
 
@@ -358,7 +364,7 @@ func TestSelectionPointAtAndSelectedTextHandleANSIAndTabs(t *testing.T) {
 		t.Fatalf("expected alpha in rendered line: %q", ansi.Strip(line))
 	}
 
-	point, ok := m.selectionPointAt(startCol, 3, false)
+	point, ok := m.selectionPointAt(startCol, m.bodyRect().Y, false)
 	if !ok {
 		t.Fatal("expected selection point for styled line")
 	}
@@ -449,5 +455,156 @@ func TestCurrentIssuesPanelTextIsSelectable(t *testing.T) {
 	text := m.sel.SelectedText(lines, selectionTabWidth)
 	if !strings.Contains(text, "missing") {
 		t.Fatalf("expected selected text to include issue panel content, got %q", text)
+	}
+}
+
+func TestFooterDockTextIsSelectable(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	newM, _ := m.Update(statusMsg{
+		agentLabel: "codex",
+		ccStatus:   "active",
+		agentStats: AgentUsageStats{
+			Provider:          ProviderCodex,
+			TotalInputTokens:  12000,
+			TotalCachedTokens: 8000,
+			TotalOutputTokens: 321,
+		},
+	})
+	m = newM.(model)
+	newM, _ = m.Update(brainStatsMsg{stats: BrainStats{
+		Provider:             ProviderCodex,
+		TotalInputTokens:     2048,
+		TotalCacheReadTokens: 4096,
+		TotalOutputTokens:    128,
+	}})
+	m = newM.(model)
+
+	footerStart := len(m.baseContentLines())
+	lines := m.contentLines()
+	if footerStart+1 >= len(lines) {
+		t.Fatalf("expected footer lines in content, got %d total lines", len(lines))
+	}
+	brainLine := lines[footerStart+1]
+	expanded := selectionDisplayLine(brainLine, selectionTabWidth)
+	startCol := strings.Index(ansi.Strip(expanded), "TruPal")
+	if startCol < 0 {
+		t.Fatalf("expected TruPal in footer line %q", ansi.Strip(expanded))
+	}
+	m.sel.Start = selectionPoint{Line: footerStart + 1, Col: startCol}
+	m.sel.End = selectionPoint{Line: footerStart + 1, Col: startCol + len("TruPal") + 12}
+	text := m.sel.SelectedText(lines, selectionTabWidth)
+	if !strings.Contains(text, "TruPal") {
+		t.Fatalf("expected selected text to include footer dock content, got %q", text)
+	}
+
+	point, ok := m.selectionPointAt(startCol, m.footerRect().Y+1, false)
+	if !ok {
+		t.Fatal("expected footer selection point to resolve")
+	}
+	if point.Line != footerStart+1 {
+		t.Fatalf("expected footer selection point to map to line %d, got %d", footerStart+1, point.Line)
+	}
+}
+
+func TestMouseDragCopiesFooterDockWithoutScrollingBody(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.scrollOffset = 4
+	newM, _ := m.Update(statusMsg{
+		agentLabel: "codex",
+		ccStatus:   "active",
+		agentStats: AgentUsageStats{
+			Provider:          ProviderCodex,
+			TotalInputTokens:  12000,
+			TotalCachedTokens: 8000,
+			TotalOutputTokens: 321,
+		},
+	})
+	m = newM.(model)
+	newM, _ = m.Update(brainStatsMsg{stats: BrainStats{
+		Provider:             ProviderCodex,
+		TotalInputTokens:     2048,
+		TotalCacheReadTokens: 4096,
+		TotalOutputTokens:    128,
+	}})
+	m = newM.(model)
+
+	var copied string
+	prevCopy := copySelectedText
+	copySelectedText = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() { copySelectedText = prevCopy }()
+
+	y := m.footerRect().Y + 1
+	newM, _ = m.Update(tea.MouseMsg{
+		X:      1,
+		Y:      y,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	m = newM.(model)
+	if m.sel.View != m.footerRect() {
+		t.Fatalf("expected footer drag view, got %+v", m.sel.View)
+	}
+
+	newM, _ = m.Update(tea.MouseMsg{
+		X:      20,
+		Y:      y,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionMotion,
+	})
+	m = newM.(model)
+	if m.scrollOffset != 4 {
+		t.Fatalf("expected footer drag to avoid body autoscroll, got scrollOffset %d", m.scrollOffset)
+	}
+
+	newM, cmd := m.Update(tea.MouseMsg{
+		X:      20,
+		Y:      y,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionRelease,
+	})
+	m = newM.(model)
+	if cmd == nil {
+		t.Fatal("expected copy command from footer drag")
+	}
+	_ = cmd()
+	if !strings.Contains(copied, "TruPal") {
+		t.Fatalf("expected copied footer text to include TruPal, got %q", copied)
+	}
+}
+
+func TestLastFooterDockLineIsSelectable(t *testing.T) {
+	m := initialModel("test")
+	m.width = 86
+	m.height = 22
+	newM, _ := m.Update(statusMsg{
+		agentLabel: "codex",
+		ccStatus:   "active",
+		agentStats: AgentUsageStats{
+			Provider:          ProviderCodex,
+			TotalInputTokens:  19400,
+			TotalCachedTokens: 18300,
+			TotalOutputTokens: 877,
+		},
+	})
+	m = newM.(model)
+
+	y := m.footerRect().Y + 2
+	point, ok := m.selectionPointAt(1, y, false)
+	if !ok {
+		t.Fatal("expected last footer line to be selectable")
+	}
+	lines := m.contentLines()
+	if point.Line < 0 || point.Line >= len(lines) {
+		t.Fatalf("selection point line out of bounds: %d of %d", point.Line, len(lines))
+	}
+	if !strings.Contains(ansi.Strip(selectionDisplayLine(lines[point.Line], selectionTabWidth)), "Codex") {
+		t.Fatalf("expected last footer line to map to Codex stats, got %q", ansi.Strip(selectionDisplayLine(lines[point.Line], selectionTabWidth)))
 	}
 }

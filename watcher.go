@@ -33,6 +33,8 @@ type DisplayState struct {
 	BrainLastMsg       string
 	BrainLastTime      time.Time
 	BrainStats         BrainStats
+	AgentUsage         AgentUsageStats
+	BrainIdentity      string
 	CCStatus           string
 }
 
@@ -393,6 +395,14 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 		if jsonlPath != "" {
 			ccStatus = DetectAgentStatus(jsonlPath, cfg.SessionProvider)
 		}
+		sessionModel := ""
+		if jsonlPath != "" {
+			sessionModel = ReadSessionModel(jsonlPath, cfg.SessionProvider)
+		}
+		agentUsage := AgentUsageStats{Provider: cfg.SessionProvider}
+		if jsonlPath != "" {
+			agentUsage = ReadAgentUsageStats(jsonlPath, cfg.SessionProvider)
+		}
 
 		// Drain brain results (non-blocking).
 		select {
@@ -647,6 +657,8 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			BrainLastMsg:       brainLastMsg,
 			BrainLastTime:      brainLastTime,
 			BrainStats:         brainStats,
+			AgentUsage:         agentUsage,
+			BrainIdentity:      cfg.BrainIdentityDisplay(),
 			CCStatus:           ccStatus,
 		}
 
@@ -657,9 +669,12 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			buildOK = &v
 		}
 		p.Send(statusMsg{
-			agentLabel: agentLabel,
-			ccStatus:   ccStatus,
-			buildOK:    buildOK,
+			agentLabel:    agentLabel,
+			ccStatus:      ccStatus,
+			sessionModel:  sessionModel,
+			brainIdentity: state.BrainIdentity,
+			agentStats:    agentUsage,
+			buildOK:       buildOK,
 			buildErrs: func() int {
 				if state.Build != nil {
 					return state.Build.ErrorCount

@@ -8,13 +8,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestScrollBasic(t *testing.T) {
 	m := initialModel("test")
 	// Simulate window size
 	m.width = 50
-	m.height = 20 // logH = 20-6 = 14
+	m.height = 20 // logH = 20-8 = 12 with 3-line header + 3-line footer
 
 	// Add 30 lines — more than logH
 	for i := 0; i < 30; i++ {
@@ -29,8 +30,8 @@ func TestScrollBasic(t *testing.T) {
 	if m.scrollOffset != 0 {
 		t.Fatalf("expected scrollOffset=0, got %d", m.scrollOffset)
 	}
-	if m.maxScroll() != 16 { // 30 - 14 = 16
-		t.Fatalf("expected maxScroll=16, got %d", m.maxScroll())
+	if m.maxScroll() != 18 { // 30 - 12 = 18
+		t.Fatalf("expected maxScroll=18, got %d", m.maxScroll())
 	}
 
 	// Scroll up 5
@@ -106,23 +107,23 @@ func TestScrollKeyHandling(t *testing.T) {
 func TestScrollViewContent(t *testing.T) {
 	m := initialModel("test")
 	m.width = 60
-	m.height = 15 // logH = 15-6 = 9
+	m.height = 15 // logH = 15-8 = 7
 
 	// Add numbered lines
 	for i := 0; i < 20; i++ {
 		m.log(fmt.Sprintf("content-%02d", i))
 	}
 
-	// At bottom — should see lines 11-19 (last 9)
+	// At bottom — should see lines 13-19 (last 7)
 	view := m.View()
 	if !containsStr(view, "content-19") {
 		t.Fatal("bottom: should see content-19")
 	}
-	if containsStr(view, "content-05") {
-		t.Fatal("bottom: should NOT see content-05")
+	if containsStr(view, "content-11") {
+		t.Fatal("bottom: should NOT see content-11")
 	}
 
-	// Scroll to top — should see lines 0-8
+	// Scroll to top — should see lines 0-6
 	m.scrollOffset = m.maxScroll()
 	view = m.View()
 	if !containsStr(view, "content-00") {
@@ -186,7 +187,7 @@ func TestHeaderLinesFitWithinPaneWidth(t *testing.T) {
 
 	view := m.View()
 	lines := strings.Split(view, "\n")
-	if len(lines) < 2 {
+	if len(lines) < 3 {
 		t.Fatalf("expected header lines in view, got %d lines", len(lines))
 	}
 	if got := lipgloss.Width(lines[0]); got > m.width {
@@ -194,6 +195,27 @@ func TestHeaderLinesFitWithinPaneWidth(t *testing.T) {
 	}
 	if got := lipgloss.Width(lines[1]); got > m.width {
 		t.Fatalf("header line 2 wrapped: got width %d want <= %d", got, m.width)
+	}
+	if got := lipgloss.Width(lines[2]); got > m.width {
+		t.Fatalf("header line 3 wrapped: got width %d want <= %d", got, m.width)
+	}
+}
+
+func TestHeaderCanShowWatchedSessionModel(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	newM, _ := m.Update(statusMsg{
+		agentLabel:    "codex",
+		ccStatus:      "active",
+		sessionModel:  "gpt-5.4-mini",
+		brainIdentity: "codex/default",
+	})
+	m = newM.(model)
+
+	view := m.View()
+	if !containsStr(view, "watch  codex") || !containsStr(view, "gpt-5.4-mini") || !containsStr(view, "brain  codex/default") {
+		t.Fatalf("expected watched session model and brain identity in header, got %q", view)
 	}
 }
 
@@ -246,7 +268,7 @@ func TestFooterShowsControlsHintWhenNoToast(t *testing.T) {
 	m.height = 15
 
 	view := m.View()
-	if !containsStr(view, "j/k scroll") {
+	if !containsStr(view, "move j/k") || !containsStr(view, "details o") {
 		t.Fatalf("expected footer controls hint, got %q", view)
 	}
 }
@@ -262,13 +284,13 @@ func TestFooterShowsIssueControlsWhenIssuesExist(t *testing.T) {
 	m = newM.(model)
 
 	view := m.View()
-	if !containsStr(view, "o focus") {
+	if !containsStr(view, "details o") || !containsStr(view, "issues p") {
 		t.Fatalf("expected collapsed issue hint, got %q", view)
 	}
 
 	m.issuePanelVisible = true
 	view = m.View()
-	if !containsStr(view, "j/k move") || !containsStr(view, "enter jump") {
+	if !containsStr(view, "issues j/k") || !containsStr(view, "jump enter") {
 		t.Fatalf("expected issue controls hint, got %q", view)
 	}
 }
@@ -326,6 +348,37 @@ func TestIssuePanelStaysVisibleAtBottomOfLog(t *testing.T) {
 	}
 	if !containsStr(view, "content-19") {
 		t.Fatalf("expected newest log lines to remain visible, got %q", view)
+	}
+}
+
+func TestClosingExpandedEntryReclampsScrollAndKeepsLaterItemsVisible(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.entries = []timelineEntry{
+		{
+			ID:      "f-1",
+			Kind:    "issue",
+			Time:    "12:00",
+			Marker:  "!",
+			Summary: "first issue",
+			Detail: []string{
+				"Why it matters\nline one line two line three line four line five line six line seven line eight line nine line ten",
+				"Code\n1: one\n2: two\n3: three\n4: four\n5: five\n6: six",
+			},
+		},
+		{ID: "f-2", Kind: "issue", Time: "12:01", Marker: "!", Summary: "second issue"},
+		{ID: "f-3", Kind: "issue", Time: "12:02", Marker: "!", Summary: "third issue"},
+	}
+	m.selectedEntry = 0
+	m.openSelectedEntryDetail()
+	m.scrollSelectedIntoView()
+
+	// Closing the large first drawer should clamp scroll and keep later issues reachable/visible.
+	m.toggleEntryDetail("f-1")
+	view := m.View()
+	if !containsStr(view, "second issue") || !containsStr(view, "third issue") {
+		t.Fatalf("expected later issues to remain visible after closing drawer, got %q", view)
 	}
 }
 
@@ -484,7 +537,7 @@ func TestBrainStatusFinishedShowsRelativeAge(t *testing.T) {
 	}
 }
 
-func TestBrainStatsDisplaysCompactHeader(t *testing.T) {
+func TestBrainStatsDisplaysCompactFooterDock(t *testing.T) {
 	m := initialModel("test")
 	m.width = 48
 	m.height = 15
@@ -500,11 +553,11 @@ func TestBrainStatsDisplaysCompactHeader(t *testing.T) {
 	m = newM.(model)
 
 	view := m.View()
-	if !containsStr(view, "$0.1100 92% cache") {
-		t.Fatalf("expected compact brain stats in header, got %q", view)
+	if !containsStr(view, "TruPal") || !containsStr(view, "in 36.1K") || !containsStr(view, "cache 392K") {
+		t.Fatalf("expected compact brain stats in footer dock, got %q", view)
 	}
-	if containsStr(view, "cache_read=") || containsStr(view, "uncached=58") {
-		t.Fatalf("expected narrow header to avoid detailed cache counts, got %q", view)
+	if containsStr(view, "cache_read=") || containsStr(view, "uncached=58") || containsStr(view, "out 5053") {
+		t.Fatalf("expected narrow footer dock to avoid detailed cache counts, got %q", view)
 	}
 }
 
@@ -524,15 +577,15 @@ func TestBrainStatsDisplaysMinimalCacheFallback(t *testing.T) {
 	m = newM.(model)
 
 	view := m.View()
-	if !containsStr(view, "$0.1100 92% cache") {
-		t.Fatalf("expected minimal cache fallback in header, got %q", view)
+	if !containsStr(view, "in 36.1K") || !containsStr(view, "cache 392K") {
+		t.Fatalf("expected minimal cache fallback in footer dock, got %q", view)
 	}
-	if containsStr(view, "uncached=58") {
+	if containsStr(view, "uncached=58") || containsStr(view, "hit 92%") {
 		t.Fatalf("expected minimal fallback to drop detailed token counts, got %q", view)
 	}
 }
 
-func TestBrainStatsDisplaysDetailedHeaderWhenWide(t *testing.T) {
+func TestBrainStatsDisplaysDetailedFooterDockWhenWide(t *testing.T) {
 	m := initialModel("test")
 	m.width = 120
 	m.height = 15
@@ -548,8 +601,8 @@ func TestBrainStatsDisplaysDetailedHeaderWhenWide(t *testing.T) {
 	m = newM.(model)
 
 	view := m.View()
-	if !containsStr(view, "prompt=428K uncached=36.1K cache_read=392K cache_create=36K 92% out=5053 cost=$0.1100") {
-		t.Fatalf("expected detailed brain stats in wide header, got %q", view)
+	if !containsStr(view, "TruPal") || !containsStr(view, "in 36.1K") || !containsStr(view, "cache 392K") || !containsStr(view, "hit 92%") || !containsStr(view, "out 5053") || !containsStr(view, "cost $0.1100") {
+		t.Fatalf("expected detailed brain stats in wide footer dock, got %q", view)
 	}
 }
 
@@ -572,7 +625,7 @@ func TestBrainStatsOmitsCostWhenUnknown(t *testing.T) {
 	if containsStr(view, "$0.00") || containsStr(view, "cost=") {
 		t.Fatalf("expected unknown cost to be omitted, got %q", view)
 	}
-	if !containsStr(view, "cached=3456 19%") {
+	if !containsStr(view, "cache 3456") || !containsStr(view, "hit 19%") {
 		t.Fatalf("expected explicit cache display, got %q", view)
 	}
 }
@@ -594,8 +647,46 @@ func TestBrainStatsCanDisplayLastTurnDiagnostics(t *testing.T) {
 	m = newM.(model)
 
 	view := m.View()
-	if !containsStr(view, "last=12s/medium") {
-		t.Fatalf("expected last-turn diagnostics in header, got %q", view)
+	if !containsStr(view, "turn 12s/medium") {
+		t.Fatalf("expected last-turn diagnostics in footer dock, got %q", view)
+	}
+}
+
+func TestFooterDockMetricColumnsStayAligned(t *testing.T) {
+	m := initialModel("test")
+	m.width = 120
+	m.height = 18
+	newM, _ := m.Update(statusMsg{
+		agentLabel: "codex",
+		ccStatus:   "active",
+		agentStats: AgentUsageStats{
+			Provider:          ProviderCodex,
+			TotalInputTokens:  107000,
+			TotalCachedTokens: 89300,
+			TotalOutputTokens: 1844,
+		},
+	})
+	m = newM.(model)
+	newM, _ = m.Update(brainStatsMsg{stats: BrainStats{
+		Provider:             ProviderCodex,
+		TotalInputTokens:     303000,
+		TotalCacheReadTokens: 197000,
+		TotalOutputTokens:    4932,
+		LastDuration:         16 * time.Second,
+		LastEffort:           "high",
+	}})
+	m = newM.(model)
+
+	lines := m.footerDockLines()
+	if len(lines) < 3 {
+		t.Fatalf("expected footer dock lines, got %d", len(lines))
+	}
+	trupal := ansi.Strip(selectionDisplayLine(lines[1], selectionTabWidth))
+	codex := ansi.Strip(selectionDisplayLine(lines[2], selectionTabWidth))
+	for _, marker := range []string{"cache", "hit", "out"} {
+		if strings.Index(trupal, marker) != strings.Index(codex, marker) {
+			t.Fatalf("expected %q column to align: trup=%q codex=%q", marker, trupal, codex)
+		}
 	}
 }
 
