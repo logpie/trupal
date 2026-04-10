@@ -55,10 +55,10 @@ var (
 	sDockMuted      = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	sDockAccent     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 	sDockWarn       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	sSteerChip      = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("238")).Padding(0, 1)
-	sSteerManual    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("240")).Padding(0, 1)
-	sSteerAuto      = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
-	sSteerActive    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("235")).Background(lipgloss.Color("214")).Padding(0, 1)
+	sSteerChip      = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	sSteerManual    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252"))
+	sSteerAuto      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	sSteerActive    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	sInspectorTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
 	sInspectorBox   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("239")).Padding(0, 1).Foreground(lipgloss.Color("252"))
 	sInspectorCode  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Background(lipgloss.Color("235")).Padding(0, 1).Foreground(lipgloss.Color("252"))
@@ -1540,7 +1540,7 @@ func (m model) issueSentStatus(issue CurrentIssue) string {
 	if issue.Key() == m.activeSteerKey && strings.TrimSpace(issue.Message()) == m.activeSteerMessage {
 		statusParts = append(statusParts, sSteerActive.Render("active"))
 	}
-	return strings.Join(statusParts, " ")
+	return joinSteerStatus(statusParts...)
 }
 
 func (m model) issueSummaryWithStatus(issue CurrentIssue) string {
@@ -1578,6 +1578,17 @@ func renderSteerSourceChip(source string) string {
 	default:
 		return sSteerChip.Render(strings.TrimSpace(source))
 	}
+}
+
+func joinSteerStatus(parts ...string) string {
+	var out []string
+	for _, part := range parts {
+		if strings.TrimSpace(ansi.Strip(part)) == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return strings.Join(out, sDim.Render("·"))
 }
 
 func (m model) bodyRect() selectionRect {

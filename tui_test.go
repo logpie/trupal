@@ -1149,7 +1149,7 @@ func TestIssuesPopupShowsSentStatus(t *testing.T) {
 	if !containsStr(plain, "auto") || !containsStr(plain, "active") {
 		t.Fatalf("expected issues popup to show sent status, got %q", lines)
 	}
-	if !containsStr(plain, "auto 08:15 active First issue") {
+	if !containsStr(plain, "auto·08:15·active First issue") {
 		t.Fatalf("expected issues popup to lead with sent status, got %q", lines)
 	}
 }
@@ -1193,7 +1193,7 @@ func TestIssueTimelineShowsInlineSentStatus(t *testing.T) {
 
 	lines, _, _ := m.renderedTimeline()
 	rendered := ansi.Strip(strings.Join(lines, "\n"))
-	if !containsStr(rendered, "manual") || !containsStr(rendered, "08:15") || !containsStr(rendered, "active") {
+	if !containsStr(rendered, "manual·08:15·active") {
 		t.Fatalf("expected timeline issue row to show inline sent status, got %q", rendered)
 	}
 }
