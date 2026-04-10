@@ -17,6 +17,7 @@ Commands:
   run-paired     Run control vs steer for one SWE-bench task
   lite           Run the local lite benchmark suite
   pro-small-smoke  Prepare every manifest in swe-bench-pro-small
+  pro-small      Run paired benchmarks for every manifest in swe-bench-pro-small
 
 Examples:
   scripts/trupal-swebench prepare \
@@ -28,6 +29,8 @@ Examples:
     --instance pallets__flask-5014
 
   scripts/trupal-swebench pro-small-smoke
+
+  scripts/trupal-swebench pro-small
 EOF
 }
 
@@ -73,6 +76,29 @@ case "$cmd" in
       manifest_path="$slice_dir/$manifest_name"
       echo "=== PREPARE $manifest_name ==="
       go run "$ROOT_DIR/cmd/trupal-bench" prepare-swebench --manifest "$manifest_path"
+      echo
+    done < "$manifest_list"
+    ;;
+  pro-small)
+    slice_dir="$ROOT_DIR/bench/swebench-pro-small"
+    manifest_list="$slice_dir/manifest-list.txt"
+    if [[ ! -f "$manifest_list" ]]; then
+      echo "missing manifest list: $manifest_list" >&2
+      exit 1
+    fi
+    while IFS= read -r manifest_name; do
+      [[ -z "$manifest_name" ]] && continue
+      manifest_path="$slice_dir/$manifest_name"
+      instance_id="$(python3 - <<PY
+import json
+from pathlib import Path
+path = Path(${manifest_path@Q})
+data = json.loads(path.read_text())
+print(data["instance_id"])
+PY
+)"
+      echo "=== RUN-PAIRED $manifest_name ==="
+      go run "$ROOT_DIR/cmd/trupal-bench" run-swebench-paired --manifest "$manifest_path" --instance "$instance_id"
       echo
     done < "$manifest_list"
     ;;
