@@ -208,12 +208,19 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	if result.SessionJSONL == "" {
 		result.SessionJSONL, _ = FindLatestSessionJSONL(workspace, "codex")
 	}
-	evalOutput, err := r.runSWEBenchEvalCommand(task.EvalCommand, workspace)
-	result.SWEBenchEvalCommand = task.EvalCommand
+	var evalOutput string
+	var evalErr error
+	if strings.TrimSpace(task.DockerImage) != "" && strings.TrimSpace(task.DockerEvalCommand) != "" {
+		evalOutput, evalErr = r.EvaluateSWEBenchTaskDocker(task, workspace)
+		result.SWEBenchEvalCommand = task.DockerEvalCommand
+	} else {
+		evalOutput, evalErr = r.runSWEBenchEvalCommand(task.EvalCommand, workspace)
+		result.SWEBenchEvalCommand = task.EvalCommand
+	}
 	if err := os.WriteFile(result.Artifacts.EvalOutputPath, []byte(evalOutput), 0644); err != nil {
 		return nil, err
 	}
-	if err == nil {
+	if evalErr == nil {
 		result.SWEBenchSolved = true
 	}
 	paneID, _ := ReadPaneID(filepath.Join(workspace, ".trupal.pid"))
@@ -289,6 +296,18 @@ func (r *Runner) SetupSWEBenchWorkspace(task SWEBenchTask, workspace string) err
 	return nil
 }
 
+func (r *Runner) SetupSWEBenchPostPatch(task SWEBenchTask, workspace string) error {
+	if strings.TrimSpace(task.PostPatchSetupCommand) == "" {
+		return nil
+	}
+	cmd := exec.Command("sh", "-lc", task.PostPatchSetupCommand)
+	cmd.Dir = workspace
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("post-patch swebench setup: %w\n%s", err, string(out))
+	}
+	return nil
+}
+
 func writeSWEBenchTaskArtifact(workspace string, task SWEBenchTask) error {
 	return os.WriteFile(filepath.Join(workspace, "TASK.md"), []byte(task.ProblemStatement+"\n"), 0644)
 }
@@ -301,6 +320,9 @@ func (r *Runner) EvaluateSWEBenchTask(task SWEBenchTask, workspace, evalCommand 
 		if err := r.applySWEBenchTestPatch(task.TestPatch, workspace); err != nil {
 			return "", err
 		}
+	}
+	if err := r.SetupSWEBenchPostPatch(task, workspace); err != nil {
+		return "", err
 	}
 	return r.runSWEBenchEvalCommand(evalCommand, workspace)
 }
@@ -318,6 +340,14 @@ func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string)
 	}
 	if strings.TrimSpace(task.DockerEvalCommand) == "" {
 		return "", fmt.Errorf("no docker_evaluation_command provided")
+	}
+	if strings.TrimSpace(task.TestPatch) != "" {
+		if err := r.applySWEBenchTestPatch(task.TestPatch, workspace); err != nil {
+			return "", err
+		}
+	}
+	if err := r.SetupSWEBenchPostPatch(task, workspace); err != nil {
+		return "", err
 	}
 	cmd := exec.Command(
 		"docker", "run", "--rm",

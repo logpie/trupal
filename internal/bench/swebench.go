@@ -21,6 +21,7 @@ type SWEBenchTask struct {
 	Patch                  string   `json:"patch"`
 	Version                string   `json:"version"`
 	SetupCommand           string   `json:"setup_command"`
+	PostPatchSetupCommand  string   `json:"post_patch_setup_command"`
 	EvalCommand            string   `json:"evaluation_command"`
 	DockerImage            string   `json:"docker_image"`
 	DockerEvalCommand      string   `json:"docker_evaluation_command"`
@@ -72,6 +73,7 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	task.Patch = strings.TrimSpace(task.Patch)
 	task.Version = strings.TrimSpace(task.Version)
 	task.SetupCommand = strings.TrimSpace(task.SetupCommand)
+	task.PostPatchSetupCommand = strings.TrimSpace(task.PostPatchSetupCommand)
 	task.EvalCommand = strings.TrimSpace(task.EvalCommand)
 	task.DockerImage = strings.TrimSpace(task.DockerImage)
 	task.DockerEvalCommand = strings.TrimSpace(task.DockerEvalCommand)
@@ -130,6 +132,7 @@ func taskFromRawMap(raw map[string]any) (SWEBenchTask, error) {
 		Patch:                  firstString(raw, "patch"),
 		Version:                firstString(raw, "version"),
 		SetupCommand:           firstString(raw, "setup_command", "before_repo_set_cmd"),
+		PostPatchSetupCommand:  firstString(raw, "post_patch_setup_command"),
 		EvalCommand:            firstString(raw, "evaluation_command"),
 		DockerImage:            firstString(raw, "docker_image", "dockerhub_tag"),
 		DockerEvalCommand:      firstString(raw, "docker_evaluation_command"),
