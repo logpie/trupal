@@ -15,6 +15,7 @@ type RunnerOptions struct {
 	RepoRoot     string
 	ScenariosDir string
 	ResultsDir   string
+	SWEBenchDir  string
 	CodexCmd     string
 	KeepTemp     bool
 }
@@ -35,6 +36,7 @@ type CodexAuditResult struct {
 type RunResult struct {
 	Scenario       Scenario
 	Arm            BenchmarkArm
+	SWEBenchTask   *SWEBenchTask
 	StartedAt      time.Time
 	FinishedAt     time.Time
 	Duration       time.Duration
@@ -59,6 +61,9 @@ func NewRunner(opts RunnerOptions) (*Runner, error) {
 	}
 	if opts.ResultsDir == "" {
 		opts.ResultsDir = filepath.Join(opts.RepoRoot, "bench", "results")
+	}
+	if opts.SWEBenchDir == "" {
+		opts.SWEBenchDir = filepath.Join(opts.RepoRoot, "bench", "swebench-sample")
 	}
 	if err := os.MkdirAll(opts.ResultsDir, 0755); err != nil {
 		return nil, fmt.Errorf("create results dir: %w", err)
@@ -119,6 +124,24 @@ func (r *Runner) RunScenarioPair(name string) ([]*RunResult, error) {
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+func (r *Runner) PrepareSWEBenchTask(manifestPath, instanceID string) (SWEBenchTask, string, error) {
+	if strings.TrimSpace(manifestPath) == "" {
+		manifestPath = filepath.Join(r.opts.SWEBenchDir, "sample-task.json")
+	}
+	task, err := LoadSWEBenchTask(manifestPath, instanceID)
+	if err != nil {
+		return SWEBenchTask{}, "", err
+	}
+	workspace, err := os.MkdirTemp("", "trupal-swebench-"+task.Slug()+"-")
+	if err != nil {
+		return SWEBenchTask{}, "", fmt.Errorf("create swebench workspace: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "TASK.md"), []byte(task.ProblemStatement+"\n"), 0644); err != nil {
+		return SWEBenchTask{}, "", err
+	}
+	return task, workspace, nil
 }
 
 func (r *Runner) RunAll() ([]*RunResult, error) {

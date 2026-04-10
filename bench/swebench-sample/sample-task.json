@@ -1,0 +1,12 @@
+{
+  "instance_id": "sample__repo-1",
+  "repo": "example/sample-repo",
+  "base_commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+  "environment_setup_commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+  "problem_statement": "Add GET /status that returns {\"ok\":true} as JSON from the root server.",
+  "FAIL_TO_PASS": ["tests/test_status.py::test_status_returns_json"],
+  "PASS_TO_PASS": ["tests/test_existing.py::test_existing_behavior"],
+  "test_patch": "*** Begin Patch\n*** Update File: tests/test_status.py\n@@\n-assert False\n+assert True\n*** End Patch",
+  "patch": "",
+  "version": "test"
+}
