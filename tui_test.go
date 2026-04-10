@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -413,6 +414,114 @@ func TestMouseWheelScrollsInspectorWhenDetailOverflows(t *testing.T) {
 	}
 	if !foundDetail {
 		t.Fatal("expected opened inspector lines to be inline in the timeline")
+	}
+}
+
+func TestDetailBlocksDoNotIncludeNextStep(t *testing.T) {
+	finding := BrainFinding{
+		Nudge: "Handle json.Marshal failures in ActiveJSON()",
+		Tell:  "Handle json.Marshal failures in ActiveJSON().",
+	}
+	detail := detailBlocksForFinding(normalizeIssueText(finding.Nudge), finding.Nudge, finding, nil)
+	for _, block := range detail {
+		if strings.HasPrefix(block, "Next step\n") {
+			t.Fatalf("expected redundant next step to be omitted, got %q", block)
+		}
+	}
+}
+
+func TestDetailBlocksDeduplicateCodexSaidByKeepingRicherClaim(t *testing.T) {
+	finding := BrainFinding{
+		Nudge: "Handle ListenAndServe errors",
+		Claim: "made the session expiration logic actually remove expired entries before returning the current map",
+	}
+	extra := []string{
+		"Codex said\nAdded POST /refresh in main.go and made the session expiration logic actually remove expired entries in main.go.",
+	}
+	detail := detailBlocksForFinding(normalizeIssueText(finding.Nudge), finding.Nudge, finding, extra)
+	count := 0
+	var claimBlock string
+	for _, block := range detail {
+		if strings.HasPrefix(block, "Codex said\n") {
+			count++
+			claimBlock = block
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one Codex said block, got %d in %#v", count, detail)
+	}
+	if !strings.Contains(claimBlock, "Added POST /refresh") {
+		t.Fatalf("expected richer claim block to win, got %q", claimBlock)
+	}
+}
+
+func TestResolvedEntryShowsUpdatedBlock(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.entries = []timelineEntry{{
+		ID:      "f-1",
+		Kind:    "issue",
+		Time:    "12:00",
+		Marker:  "!",
+		Summary: "Handle json.Marshal failures in ActiveJSON()",
+		Detail:  []string{"Why it matters\nBroken responses hide failures."},
+	}}
+
+	newM, _ := m.Update(resolvedMsg{finding: BrainFinding{ID: "f-1", Nudge: "Handle json.Marshal failures in ActiveJSON()"}})
+	m = newM.(model)
+	if m.entries[0].Kind != "resolved" {
+		t.Fatalf("expected resolved kind, got %q", m.entries[0].Kind)
+	}
+	found := false
+	for _, block := range m.entries[0].Detail {
+		if strings.HasPrefix(block, "Updated\n") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected Updated block in detail, got %#v", m.entries[0].Detail)
+	}
+}
+
+func TestBuildResolvedDetailCombinesLatestChangeAndEvidence(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/main.go"
+	if err := os.WriteFile(path, []byte("package main\n\nfunc main() {\n\tdelete(sessions, id)\n}\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	entries := []JSONLEntry{{
+		Type:     "assistant",
+		HasText:  true,
+		TextSnip: "Added POST /refresh in main.go and made the session expiration logic actually remove expired entries in main.go.",
+	}}
+	detail := buildResolvedDetail(dir, []string{"main.go"}, entries, "Fix Expire() so expired sessions are removed")
+	if len(detail) != 1 {
+		t.Fatalf("expected single Updated block, got %#v", detail)
+	}
+	if !strings.Contains(detail[0], "Latest change:") || !strings.Contains(detail[0], "Latest evidence:") {
+		t.Fatalf("expected combined latest change/evidence in Updated block, got %q", detail[0])
+	}
+}
+
+func TestInfoMsgRendersAsInfoTimelineEntry(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	newM, _ := m.Update(infoMsg{message: "Verification target changed; re-check runtime assumptions."})
+	m = newM.(model)
+
+	view := m.View()
+	if !containsStr(view, "Verification target changed") {
+		t.Fatalf("expected info message in timeline, got %q", view)
+	}
+	if !containsStr(view, "i") {
+		t.Fatalf("expected info marker in timeline, got %q", view)
+	}
+	if containsStr(view, "●   Verification target changed") {
+		t.Fatalf("expected info message to be visually distinct from issue nudge, got %q", view)
 	}
 }
 

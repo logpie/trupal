@@ -89,9 +89,13 @@ type nudgeMsg struct {
 	finding BrainFinding
 	detail  []string
 }
-type resolvedMsg struct{ finding BrainFinding }
+type resolvedMsg struct {
+	finding BrainFinding
+	detail  []string
+}
 type trajectoryMsg struct{ message string }
 type patternMsg struct{ finding PatternFinding }
+type infoMsg struct{ message string }
 type brainStatusMsg struct {
 	thinking bool
 	lastTime time.Time
@@ -445,6 +449,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.entries[i].Time = time.Now().Format("15:04")
 			m.entries[i].Marker = "✓"
 			m.entries[i].Summary = normalizeIssueText(msg.finding.Nudge)
+			blocks := msg.detail
+			if len(blocks) == 0 {
+				blocks = []string{"Updated\nResolved in the latest review. TruPal no longer reproduced this contradiction after the latest changes."}
+			}
+			for _, block := range blocks {
+				parts := strings.SplitN(block, "\n", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				m.entries[i].Detail = upsertDetailBlockPreferred(m.entries[i].Detail, parts[0], parts[1])
+			}
 			resolved = true
 			break
 		}
@@ -457,15 +472,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Time:    time.Now().Format("15:04"),
 					Marker:  "✓",
 					Summary: normalizeIssueText(msg.finding.Nudge),
+					Detail: func() []string {
+						if len(msg.detail) > 0 {
+							return msg.detail
+						}
+						return []string{"Updated\nResolved in the latest review. TruPal no longer reproduced this contradiction after the latest changes."}
+					}(),
 				})
 			}
 		}
 
 	case trajectoryMsg:
 		m.appendEntry(timelineEntry{
-			Kind:    "note",
+			Kind:    "info",
 			Time:    time.Now().Format("15:04"),
-			Marker:  "→",
+			Marker:  "i",
+			Summary: msg.message,
+		})
+
+	case infoMsg:
+		m.appendEntry(timelineEntry{
+			Kind:    "info",
+			Time:    time.Now().Format("15:04"),
+			Marker:  "i",
 			Summary: msg.message,
 		})
 
@@ -473,7 +502,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logIssueEvent("pattern", BrainFinding{
 			ID:       msg.finding.Key,
 			Severity: msg.finding.Level,
-			Nudge:    msg.finding.Message,
+			Nudge:    steerablePatternNudge(msg.finding),
 			Why:      shortIssueWhy(msg.finding),
 		}, nil)
 
@@ -873,25 +902,42 @@ func (m *model) logIssueEvent(kind string, finding BrainFinding, extraDetail []s
 			Marker:  "!",
 			Summary: short,
 		}
-		if claim := strings.TrimSpace(finding.Claim); claim != "" {
-			entry.Detail = append(entry.Detail, "Codex said\n"+claim)
-		}
-		if verified := strings.TrimSpace(finding.Verified); verified != "" {
-			entry.Detail = append(entry.Detail, "TruPal verified\n"+verified)
-		} else if raw != "" && realityAddsValue(short, raw) {
-			entry.Detail = append(entry.Detail, "TruPal verified\n"+realityText(raw))
-		}
-		if why := strings.TrimSpace(finding.Impact); why != "" {
-			entry.Detail = append(entry.Detail, "Why it matters\n"+why)
-		} else if why := strings.TrimSpace(finding.Why); why != "" {
-			entry.Detail = append(entry.Detail, "Why it matters\n"+why)
-		}
-		entry.Detail = append(entry.Detail, extraDetail...)
-		if tell := strings.TrimSpace(finding.Tell); tell != "" {
-			entry.Detail = append(entry.Detail, "Tell Codex\n"+tell)
-		}
+		entry.Detail = detailBlocksForFinding(short, raw, finding, extraDetail)
 		m.appendEntry(entry)
 	}
+}
+
+func detailBlocksForFinding(summary, raw string, finding BrainFinding, extraDetail []string) []string {
+	var detail []string
+	if claim := strings.TrimSpace(finding.Claim); claim != "" {
+		detail = upsertDetailBlockPreferred(detail, "Codex said", claim)
+	}
+	if verified := strings.TrimSpace(finding.Verified); verified != "" {
+		detail = upsertDetailBlockPreferred(detail, "TruPal verified", verified)
+	} else if raw != "" && realityAddsValue(summary, raw) {
+		detail = upsertDetailBlockPreferred(detail, "TruPal verified", realityText(raw))
+	}
+	if why := strings.TrimSpace(finding.Impact); why != "" {
+		detail = upsertDetailBlockPreferred(detail, "Why it matters", why)
+	} else if why := strings.TrimSpace(finding.Why); why != "" {
+		detail = upsertDetailBlockPreferred(detail, "Why it matters", why)
+	}
+	for _, block := range extraDetail {
+		parts := strings.SplitN(block, "\n", 2)
+		if len(parts) != 2 {
+			detail = append(detail, block)
+			continue
+		}
+		detail = upsertDetailBlockPreferred(detail, parts[0], parts[1])
+	}
+	return detail
+}
+
+func normalizeForCompare(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	text = strings.ReplaceAll(text, "`", "")
+	text = strings.Join(strings.Fields(text), " ")
+	return strings.Trim(text, ".! ")
 }
 
 func realityText(text string) string {
@@ -925,6 +971,32 @@ func realityAddsValue(summary, raw string) bool {
 		return false
 	}
 	return !strings.Contains(raw, summary) && !strings.Contains(summary, raw)
+}
+
+func upsertDetailBlock(detail []string, label, value string) []string {
+	prefix := label + "\n"
+	for i, block := range detail {
+		if strings.HasPrefix(block, prefix) {
+			detail[i] = prefix + value
+			return detail
+		}
+	}
+	return append(detail, prefix+value)
+}
+
+func upsertDetailBlockPreferred(detail []string, label, value string) []string {
+	prefix := label + "\n"
+	for i, block := range detail {
+		if !strings.HasPrefix(block, prefix) {
+			continue
+		}
+		existing := strings.TrimPrefix(block, prefix)
+		if len(strings.TrimSpace(value)) > len(strings.TrimSpace(existing)) {
+			detail[i] = prefix + value
+		}
+		return detail
+	}
+	return append(detail, prefix+value)
 }
 
 func (m *model) trim() {
@@ -988,6 +1060,8 @@ func (m model) renderEntry(entry timelineEntry, width int, selected bool) []stri
 			body = sIssueText.Render(line)
 		} else if entry.Kind == "resolved" {
 			body = sDim.Render(line)
+		} else if entry.Kind == "info" {
+			body = sTimelineInfo.Render(line)
 		}
 		marker := styledTimelineMarker(entry.Kind, entry.Marker)
 		if selected {
@@ -1012,6 +1086,8 @@ func styledTimelineMarker(kind, marker string) string {
 		return sTimelineOk.Render("✓")
 	case "note":
 		return sTimelineNote.Render("→")
+	case "info":
+		return sTimelineInfo.Render("i")
 	default:
 		if marker == "" {
 			return sTimelineInfo.Render("○")
@@ -1312,7 +1388,9 @@ func renderDetailField(label, text string, width int, bodyStyle lipgloss.Style) 
 	case "Claim":
 		label = "Codex said"
 	case "Reality":
-		label = "TruPal verified"
+		label = "Why TruPal believes this"
+	case "TruPal verified":
+		label = "Why TruPal believes this"
 	}
 	boxWidth := width
 	if boxWidth < 20 {

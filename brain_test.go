@@ -27,7 +27,7 @@ func TestBrainSystemPromptIsStatic(t *testing.T) {
 
 func TestNotifyParsesUsageAndTracksStats(t *testing.T) {
 	stream := strings.Join([]string{
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"{\"observations\":[],\"nudges\":[],\"resolved_findings\":[]}"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"{\"info\":[],\"nudges\":[],\"resolved_findings\":[]}"}]}}`,
 		`{"type":"result","usage":{"input_tokens":11,"output_tokens":7,"cache_creation_input_tokens":5,"cache_read_input_tokens":13},"total_cost_usd":0.0123}`,
 	}, "\n")
 
@@ -77,7 +77,7 @@ func TestNotifyParsesUsageAndTracksStats(t *testing.T) {
 
 func TestNotifyConcatenatesAssistantTextBlocks(t *testing.T) {
 	stream := strings.Join([]string{
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"{\"observations\":["}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"{\"info\":["}]}}`,
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"],\"nudges\":[],\"resolved_findings\":[]}"}]}}`,
 		`{"type":"result","usage":{"input_tokens":1,"output_tokens":2},"total_cost_usd":0.001}`,
 	}, "\n")
@@ -94,13 +94,13 @@ func TestNotifyConcatenatesAssistantTextBlocks(t *testing.T) {
 	if len(resp.Nudges) != 0 {
 		t.Fatalf("nudges = %d, want 0", len(resp.Nudges))
 	}
-	if len(resp.Observations) != 0 {
-		t.Fatalf("observations = %d, want 0", len(resp.Observations))
+	if len(resp.InfoLines()) != 0 {
+		t.Fatalf("info lines = %d, want 0", len(resp.InfoLines()))
 	}
 }
 
 func TestNotifyErrorsWithoutResultEvent(t *testing.T) {
-	stream := `{"type":"assistant","message":{"content":[{"type":"text","text":"{\"observations\":[],\"nudges\":[],\"resolved_findings\":[]}"}]}}`
+	stream := `{"type":"assistant","message":{"content":[{"type":"text","text":"{\"info\":[],\"nudges\":[],\"resolved_findings\":[]}"}]}}`
 
 	brain := &Brain{
 		stdin:   nopWriteCloser{Writer: io.Discard},
@@ -109,6 +109,16 @@ func TestNotifyErrorsWithoutResultEvent(t *testing.T) {
 
 	if _, err := brain.Notify("check this", "[]"); err == nil {
 		t.Fatal("expected Notify() to fail without a result event")
+	}
+}
+
+func TestBrainResponseInfoLinesFallsBackToObservations(t *testing.T) {
+	resp := BrainResponse{
+		Observations: []string{"legacy"},
+	}
+	lines := resp.InfoLines()
+	if len(lines) != 1 || lines[0] != "legacy" {
+		t.Fatalf("InfoLines() fallback = %#v, want legacy observation", lines)
 	}
 }
 
@@ -142,6 +152,36 @@ func TestBrainStatsCacheSemanticsDifferByProvider(t *testing.T) {
 	}
 	if got := codex.CacheHitRate(); got != 92 {
 		t.Fatalf("codex CacheHitRate = %d, want 92", got)
+	}
+}
+
+func TestBrainStatsCodexAddTurnUsesDeltasForResumedThreadTotals(t *testing.T) {
+	stats := BrainStats{Provider: ProviderCodex}
+	stats.addTurn(BrainUsage{
+		InputTokens:          1000,
+		CacheReadInputTokens: 800,
+		OutputTokens:         40,
+	}, 0)
+	stats.addTurn(BrainUsage{
+		InputTokens:          1600,
+		CacheReadInputTokens: 1200,
+		OutputTokens:         70,
+	}, 0)
+
+	if stats.TotalInputTokens != 1600 {
+		t.Fatalf("TotalInputTokens = %d, want 1600", stats.TotalInputTokens)
+	}
+	if stats.TotalCacheReadTokens != 1200 {
+		t.Fatalf("TotalCacheReadTokens = %d, want 1200", stats.TotalCacheReadTokens)
+	}
+	if stats.TotalOutputTokens != 70 {
+		t.Fatalf("TotalOutputTokens = %d, want 70", stats.TotalOutputTokens)
+	}
+	if got := stats.UncachedPromptTokens(); got != 400 {
+		t.Fatalf("UncachedPromptTokens = %d, want 400", got)
+	}
+	if got := stats.CacheHitRate(); got != 75 {
+		t.Fatalf("CacheHitRate = %d, want 75", got)
 	}
 }
 

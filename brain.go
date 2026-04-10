@@ -21,11 +21,19 @@ import (
 // BrainResponse is the parsed JSON response from the brain.
 type BrainResponse struct {
 	Reasoning        string       `json:"reasoning"`
-	Observations     []string     `json:"observations"`
+	Info             []string     `json:"info,omitempty"`
+	Observations     []string     `json:"observations,omitempty"`
 	Nudges           []BrainNudge `json:"nudges"`
 	ResolvedFindings []string     `json:"resolved_findings"`
 	Usage            BrainUsage   `json:"usage"`
 	TotalCostUSD     float64      `json:"total_cost_usd"`
+}
+
+func (r BrainResponse) InfoLines() []string {
+	if len(r.Info) > 0 {
+		return r.Info
+	}
+	return r.Observations
 }
 
 // BrainNudge is a single nudge from the brain.
@@ -67,13 +75,36 @@ type BrainStats struct {
 
 func (s *BrainStats) addTurn(usage BrainUsage, costUSD float64) {
 	s.TurnCount++
-	s.TotalInputTokens += usage.InputTokens
-	s.TotalOutputTokens += usage.OutputTokens
-	s.TotalCacheCreationTokens += usage.CacheCreationInputTokens
-	s.TotalCacheReadTokens += usage.CacheReadInputTokens
+	accounted := normalizeUsageForAccounting(s.Provider, usage, s.LastUsage)
+	s.TotalInputTokens += accounted.InputTokens
+	s.TotalOutputTokens += accounted.OutputTokens
+	s.TotalCacheCreationTokens += accounted.CacheCreationInputTokens
+	s.TotalCacheReadTokens += accounted.CacheReadInputTokens
 	s.TotalCostUSD += costUSD
 	s.LastUsage = usage
 	s.LastCostUSD = costUSD
+}
+
+func normalizeUsageForAccounting(provider string, usage, previous BrainUsage) BrainUsage {
+	if normalizeProvider(provider, ProviderClaude) != ProviderCodex {
+		return usage
+	}
+	return BrainUsage{
+		InputTokens:              codexUsageDelta(usage.InputTokens, previous.InputTokens),
+		OutputTokens:             codexUsageDelta(usage.OutputTokens, previous.OutputTokens),
+		CacheCreationInputTokens: codexUsageDelta(usage.CacheCreationInputTokens, previous.CacheCreationInputTokens),
+		CacheReadInputTokens:     codexUsageDelta(usage.CacheReadInputTokens, previous.CacheReadInputTokens),
+	}
+}
+
+func codexUsageDelta(current, previous int) int {
+	if current <= 0 {
+		return 0
+	}
+	if previous > 0 && current >= previous {
+		return current - previous
+	}
+	return current
 }
 
 func (s *BrainStats) noteTurn(duration time.Duration, effort string) {
@@ -191,7 +222,7 @@ Another way to say it: silence means bugs escape, so investigate first and err o
 
 Respond with JSON only:
 {
-  "observations": ["what you noticed — facts, patterns, context"],
+  "info": ["what the human operator should notice — facts, patterns, context"],
   "nudges": [{
     "severity": "warn|error",
     "message": "short operator-facing nudge",
@@ -203,17 +234,24 @@ Respond with JSON only:
   "resolved_findings": ["<finding_id>"]
 }
 
-Observations are for things worth the human's attention — patterns, risks, notable decisions.
-NOT for: routine activity ("the agent read a file"), internal state ("JSONL flushed"), timestamps.
-Max 2 observations per response. If nothing notable, return empty.
+Info lines are for the human operator.
+Only emit one when it meaningfully improves the operator's mental model of:
+- verification scope or trust changed
+- agent intent/drift/stall changed
+- review confidence changed
+- a state transition matters even if no new nudge is needed
+NOT for: routine activity ("the agent read a file"), internal state ("JSONL flushed"), timestamps, ordinary token stats.
+Max 2 info lines per response. If nothing notable, return empty.
 
 Rules:
-- Observations: 1 sentence each. Only notable patterns or risks.
-- Nudges: each one is a contradiction card. Prefer a short action title in "message", then fill "claim", "verified", "impact", and "tell" when you have the evidence.
+- Info lines: 1 sentence each. Only notable patterns or risks.
+- Nudges: each one should be worth actually sending to the coding agent right now.
+- "message" is the canonical steering instruction. Write it as a short sentence the human could send verbatim.
+- If it is not worth steering the coding agent, do not emit a nudge.
+- "tell": optional richer outbound variant only when it adds a small but useful clarification beyond "message". If it would just restate "message", omit it.
 - "claim": only when the coding agent actually said or strongly implied something relevant.
 - "verified": what you checked in reality that conflicts with the claim or expected outcome.
 - "impact": 1 short plain-language sentence for the human operator. Not raw inner monologue.
-- "tell": one short operator-ready instruction back to the coding agent.
 - Focus on real correctness and verification risks, not style nits.
 - Before returning empty, explicitly check for concurrency, cache invalidation, auth coverage, route parsing, method handling, and dropped JSON errors in the changed files.
 - After you investigate, if nothing important is wrong, return empty nudges.`, agentName, agentName, jsonlPath, projectDir, agentLabel, agentLabel, agentLabel, agentLabel)
@@ -444,16 +482,17 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	resp.Usage = usage
 	resp.TotalCostUSD = totalCostUSD
 	b.statsMu.Lock()
+	accountedUsage := normalizeUsageForAccounting(b.cfg.BrainProvider, usage, b.stats.LastUsage)
 	b.stats.Provider = b.cfg.BrainProvider
 	b.stats.CostKnown = true
 	b.stats.noteTurn(elapsed, effectiveBrainEffort(b.cfg, reason))
 	b.stats.addTurn(usage, totalCostUSD)
 	b.statsMu.Unlock()
 	Debugf("[brain] usage: in=%d out=%d cache_read=%d cache_create=%d cost=$%.4f",
-		usage.InputTokens,
-		usage.OutputTokens,
-		usage.CacheReadInputTokens,
-		usage.CacheCreationInputTokens,
+		accountedUsage.InputTokens,
+		accountedUsage.OutputTokens,
+		accountedUsage.CacheReadInputTokens,
+		accountedUsage.CacheCreationInputTokens,
 		totalCostUSD,
 	)
 	Debugf("[brain] %d nudges, %d resolved, reasoning: %s", len(resp.Nudges), len(resp.ResolvedFindings), truncate(resp.Reasoning, 100))
@@ -521,11 +560,19 @@ func (b *Brain) notifyCodex(reason, findingsJSON string) (*BrainResponse, error)
 	resp.Usage = usage
 
 	b.statsMu.Lock()
+	accountedUsage := normalizeUsageForAccounting(b.cfg.BrainProvider, usage, b.stats.LastUsage)
 	b.stats.Provider = b.cfg.BrainProvider
 	b.stats.CostKnown = false
 	b.stats.noteTurn(elapsed, effort)
 	b.stats.addTurn(usage, 0)
 	b.statsMu.Unlock()
+	Debugf("[brain] usage: in=%d out=%d cache_read=%d cache_create=%d cost=$0.0000",
+		accountedUsage.InputTokens,
+		accountedUsage.OutputTokens,
+		accountedUsage.CacheReadInputTokens,
+		accountedUsage.CacheCreationInputTokens,
+	)
+	resp.Usage = accountedUsage
 	return resp, nil
 }
 

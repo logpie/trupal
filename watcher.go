@@ -477,9 +477,13 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				brainLastMsg = result.resp.Reasoning
 				brainLastTime = time.Now()
 				p.Send(brainStatusMsg{thinking: false, lastTime: brainLastTime})
-				Debugf("[brain] %d observations, %d nudges", len(result.resp.Observations), len(result.resp.Nudges))
-				for _, obs := range result.resp.Observations {
-					Debugf("[brain] observation: %s", obs)
+				infoLines := result.resp.InfoLines()
+				Debugf("[brain] %d info lines, %d nudges", len(infoLines), len(result.resp.Nudges))
+				for _, info := range infoLines {
+					Debugf("[brain] info: %s", info)
+					if strings.TrimSpace(info) != "" {
+						p.Send(infoMsg{message: strings.TrimSpace(info)})
+					}
 				}
 				for _, nudge := range result.resp.Nudges {
 					impact := strings.TrimSpace(nudge.Impact)
@@ -512,7 +516,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				if len(result.resp.ResolvedFindings) > 0 {
 					for _, rid := range result.resp.ResolvedFindings {
 						if finding, ok := findings.Get(rid); ok {
-							p.Send(resolvedMsg{finding: finding})
+							p.Send(resolvedMsg{finding: finding, detail: buildResolvedDetail(repoRoot, changedFiles, recentSessionEntries, finding.Nudge)})
 						}
 					}
 					findings.Resolve(result.resp.ResolvedFindings)
@@ -691,7 +695,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 		for _, f := range trajectoryFindings {
 			key := f.Message
 			if !loggedTrajectory[key] {
-				p.Send(trajectoryMsg{message: f.Message})
+				p.Send(infoMsg{message: trajectoryInfoMessage(f.Message)})
 				loggedTrajectory[key] = true
 			}
 		}
@@ -1274,6 +1278,47 @@ func buildNudgeDetail(projectDir string, changedFiles []string, recentEntries []
 		detail = append(detail, "Code\n"+snippet)
 	}
 	return detail
+}
+
+func buildResolvedDetail(projectDir string, changedFiles []string, recentEntries []JSONLEntry, message string) []string {
+	var sections []string
+	if claim := latestAssistantClaim(recentEntries); claim != "" && claimMatchesIssue(claim, message) {
+		sections = append(sections, "Latest change: "+claim)
+	}
+	if snippet := codeSnippetForNudge(projectDir, changedFiles, message); snippet != "" {
+		sections = append(sections, "Latest evidence:\n"+snippet)
+	}
+	if len(sections) == 0 {
+		return nil
+	}
+	return []string{"Updated\nResolved in the latest review. TruPal no longer reproduced this contradiction after the latest changes.\n\n" + strings.Join(sections, "\n\n")}
+}
+
+func trajectoryInfoMessage(message string) string {
+	switch message {
+	case "build errors increasing":
+		return "Build errors are increasing across attempts, so intervention is likely needed before more edits pile on."
+	default:
+		if strings.HasPrefix(message, "you've edited ") {
+			return "Codex is revisiting the same file repeatedly without clear progress, so this session may be drifting."
+		}
+		return strings.TrimSpace(message)
+	}
+}
+
+func steerablePatternNudge(finding PatternFinding) string {
+	switch finding.Category {
+	case "todo":
+		return "Resolve the TODO/FIXME you just introduced instead of deferring the work."
+	case "suppression":
+		return "Remove the new lint/type suppression and fix the underlying issue instead."
+	case "swallowed-error":
+		return "Handle the swallowed error instead of discarding it."
+	case "deleted-test":
+		return "Restore or replace the deleted test coverage before you move on."
+	default:
+		return shortIssueText(finding.Message)
+	}
 }
 
 func claimMatchesIssue(claim, message string) bool {

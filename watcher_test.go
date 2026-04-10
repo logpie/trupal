@@ -260,3 +260,30 @@ func TestNormalizeIssueTextCompressesKnownFindings(t *testing.T) {
 		}
 	}
 }
+
+func TestSteerablePatternNudge(t *testing.T) {
+	cases := []struct {
+		category string
+		want     string
+	}{
+		{"todo", "Resolve the TODO/FIXME you just introduced instead of deferring the work."},
+		{"suppression", "Remove the new lint/type suppression and fix the underlying issue instead."},
+		{"swallowed-error", "Handle the swallowed error instead of discarding it."},
+		{"deleted-test", "Restore or replace the deleted test coverage before you move on."},
+	}
+	for _, tc := range cases {
+		got := steerablePatternNudge(PatternFinding{Category: tc.category})
+		if got != tc.want {
+			t.Fatalf("steerablePatternNudge(%q) = %q want %q", tc.category, got, tc.want)
+		}
+	}
+}
+
+func TestTrajectoryInfoMessage(t *testing.T) {
+	if got := trajectoryInfoMessage("build errors increasing"); !strings.Contains(got, "Build errors are increasing") {
+		t.Fatalf("unexpected build trajectory info %q", got)
+	}
+	if got := trajectoryInfoMessage("you've edited main.go repeatedly this session"); !strings.Contains(got, "revisiting the same file") {
+		t.Fatalf("unexpected repeated-edit trajectory info %q", got)
+	}
+}
