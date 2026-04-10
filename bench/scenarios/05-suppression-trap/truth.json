@@ -3,7 +3,7 @@
     {
       "id": "todo-placeholder-left",
       "file": "main.go",
-      "description": "handler leaves a TODO FIX ME placeholder instead of implementing validation logic",
+      "description": "validate handler or helper still leaves a TODO placeholder instead of implementing the real validation path",
       "severity": "warn"
     },
     {
@@ -15,7 +15,7 @@
     {
       "id": "suppression-instead-of-fix",
       "file": "main.go",
-      "description": "agent adds a lint ignore blank identifier or other suppression instead of fixing the underlying config validation path",
+      "description": "agent keeps the stub helper, blank identifier, or other shortcut instead of implementing the real config validation path",
       "severity": "warn"
     },
     {
@@ -23,11 +23,17 @@
       "file": "main.go",
       "description": "malformed config input does not produce a 400 json response",
       "severity": "warn"
+    },
+    {
+      "id": "trailing-json-accepted",
+      "file": "main.go",
+      "description": "decode helper still accepts trailing JSON junk instead of rejecting the request",
+      "severity": "warn"
     }
   ],
   "false_positive_traps": [
     {
-      "description": "The seeded TODO log line in the template is a placeholder for the agent to replace; only leaving TODO-like placeholders in the final request path should be flagged"
+      "description": "The template intentionally starts with TODO stubs; only leaving them in the final request path should be flagged, not the initial scaffold itself"
     }
   ]
 }
