@@ -11,13 +11,16 @@ import (
 
 // Config holds the parsed .trupal.toml configuration.
 type Config struct {
-	BuildCmd        string
-	BuildExtensions []string
-	PollInterval    int
-	SessionProvider string // watched session provider: "claude" or "codex"
-	BrainProvider   string // brain provider: "claude" or "codex"
-	BrainModel      string // claude: haiku/sonnet/opus, codex: model id or empty for default
-	BrainEffort     string // "low", "medium", "high", "max"
+	BuildCmd          string
+	BuildExtensions   []string
+	PollInterval      int
+	SessionProvider   string // watched session provider: "claude" or "codex"
+	BrainProvider     string // brain provider: "claude" or "codex"
+	BrainModel        string // claude: haiku/sonnet/opus, codex: model id or empty for default
+	BrainEffort       string // "low", "medium", "high", "max"
+	BenchmarkMode     bool
+	BenchmarkScenario string
+	BenchmarkArm      string
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -74,6 +77,12 @@ func loadConfig(projectDir string) (Config, error) {
 			cfg.BrainModel = value
 		case "brain_effort":
 			cfg.BrainEffort = value
+		case "benchmark_mode":
+			cfg.BenchmarkMode = strings.EqualFold(value, "true")
+		case "benchmark_scenario":
+			cfg.BenchmarkScenario = value
+		case "benchmark_arm":
+			cfg.BenchmarkArm = value
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -149,6 +158,15 @@ func SaveConfig(projectDir string, cfg Config) {
 		fmt.Fprintf(f, "brain_model = %q\n", cfg.BrainModel)
 	}
 	fmt.Fprintf(f, "brain_effort = %q\n", cfg.BrainEffort)
+	if cfg.BenchmarkMode {
+		fmt.Fprintf(f, "benchmark_mode = true\n")
+	}
+	if cfg.BenchmarkScenario != "" {
+		fmt.Fprintf(f, "benchmark_scenario = %q\n", cfg.BenchmarkScenario)
+	}
+	if cfg.BenchmarkArm != "" {
+		fmt.Fprintf(f, "benchmark_arm = %q\n", cfg.BenchmarkArm)
+	}
 }
 
 // Validate normalizes and validates config values that must match runtime support.

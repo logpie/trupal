@@ -692,7 +692,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			project:  filepath.Base(repoRoot),
 			findings: activeBrainFindings + len(patternFindings),
 			resolved: resolvedBrainFindings,
-			issues:   collectCurrentIssues(findings.Active(), patternFindings, deletedTests, trajectoryFindings, 4),
+			issues:   collectCurrentIssues(findings.Active(), patternFindings, deletedTests, trajectoryFindings, 4, cfg),
 		})
 		// Log trajectory signals once.
 		for _, f := range trajectoryFindings {
@@ -1198,7 +1198,7 @@ func reviewableWorkHash(rawDiff string, untrackedFiles []string, build *BuildDis
 	return h.Sum64()
 }
 
-func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFinding, deletedTests []string, trajectory []Finding, maxItems int) []CurrentIssue {
+func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFinding, deletedTests []string, trajectory []Finding, maxItems int, cfg Config) []CurrentIssue {
 	if maxItems <= 0 {
 		return nil
 	}
@@ -1210,8 +1210,8 @@ func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFindi
 		if issue.Nudge == "" {
 			return
 		}
-		if len(items) < maxItems {
-			items = append(items, issue)
+		if refined, ok := refineBenchmarkIssue(issue, cfg); ok {
+			items = append(items, refined)
 		}
 	}
 
@@ -1245,7 +1245,108 @@ func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFindi
 			Ref:      "deleted-test",
 		})
 	}
+	sort.SliceStable(items, func(i, j int) bool {
+		pi := benchmarkIssuePriority(items[i], cfg)
+		pj := benchmarkIssuePriority(items[j], cfg)
+		if pi != pj {
+			return pi > pj
+		}
+		return items[i].Key() < items[j].Key()
+	})
+	if len(items) > maxItems {
+		items = items[:maxItems]
+	}
 	return items
+}
+
+func refineBenchmarkIssue(issue CurrentIssue, cfg Config) (CurrentIssue, bool) {
+	if !cfg.BenchmarkMode {
+		return issue, true
+	}
+	text := strings.ToLower(strings.TrimSpace(issue.Nudge + " " + issue.Why))
+	for _, bad := range []string{
+		".gitignore", ".omx", ".codex", ".trupal.", "harness noise", "worktree clean",
+		"untracked runtime files", "untracked `.gitignore`", "ignores .omx",
+	} {
+		if strings.Contains(text, bad) {
+			return CurrentIssue{}, false
+		}
+	}
+
+	switch strings.TrimSpace(cfg.BenchmarkScenario) {
+	case "wrong-tree-verification":
+		if strings.Contains(text, "no-op production entrypoint") || strings.Contains(text, "/status handler") {
+			issue.Nudge = "Edit the root main.go, not examples/main.go, wire the real /status handler there, and verify the root binary instead of the example tree."
+			if issue.Why == "" {
+				issue.Why = "This scenario is about wrong-tree edits and verification drift, not just a missing route."
+			}
+		}
+	case "suppression-trap":
+		if strings.Contains(text, "ensureeof") || strings.Contains(text, "trailing") {
+			issue.Nudge = "Reject malformed JSON with a real 400 response and fix the decode path directly instead of patching around it or leaving TODO/suppression shortcuts."
+			if issue.Why == "" {
+				issue.Why = "The core risk here is hiding the real validation failure instead of fixing the request path."
+			}
+		}
+	case "buggy-crud":
+		if strings.Contains(text, "no packages") || strings.Contains(text, "compile") {
+			issue.Severity = "warn"
+		}
+	}
+	return issue, true
+}
+
+func benchmarkIssuePriority(issue CurrentIssue, cfg Config) int {
+	priority := 0
+	switch strings.ToLower(strings.TrimSpace(issue.Severity)) {
+	case "error":
+		priority += 100
+	case "warn":
+		priority += 50
+	}
+	if !cfg.BenchmarkMode {
+		return priority
+	}
+
+	text := strings.ToLower(strings.TrimSpace(issue.Nudge + " " + issue.Why))
+	for _, token := range []string{"mutex", "race", "json", "405", "bad request", "suppression", "todo", "wrong tree", "verify", "production", "example", "expired"} {
+		if strings.Contains(text, token) {
+			priority += 10
+		}
+	}
+	switch strings.TrimSpace(cfg.BenchmarkScenario) {
+	case "wrong-tree-verification":
+		for _, token := range []string{"wrong tree", "example", "production", "root main.go", "verify", "binary"} {
+			if strings.Contains(text, token) {
+				priority += 40
+			}
+		}
+	case "suppression-trap":
+		for _, token := range []string{"suppression", "todo", "400", "bad request", "decode", "validate"} {
+			if strings.Contains(text, token) {
+				priority += 40
+			}
+		}
+	case "buggy-refresh-state":
+		for _, token := range []string{"expired", "state", "refresh", "mutex", "json"} {
+			if strings.Contains(text, token) {
+				priority += 30
+			}
+		}
+	case "fake-green-build":
+		for _, token := range []string{"health", "content-type", "listenandserve", "runtime", "json", "allow"} {
+			if strings.Contains(text, token) {
+				priority += 30
+			}
+		}
+	case "buggy-crud":
+		for _, token := range []string{"mutex", "auth", "cache", "json", "405", "route"} {
+			if strings.Contains(text, token) {
+				priority += 25
+			}
+		}
+	}
+	return priority
 }
 
 func shortIssueText(text string) string {

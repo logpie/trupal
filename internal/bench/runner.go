@@ -166,7 +166,7 @@ func (r *Runner) runScenario(scenario Scenario, arm BenchmarkArm) (*RunResult, e
 	if err := CopyTree(scenario.TemplateDir, projectDir); err != nil {
 		return nil, fmt.Errorf("copy template: %w", err)
 	}
-	if err := r.writeScenarioConfig(projectDir, scenario.TrupalConfig); err != nil {
+	if err := r.writeScenarioConfig(projectDir, scenario, arm); err != nil {
 		return nil, err
 	}
 	if err := r.initGitRepo(projectDir); err != nil {
@@ -511,7 +511,8 @@ func (r *Runner) sendKeys(paneID string, keys ...string) error {
 	return nil
 }
 
-func (r *Runner) writeScenarioConfig(projectDir string, cfg TrupalConfig) error {
+func (r *Runner) writeScenarioConfig(projectDir string, scenario Scenario, arm BenchmarkArm) error {
+	cfg := scenario.TrupalConfig
 	var lines []string
 	if cfg.BuildCmd != "" {
 		lines = append(lines, fmt.Sprintf("build_cmd = %q", cfg.BuildCmd))
@@ -528,6 +529,9 @@ func (r *Runner) writeScenarioConfig(projectDir string, cfg TrupalConfig) error 
 	if cfg.BrainEffort != "" {
 		lines = append(lines, fmt.Sprintf("brain_effort = %q", cfg.BrainEffort))
 	}
+	lines = append(lines, "benchmark_mode = true")
+	lines = append(lines, fmt.Sprintf("benchmark_scenario = %q", scenario.ID))
+	lines = append(lines, fmt.Sprintf("benchmark_arm = %q", arm))
 	lines = append(lines, "")
 	return os.WriteFile(filepath.Join(projectDir, ".trupal.toml"), []byte(strings.Join(lines, "\n")), 0644)
 }

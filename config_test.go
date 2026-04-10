@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestConfigValidateNormalizesBrainSettings(t *testing.T) {
 	cfg := Config{
@@ -170,5 +174,25 @@ func TestPaneMatchesProviderRecognizesCodexWrappedByNode(t *testing.T) {
 func TestFindAgentPaneStrictRequiresProjectMatch(t *testing.T) {
 	if got := findAgentPaneStrict("/tmp/project", ProviderCodex); got != "" {
 		t.Fatalf("expected no strict pane match in unit test environment, got %q", got)
+	}
+}
+
+func TestLoadConfigParsesBenchmarkMetadata(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".trupal.toml"), []byte(`
+session_provider = "codex"
+brain_provider = "codex"
+benchmark_mode = true
+benchmark_scenario = "wrong-tree-verification"
+benchmark_arm = "steer"
+`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	cfg, err := loadConfig(dir)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if !cfg.BenchmarkMode || cfg.BenchmarkScenario != "wrong-tree-verification" || cfg.BenchmarkArm != "steer" {
+		t.Fatalf("unexpected benchmark config: %#v", cfg)
 	}
 }

@@ -206,6 +206,7 @@ func TestCollectCurrentIssuesPrefersActiveItems(t *testing.T) {
 		nil,
 		nil,
 		2,
+		Config{},
 	)
 	if len(summary) == 0 || summary[0].Nudge != "Mutex missing in sessions map" {
 		t.Fatalf("unexpected issue summary: %#v", summary)
@@ -289,8 +290,47 @@ func TestTrajectoryInfoMessage(t *testing.T) {
 }
 
 func TestCollectCurrentIssuesOmitsTrajectoryInfoFromSteerQueue(t *testing.T) {
-	summary := collectCurrentIssues(nil, nil, nil, []Finding{{Level: "error", Message: "build errors increasing"}}, 4)
+	summary := collectCurrentIssues(nil, nil, nil, []Finding{{Level: "error", Message: "build errors increasing"}}, 4, Config{})
 	if len(summary) != 0 {
 		t.Fatalf("expected trajectory findings to stay out of steer queue, got %#v", summary)
+	}
+}
+
+func TestCollectCurrentIssuesFiltersBenchmarkHarnessNoise(t *testing.T) {
+	summary := collectCurrentIssues(
+		[]BrainFinding{
+			{Severity: "error", Nudge: "your .gitignore only ignores .omx/ so harness noise still shows up"},
+			{Severity: "error", Nudge: "protect sessions map with a mutex"},
+		},
+		nil, nil, nil, 4,
+		Config{BenchmarkMode: true, BenchmarkScenario: "buggy-crud"},
+	)
+	if len(summary) != 1 || !strings.Contains(strings.ToLower(summary[0].Nudge), "mutex") {
+		t.Fatalf("expected harness-noise issue to be filtered, got %#v", summary)
+	}
+}
+
+func TestCollectCurrentIssuesRewritesWrongTreeBenchmarkNudge(t *testing.T) {
+	summary := collectCurrentIssues(
+		[]BrainFinding{{Severity: "error", Nudge: "you still have a no-op production entrypoint in main.go"}},
+		nil, nil, nil, 4,
+		Config{BenchmarkMode: true, BenchmarkScenario: "wrong-tree-verification"},
+	)
+	if len(summary) != 1 || !strings.Contains(summary[0].Nudge, "not examples/main.go") {
+		t.Fatalf("expected wrong-tree nudge rewrite, got %#v", summary)
+	}
+}
+
+func TestCollectCurrentIssuesPrioritizesSuppressionTrapCoreFailure(t *testing.T) {
+	summary := collectCurrentIssues(
+		[]BrainFinding{
+			{Severity: "warn", Nudge: "ensureEOF is not enforcing EOF here"},
+			{Severity: "warn", Nudge: "todo placeholder still left in the request path"},
+		},
+		nil, nil, nil, 4,
+		Config{BenchmarkMode: true, BenchmarkScenario: "suppression-trap"},
+	)
+	if len(summary) == 0 || !strings.Contains(strings.ToLower(summary[0].Nudge), "todo") {
+		t.Fatalf("expected scenario-priority issue to rank first, got %#v", summary)
 	}
 }
