@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/trupal-swebench <command> [args...]
+
+Commands:
+  prepare        Prepare one SWE-bench task workspace
+  eval           Apply test patch and run evaluation only
+  run            Run one SWE-bench arm
+  run-paired     Run control vs steer for one SWE-bench task
+
+Examples:
+  scripts/trupal-swebench prepare \
+    --manifest bench/swebench-real/pallets__flask-5014.json \
+    --instance pallets__flask-5014 --checkout
+
+  scripts/trupal-swebench run-paired \
+    --manifest bench/swebench-real/pallets__flask-5014.json \
+    --instance pallets__flask-5014
+EOF
+}
+
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 1
+fi
+
+cmd="$1"
+shift
+
+case "$cmd" in
+  prepare)
+    exec go run "$ROOT_DIR/cmd/trupal-bench" prepare-swebench "$@"
+    ;;
+  eval)
+    exec go run "$ROOT_DIR/cmd/trupal-bench" eval-swebench "$@"
+    ;;
+  run)
+    exec go run "$ROOT_DIR/cmd/trupal-bench" run-swebench "$@"
+    ;;
+  run-paired)
+    exec go run "$ROOT_DIR/cmd/trupal-bench" run-swebench-paired "$@"
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
