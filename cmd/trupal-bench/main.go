@@ -47,6 +47,16 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "run-swebench":
+		if err := runSWEBench(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case "run-swebench-paired":
+		if err := runSWEBenchPaired(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(1)
@@ -125,6 +135,77 @@ func evalSWEBench(repoRoot string, args []string) error {
 		return err
 	}
 	fmt.Print(out)
+	return nil
+}
+
+func runSWEBench(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("run-swebench", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	swebenchDir := fs.String("swebench-dir", filepath.Join(repoRoot, "bench", "swebench-sample"), "directory containing a SWE-bench manifest snapshot")
+	manifest := fs.String("manifest", "", "path to a local SWE-bench task manifest JSON file")
+	instance := fs.String("instance", "", "SWE-bench instance id")
+	arm := fs.String("arm", "control", "benchmark arm to run (control or steer)")
+	evalCmd := fs.String("eval-cmd", "", "evaluation command to run after applying test_patch")
+	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		SWEBenchDir:  *swebenchDir,
+		KeepTemp:     *keepTemp,
+	})
+	if err != nil {
+		return err
+	}
+	result, err := runner.RunSWEBenchTask(*manifest, *instance, bench.BenchmarkArm(*arm), *evalCmd)
+	if err != nil {
+		return err
+	}
+	fmt.Println(result.Artifacts.ReportPath)
+	return nil
+}
+
+func runSWEBenchPaired(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("run-swebench-paired", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	swebenchDir := fs.String("swebench-dir", filepath.Join(repoRoot, "bench", "swebench-sample"), "directory containing a SWE-bench manifest snapshot")
+	manifest := fs.String("manifest", "", "path to a local SWE-bench task manifest JSON file")
+	instance := fs.String("instance", "", "SWE-bench instance id")
+	evalCmd := fs.String("eval-cmd", "", "evaluation command to run after applying test_patch")
+	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		SWEBenchDir:  *swebenchDir,
+		KeepTemp:     *keepTemp,
+	})
+	if err != nil {
+		return err
+	}
+	control, err := runner.RunSWEBenchTask(*manifest, *instance, bench.ArmControl, *evalCmd)
+	if err != nil {
+		return err
+	}
+	steer, err := runner.RunSWEBenchTask(*manifest, *instance, bench.ArmSteer, *evalCmd)
+	if err != nil {
+		return err
+	}
+	comparisonPath := filepath.Join(*resultsDir, fmt.Sprintf("%s-vs-control-steer.md", control.SWEBenchTask.Slug()))
+	if err := bench.WriteSWEBenchComparisonReport(comparisonPath, control, steer); err != nil {
+		return err
+	}
+	fmt.Println(comparisonPath)
+	fmt.Println(control.Artifacts.ReportPath)
+	fmt.Println(steer.Artifacts.ReportPath)
 	return nil
 }
 
@@ -281,4 +362,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-all [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench prepare-swebench [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench eval-swebench [flags]")
+	fmt.Fprintln(os.Stderr, "  trupal-bench run-swebench [flags]")
+	fmt.Fprintln(os.Stderr, "  trupal-bench run-swebench-paired [flags]")
 }

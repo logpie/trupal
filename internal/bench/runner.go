@@ -34,22 +34,24 @@ type CodexAuditResult struct {
 }
 
 type RunResult struct {
-	Scenario       Scenario
-	Arm            BenchmarkArm
-	SWEBenchTask   *SWEBenchTask
-	StartedAt      time.Time
-	FinishedAt     time.Time
-	Duration       time.Duration
-	ProjectDir     string
-	TimedOut       bool
-	AgentDuration  time.Duration
-	AgentExitCode  int
-	AgentError     string
-	SessionJSONL   string
-	Artifacts      ArtifactSet
-	SteeringEvents []SteeringEvent
-	Score          Scorecard
-	CodexAudit     *CodexAuditResult
+	Scenario            Scenario
+	Arm                 BenchmarkArm
+	SWEBenchTask        *SWEBenchTask
+	StartedAt           time.Time
+	FinishedAt          time.Time
+	Duration            time.Duration
+	ProjectDir          string
+	TimedOut            bool
+	AgentDuration       time.Duration
+	AgentExitCode       int
+	AgentError          string
+	SessionJSONL        string
+	Artifacts           ArtifactSet
+	SteeringEvents      []SteeringEvent
+	Score               Scorecard
+	CodexAudit          *CodexAuditResult
+	SWEBenchSolved      bool
+	SWEBenchEvalCommand string
 }
 
 func NewRunner(opts RunnerOptions) (*Runner, error) {
@@ -126,6 +128,106 @@ func (r *Runner) RunScenarioPair(name string) ([]*RunResult, error) {
 	return results, nil
 }
 
+func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkArm, evalCommand string) (*RunResult, error) {
+	task, err := LoadSWEBenchTask(manifestPath, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(evalCommand) != "" {
+		task.EvalCommand = strings.TrimSpace(evalCommand)
+	}
+	started := time.Now()
+	runSlug := started.Format("20060102-150405") + "-" + task.Slug() + "-" + string(arm)
+	artifactsDir := filepath.Join(r.opts.ResultsDir, runSlug)
+	if err := os.MkdirAll(artifactsDir, 0755); err != nil {
+		return nil, fmt.Errorf("create artifacts dir: %w", err)
+	}
+	result := &RunResult{
+		Arm:          arm,
+		SWEBenchTask: &task,
+		Artifacts:    NewArtifactSet(artifactsDir),
+	}
+	workspace, err := os.MkdirTemp("", "trupal-swebench-run-"+task.Slug()+"-")
+	if err != nil {
+		return nil, err
+	}
+	result.ProjectDir = workspace
+	if !r.opts.KeepTemp {
+		defer os.RemoveAll(workspace)
+	}
+	if err := r.PrepareSWEBenchWorkspace(task, workspace); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(task.TestPatch) != "" {
+		if err := r.applySWEBenchTestPatch(task.TestPatch, workspace); err != nil {
+			return nil, fmt.Errorf("apply SWE-bench test patch before agent run: %w", err)
+		}
+	}
+	if err := r.writeScenarioConfig(workspace, Scenario{
+		ID:           task.Slug(),
+		AgentModel:   "gpt-5.4-mini",
+		TrupalConfig: TrupalConfig{SessionProvider: "codex", BrainProvider: "codex", BrainModel: "gpt-5.4-mini", BrainEffort: "medium"},
+	}, arm); err != nil {
+		return nil, err
+	}
+
+	sessionName, codexPaneID, trupalPaneID, err := r.startInteractiveCodexSession(workspace, task.Slug(), "gpt-5.4-mini")
+	if err != nil {
+		return nil, err
+	}
+	defer r.stopTmuxSession(sessionName)
+
+	if err := r.waitForCodexReady(codexPaneID); err != nil {
+		return nil, err
+	}
+	if err := r.waitForTrupalWatch(workspace, trupalPaneID); err != nil {
+		return nil, err
+	}
+	if arm == ArmSteer {
+		if err := r.sendKeys(trupalPaneID, "a"); err != nil {
+			return nil, err
+		}
+	}
+	result.StartedAt = time.Now()
+	if err := r.submitLiteral(codexPaneID, singleLinePrompt(benchmarkAgentPrompt(task.ProblemStatement))); err != nil {
+		return nil, err
+	}
+	finishedAt, exitCode, timedOut, err := r.waitForInteractiveCodex(result, codexPaneID, trupalPaneID)
+	if err != nil {
+		return nil, err
+	}
+	result.FinishedAt = finishedAt
+	result.Duration = finishedAt.Sub(result.StartedAt)
+	result.AgentDuration = result.Duration
+	result.AgentExitCode = exitCode
+	result.TimedOut = timedOut
+
+	if result.SessionJSONL == "" {
+		result.SessionJSONL, _ = FindLatestSessionJSONL(workspace, "codex")
+	}
+	evalOutput, err := r.runSWEBenchEvalCommand(task.EvalCommand, workspace)
+	result.SWEBenchEvalCommand = task.EvalCommand
+	if err := os.WriteFile(result.Artifacts.EvalOutputPath, []byte(evalOutput), 0644); err != nil {
+		return nil, err
+	}
+	if err == nil {
+		result.SWEBenchSolved = true
+	}
+	paneID, _ := ReadPaneID(filepath.Join(workspace, ".trupal.pid"))
+	if strings.TrimSpace(paneID) == "" {
+		paneID = trupalPaneID
+	}
+	if err := CollectArtifacts(workspace, result.Artifacts, result.SessionJSONL, paneID); err != nil {
+		return nil, err
+	}
+	result.SteeringEvents, _ = ParseSteeringEvents(result.Artifacts.SteerLogPath)
+	result.Score.SteeringEventCount = len(result.SteeringEvents)
+	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (r *Runner) PrepareSWEBenchTask(manifestPath, instanceID string) (SWEBenchTask, string, error) {
 	if strings.TrimSpace(manifestPath) == "" {
 		manifestPath = filepath.Join(r.opts.SWEBenchDir, "sample-task.json")
@@ -180,23 +282,17 @@ func (r *Runner) EvaluateSWEBenchTask(task SWEBenchTask, workspace, evalCommand 
 	if strings.TrimSpace(evalCommand) == "" {
 		evalCommand = task.EvalCommand
 	}
-	if strings.TrimSpace(evalCommand) == "" {
-		return "", fmt.Errorf("no evaluation command provided")
-	}
 	if strings.TrimSpace(task.TestPatch) != "" {
-		patchPath := filepath.Join(workspace, ".swebench-test.patch")
-		patch := task.TestPatch
-		if !strings.HasSuffix(patch, "\n") {
-			patch += "\n"
-		}
-		if err := os.WriteFile(patchPath, []byte(patch), 0644); err != nil {
+		if err := r.applySWEBenchTestPatch(task.TestPatch, workspace); err != nil {
 			return "", err
 		}
-		cmd := exec.Command("git", "apply", patchPath)
-		cmd.Dir = workspace
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("git apply test patch: %w\n%s", err, string(out))
-		}
+	}
+	return r.runSWEBenchEvalCommand(evalCommand, workspace)
+}
+
+func (r *Runner) runSWEBenchEvalCommand(evalCommand, workspace string) (string, error) {
+	if strings.TrimSpace(evalCommand) == "" {
+		return "", fmt.Errorf("no evaluation command provided")
 	}
 	cmd := exec.Command("sh", "-lc", evalCommand)
 	cmd.Dir = workspace
@@ -205,6 +301,23 @@ func (r *Runner) EvaluateSWEBenchTask(task SWEBenchTask, workspace, evalCommand 
 		return string(out), fmt.Errorf("evaluate swebench task: %w\n%s", err, string(out))
 	}
 	return string(out), nil
+}
+
+func (r *Runner) applySWEBenchTestPatch(testPatch, workspace string) error {
+	patchPath := filepath.Join(workspace, ".swebench-test.patch")
+	patch := testPatch
+	if !strings.HasSuffix(patch, "\n") {
+		patch += "\n"
+	}
+	if err := os.WriteFile(patchPath, []byte(patch), 0644); err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "apply", patchPath)
+	cmd.Dir = workspace
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git apply test patch: %w\n%s", err, string(out))
+	}
+	return nil
 }
 
 func (r *Runner) RunAll() ([]*RunResult, error) {
@@ -516,7 +629,11 @@ func (r *Runner) waitForCodexReady(codexPaneID string) error {
 }
 
 func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalPaneID string) (time.Time, int, bool, error) {
-	deadline := result.StartedAt.Add(result.Scenario.Timeout)
+	timeout := result.Scenario.Timeout
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	deadline := result.StartedAt.Add(timeout)
 	quietWindow := 8 * time.Second
 	if result.Arm == ArmSteer {
 		quietWindow = result.Scenario.SteeringCooldown + 5*time.Second
@@ -551,11 +668,8 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 		}
 
 		now := time.Now()
-		if result.SessionJSONL != "" && lastActivity.After(result.StartedAt) && now.Sub(lastActivity) >= quietWindow {
-			capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
-			if !strings.Contains(string(capture), "Working (") {
-				return now, 0, false, nil
-			}
+		if result.SessionJSONL != "" && detectBenchAgentStatus(result.SessionJSONL) == "idle" && lastActivity.After(result.StartedAt) && now.Sub(lastActivity) >= quietWindow {
+			return now, 0, false, nil
 		}
 		if !now.Before(deadline) {
 			_ = r.sendKeys(codexPaneID, "C-c")

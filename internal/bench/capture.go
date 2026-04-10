@@ -30,6 +30,7 @@ type ArtifactSet struct {
 	CodexPromptPath  string
 	CodexStdoutPath  string
 	CodexStderrPath  string
+	EvalOutputPath   string
 }
 
 func NewArtifactSet(rootDir string) ArtifactSet {
@@ -50,6 +51,7 @@ func NewArtifactSet(rootDir string) ArtifactSet {
 		CodexPromptPath:  filepath.Join(rootDir, "codex-audit-prompt.txt"),
 		CodexStdoutPath:  filepath.Join(rootDir, "codex.stdout.log"),
 		CodexStderrPath:  filepath.Join(rootDir, "codex.stderr.log"),
+		EvalOutputPath:   filepath.Join(rootDir, "eval.log"),
 	}
 }
 

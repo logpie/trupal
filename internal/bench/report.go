@@ -8,6 +8,9 @@ import (
 
 func WriteReport(path string, result *RunResult) error {
 	var b strings.Builder
+	if result.SWEBenchTask != nil {
+		return writeSWEBenchReport(path, result)
+	}
 	fmt.Fprintf(&b, "# TruPal Benchmark Report\n\n")
 	fmt.Fprintf(&b, "## Scenario\n\n")
 	fmt.Fprintf(&b, "- ID: `%s`\n", result.Scenario.ID)
@@ -109,6 +112,38 @@ func WriteReport(path string, result *RunResult) error {
 	return os.WriteFile(path, []byte(b.String()), 0644)
 }
 
+func writeSWEBenchReport(path string, result *RunResult) error {
+	var b strings.Builder
+	task := result.SWEBenchTask
+	fmt.Fprintf(&b, "# TruPal SWE-bench Report\n\n")
+	fmt.Fprintf(&b, "## Task\n\n")
+	fmt.Fprintf(&b, "- Instance: `%s`\n", task.InstanceID)
+	fmt.Fprintf(&b, "- Repo: `%s`\n", task.Repo)
+	fmt.Fprintf(&b, "- Arm: `%s`\n", result.Arm)
+	fmt.Fprintf(&b, "- Started: `%s`\n", result.StartedAt.Format("2006-01-02 15:04:05 MST"))
+	fmt.Fprintf(&b, "- Duration: `%s`\n", result.Duration)
+	fmt.Fprintf(&b, "- Agent exit code: `%d`\n", result.AgentExitCode)
+	if result.TimedOut {
+		fmt.Fprintf(&b, "- Timed out: `yes`\n")
+	}
+	fmt.Fprintf(&b, "- Solved: `%v`\n", result.SWEBenchSolved)
+	fmt.Fprintf(&b, "- Steering events: `%d`\n", len(result.SteeringEvents))
+	if result.SWEBenchEvalCommand != "" {
+		fmt.Fprintf(&b, "- Eval command: `%s`\n", result.SWEBenchEvalCommand)
+	}
+
+	fmt.Fprintf(&b, "\n## Artifacts\n\n")
+	fmt.Fprintf(&b, "- Report: `%s`\n", path)
+	fmt.Fprintf(&b, "- Eval log: `%s`\n", result.Artifacts.EvalOutputPath)
+	fmt.Fprintf(&b, "- Pane capture: `%s`\n", result.Artifacts.PaneCapturePath)
+	fmt.Fprintf(&b, "- Debug log: `%s`\n", result.Artifacts.DebugLogPath)
+	fmt.Fprintf(&b, "- TruPal log: `%s`\n", result.Artifacts.TrupalLogPath)
+	fmt.Fprintf(&b, "- Steer log: `%s`\n", result.Artifacts.SteerLogPath)
+	fmt.Fprintf(&b, "- Session JSONL: `%s`\n", result.Artifacts.SessionJSONLPath)
+	fmt.Fprintf(&b, "- Final project copy: `%s`\n", result.Artifacts.ProjectCopyDir)
+	return os.WriteFile(path, []byte(b.String()), 0644)
+}
+
 func WriteComparisonReport(path string, control, steer *RunResult) error {
 	var b strings.Builder
 	uplift := steer.Score.MatchedTruths - control.Score.MatchedTruths
@@ -140,6 +175,25 @@ func WriteComparisonReport(path string, control, steer *RunResult) error {
 	fmt.Fprintf(&b, "| Bugs fixed after nudge | %d | %d |\n", control.Score.BugsFixedAfterNudge, steer.Score.BugsFixedAfterNudge)
 	fmt.Fprintf(&b, "| Nudge conversion | %.1f%% | %.1f%% |\n", control.Score.NudgeConversionRate*100, steer.Score.NudgeConversionRate*100)
 
+	fmt.Fprintf(&b, "\n## Reports\n\n")
+	fmt.Fprintf(&b, "- control: `%s`\n", control.Artifacts.ReportPath)
+	fmt.Fprintf(&b, "- steer: `%s`\n", steer.Artifacts.ReportPath)
+	return os.WriteFile(path, []byte(b.String()), 0644)
+}
+
+func WriteSWEBenchComparisonReport(path string, control, steer *RunResult) error {
+	var b strings.Builder
+	task := control.SWEBenchTask
+	fmt.Fprintf(&b, "# TruPal SWE-bench Comparison\n\n")
+	fmt.Fprintf(&b, "## Task\n\n")
+	fmt.Fprintf(&b, "- Instance: `%s`\n", task.InstanceID)
+	fmt.Fprintf(&b, "- Repo: `%s`\n", task.Repo)
+	fmt.Fprintf(&b, "| Metric | control | steer |\n")
+	fmt.Fprintf(&b, "| --- | ---: | ---: |\n")
+	fmt.Fprintf(&b, "| Solved | %t | %t |\n", control.SWEBenchSolved, steer.SWEBenchSolved)
+	fmt.Fprintf(&b, "| Agent exit code | %d | %d |\n", control.AgentExitCode, steer.AgentExitCode)
+	fmt.Fprintf(&b, "| Duration | %s | %s |\n", control.Duration, steer.Duration)
+	fmt.Fprintf(&b, "| Steering events | %d | %d |\n", len(control.SteeringEvents), len(steer.SteeringEvents))
 	fmt.Fprintf(&b, "\n## Reports\n\n")
 	fmt.Fprintf(&b, "- control: `%s`\n", control.Artifacts.ReportPath)
 	fmt.Fprintf(&b, "- steer: `%s`\n", steer.Artifacts.ReportPath)
