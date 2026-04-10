@@ -15,6 +15,7 @@ Commands:
   run            Run one SWE-bench arm
   run-paired     Run control vs steer for one SWE-bench task
   lite           Run the local lite benchmark suite
+  pro-small-smoke  Prepare every manifest in swe-bench-pro-small
 
 Examples:
   scripts/trupal-swebench prepare \
@@ -24,6 +25,8 @@ Examples:
   scripts/trupal-swebench run-paired \
     --manifest bench/swebench-real/pallets__flask-5014.json \
     --instance pallets__flask-5014
+
+  scripts/trupal-swebench pro-small-smoke
 EOF
 }
 
@@ -53,6 +56,21 @@ case "$cmd" in
     ;;
   lite)
     exec go run "$ROOT_DIR/cmd/trupal-bench" run-lite "$@"
+    ;;
+  pro-small-smoke)
+    slice_dir="$ROOT_DIR/bench/swebench-pro-small"
+    manifest_list="$slice_dir/manifest-list.txt"
+    if [[ ! -f "$manifest_list" ]]; then
+      echo "missing manifest list: $manifest_list" >&2
+      exit 1
+    fi
+    while IFS= read -r manifest_name; do
+      [[ -z "$manifest_name" ]] && continue
+      manifest_path="$slice_dir/$manifest_name"
+      echo "=== PREPARE $manifest_name ==="
+      go run "$ROOT_DIR/cmd/trupal-bench" prepare-swebench --manifest "$manifest_path"
+      echo
+    done < "$manifest_list"
     ;;
   *)
     usage
