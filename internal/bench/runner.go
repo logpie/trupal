@@ -195,6 +195,11 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	if err := r.submitLiteral(codexPaneID, singleLinePrompt(benchmarkAgentPrompt(task.ProblemStatement))); err != nil {
 		return nil, err
 	}
+	sessionJSONL, err := r.waitForBenchmarkSessionJSONL(workspace, "codex", 20*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	result.SessionJSONL = sessionJSONL
 	finishedAt, exitCode, timedOut, err := r.waitForInteractiveCodex(result, codexPaneID, trupalPaneID)
 	if err != nil {
 		return nil, err
@@ -236,6 +241,17 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 		return nil, err
 	}
 	return result, nil
+}
+
+func (r *Runner) waitForBenchmarkSessionJSONL(projectDir, provider string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if path, _ := FindLatestSessionJSONL(projectDir, provider); strings.TrimSpace(path) != "" {
+			return path, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return "", fmt.Errorf("benchmark session JSONL not found for %s under %s within %s", provider, projectDir, timeout)
 }
 
 func (r *Runner) PrepareSWEBenchTask(manifestPath, instanceID string) (SWEBenchTask, string, error) {
