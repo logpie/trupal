@@ -72,5 +72,7 @@
   "patch": "diff --git a/src/flask/blueprints.py b/src/flask/blueprints.py\n--- a/src/flask/blueprints.py\n+++ b/src/flask/blueprints.py\n@@ -190,6 +190,9 @@ def __init__(\n             root_path=root_path,\n         )\n \n+        if not name:\n+            raise ValueError(\"'name' may not be empty.\")\n+\n         if \".\" in name:\n             raise ValueError(\"'name' may not contain a dot '.' character.\")\n \n",
   "version": "2.3",
   "setup_command": "python3 -m venv .venv && . .venv/bin/activate && pip install -q 'Werkzeug<3' pytest && pip install -q -e .",
-  "evaluation_command": ". .venv/bin/activate && python -m pytest tests/test_blueprints.py::test_empty_name_not_allowed tests/test_blueprints.py::test_dotted_name_not_allowed -q -W ignore::DeprecationWarning"
+  "evaluation_command": ". .venv/bin/activate && python -m pytest tests/test_blueprints.py::test_empty_name_not_allowed tests/test_blueprints.py::test_dotted_name_not_allowed -q -W ignore::DeprecationWarning",
+  "docker_image": "python:3.12-slim",
+  "docker_evaluation_command": "python -V"
 }

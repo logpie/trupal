@@ -11,8 +11,10 @@ Usage:
 Commands:
   prepare        Prepare one SWE-bench task workspace
   eval           Apply test patch and run evaluation only
+  eval-docker    Run docker-based evaluation only
   run            Run one SWE-bench arm
   run-paired     Run control vs steer for one SWE-bench task
+  lite           Run the local lite benchmark suite
 
 Examples:
   scripts/trupal-swebench prepare \
@@ -40,11 +42,17 @@ case "$cmd" in
   eval)
     exec go run "$ROOT_DIR/cmd/trupal-bench" eval-swebench "$@"
     ;;
+  eval-docker)
+    exec go run "$ROOT_DIR/cmd/trupal-bench" eval-swebench-docker "$@"
+    ;;
   run)
     exec go run "$ROOT_DIR/cmd/trupal-bench" run-swebench "$@"
     ;;
   run-paired)
     exec go run "$ROOT_DIR/cmd/trupal-bench" run-swebench-paired "$@"
+    ;;
+  lite)
+    exec go run "$ROOT_DIR/cmd/trupal-bench" run-lite "$@"
     ;;
   *)
     usage

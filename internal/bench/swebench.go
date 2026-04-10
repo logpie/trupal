@@ -22,6 +22,8 @@ type SWEBenchTask struct {
 	Version                string   `json:"version"`
 	SetupCommand           string   `json:"setup_command"`
 	EvalCommand            string   `json:"evaluation_command"`
+	DockerImage            string   `json:"docker_image"`
+	DockerEvalCommand      string   `json:"docker_evaluation_command"`
 	ManifestPath           string   `json:"-"`
 }
 
@@ -64,6 +66,8 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	task.Version = strings.TrimSpace(task.Version)
 	task.SetupCommand = strings.TrimSpace(task.SetupCommand)
 	task.EvalCommand = strings.TrimSpace(task.EvalCommand)
+	task.DockerImage = strings.TrimSpace(task.DockerImage)
+	task.DockerEvalCommand = strings.TrimSpace(task.DockerEvalCommand)
 	if task.InstanceID == "" {
 		return SWEBenchTask{}, fmt.Errorf("missing instance_id")
 	}

@@ -305,6 +305,27 @@ func (r *Runner) EvaluateSWEBenchTask(task SWEBenchTask, workspace, evalCommand 
 	return r.runSWEBenchEvalCommand(evalCommand, workspace)
 }
 
+func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string) (string, error) {
+	if strings.TrimSpace(task.DockerImage) == "" {
+		return "", fmt.Errorf("no docker_image provided")
+	}
+	if strings.TrimSpace(task.DockerEvalCommand) == "" {
+		return "", fmt.Errorf("no docker_evaluation_command provided")
+	}
+	cmd := exec.Command(
+		"docker", "run", "--rm",
+		"-v", workspace+":/workspace",
+		"-w", "/workspace",
+		task.DockerImage,
+		"sh", "-lc", task.DockerEvalCommand,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("docker eval: %w\n%s", err, string(out))
+	}
+	return string(out), nil
+}
+
 func (r *Runner) runSWEBenchEvalCommand(evalCommand, workspace string) (string, error) {
 	if strings.TrimSpace(evalCommand) == "" {
 		return "", fmt.Errorf("no evaluation command provided")

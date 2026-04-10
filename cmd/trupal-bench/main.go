@@ -37,6 +37,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "run-lite":
+		if err := runLite(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "prepare-swebench":
 		if err := prepareSWEBench(repoRoot, os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -57,10 +62,45 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "eval-swebench-docker":
+		if err := evalSWEBenchDocker(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(1)
 	}
+}
+
+func runLite(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("run-lite", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	codexCmd := fs.String("codex-cmd", "", "optional shell command for Codex baseline audit")
+	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		CodexCmd:     *codexCmd,
+		KeepTemp:     *keepTemp,
+	})
+	if err != nil {
+		return err
+	}
+	results, err := runner.RunAll()
+	if err != nil {
+		return err
+	}
+	summaryPath := filepath.Join(*resultsDir, "lite-summary.md")
+	if err := bench.WriteAggregateReport(summaryPath, results); err != nil {
+		return err
+	}
+	fmt.Println(summaryPath)
+	return nil
 }
 
 func prepareSWEBench(repoRoot string, args []string) error {
@@ -136,6 +176,39 @@ func evalSWEBench(repoRoot string, args []string) error {
 	}
 	fmt.Print(out)
 	return nil
+}
+
+func evalSWEBenchDocker(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("eval-swebench-docker", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	swebenchDir := fs.String("swebench-dir", filepath.Join(repoRoot, "bench", "swebench-sample"), "directory containing a SWE-bench manifest snapshot")
+	manifest := fs.String("manifest", "", "path to a local SWE-bench task manifest JSON file")
+	instance := fs.String("instance", "", "SWE-bench instance id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		SWEBenchDir:  *swebenchDir,
+	})
+	if err != nil {
+		return err
+	}
+	task, workspace, err := runner.PrepareSWEBenchTask(*manifest, *instance)
+	if err != nil {
+		return err
+	}
+	if err := runner.PrepareSWEBenchWorkspace(task, workspace); err != nil {
+		return err
+	}
+	if err := runner.SetupSWEBenchWorkspace(task, workspace); err != nil {
+		return err
+	}
+	out, err := runner.EvaluateSWEBenchTaskDocker(task, workspace)
+	fmt.Print(out)
+	return err
 }
 
 func runSWEBench(repoRoot string, args []string) error {
@@ -360,8 +433,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  trupal-bench run [flags] <scenario>")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-paired [flags] <scenario>")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-all [flags]")
+	fmt.Fprintln(os.Stderr, "  trupal-bench run-lite [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench prepare-swebench [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench eval-swebench [flags]")
+	fmt.Fprintln(os.Stderr, "  trupal-bench eval-swebench-docker [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-swebench [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-swebench-paired [flags]")
 }
