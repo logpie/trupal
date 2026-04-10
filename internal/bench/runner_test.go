@@ -67,3 +67,29 @@ func TestEffectiveBenchmarkSteeringPolicyPreservesScenarioValues(t *testing.T) {
 		t.Fatalf("cooldown = %s, want 45s", cooldown)
 	}
 }
+
+func TestTrupalTUIReadyAcceptsFullControls(t *testing.T) {
+	text := `
+ ◉☰ TRUPAL  2m
+ watch  codex · gpt-5.4-mini · repo · active
+ brain  codex/gpt-5.4-mini · starting · steer manual
+ ...
+ move j/k  page pgup/pgdn  details o  issues p  send s  auto a
+`
+	if !trupalTUIReady(text) {
+		t.Fatalf("trupalTUIReady() = false, want true")
+	}
+}
+
+func TestTrupalTUIReadyAcceptsTruncatedFooterWhenHeaderIsLive(t *testing.T) {
+	text := `
+ ◉☰ TRUPAL  21s
+ watch  codex · trupal-swebench-run-in… · starting
+ brain  codex/gpt-5.4-mini · starting · steer manual
+ ...
+ move j/k  page pgup/pgdn  details o  issues …
+`
+	if !trupalTUIReady(text) {
+		t.Fatalf("trupalTUIReady() = false, want true for live TUI header")
+	}
+}

@@ -383,6 +383,7 @@ func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string)
 	}
 	cmd := exec.Command(
 		"docker", "run", "--rm",
+		"--entrypoint", "bash",
 		"-v", workspace+":/workspace",
 		"-w", "/workspace",
 		task.DockerImage,
@@ -728,13 +729,21 @@ func (r *Runner) waitForTrupalReady(trupalPaneID string) error {
 	for time.Now().Before(deadline) {
 		capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", trupalPaneID).CombinedOutput()
 		text := string(capture)
-		if strings.Contains(text, "send s") && strings.Contains(text, "auto a") {
+		if trupalTUIReady(text) {
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", trupalPaneID).CombinedOutput()
 	return fmt.Errorf("trupal TUI not ready for steering toggle:\n%s", string(capture))
+}
+
+func trupalTUIReady(text string) bool {
+	if strings.Contains(text, "send s") && strings.Contains(text, "auto a") {
+		return true
+	}
+	return strings.Contains(text, "TRUPAL") &&
+		(strings.Contains(text, "steer manual") || strings.Contains(text, "steer auto"))
 }
 
 func (r *Runner) waitForTrupalAuto(trupalPaneID string) error {
