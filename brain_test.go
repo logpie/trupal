@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -109,6 +110,69 @@ func TestNotifyErrorsWithoutResultEvent(t *testing.T) {
 
 	if _, err := brain.Notify("check this", "[]"); err == nil {
 		t.Fatal("expected Notify() to fail without a result event")
+	}
+}
+
+func TestParseBrainJSONExtractsFencedJSON(t *testing.T) {
+	text := "Sure — here is the review.\n```json\n{\"info\":[\"watch the cache\"],\"nudges\":[{\"severity\":\"warn\",\"message\":\"you need a test\"}],\"resolved_findings\":[]}\n```"
+	resp, err := parseBrainJSON(text)
+	if err != nil {
+		t.Fatalf("parseBrainJSON() error = %v", err)
+	}
+	if got := resp.InfoLines(); !reflect.DeepEqual(got, []string{"watch the cache"}) {
+		t.Fatalf("InfoLines() = %#v, want fenced JSON info", got)
+	}
+	if len(resp.Nudges) != 1 || resp.Nudges[0].Message != "you need a test" {
+		t.Fatalf("Nudges = %#v, want recovered fenced nudge", resp.Nudges)
+	}
+}
+
+func TestParseBrainJSONSkipsUnrelatedObjectsAndFindsBrainPayload(t *testing.T) {
+	text := `prefix {"foo":"bar"} middle {"info":[],"nudges":[{"severity":"error","message":"hey, this is the real issue"}],"resolved_findings":["f-1"]} suffix`
+	resp, err := parseBrainJSON(text)
+	if err != nil {
+		t.Fatalf("parseBrainJSON() error = %v", err)
+	}
+	if len(resp.Nudges) != 1 || resp.Nudges[0].Message != "hey, this is the real issue" {
+		t.Fatalf("Nudges = %#v, want recovered brain payload", resp.Nudges)
+	}
+	if !reflect.DeepEqual(resp.ResolvedFindings, []string{"f-1"}) {
+		t.Fatalf("ResolvedFindings = %#v, want [f-1]", resp.ResolvedFindings)
+	}
+}
+
+func TestBalancedJSONObjectCandidatesHandlesBracesInStrings(t *testing.T) {
+	text := `noise {"info":["brace { inside } string"],"nudges":[{"severity":"warn","message":"you should keep {this} intact"}],"resolved_findings":[]} tail`
+	candidates := balancedJSONObjectCandidates(text)
+	if len(candidates) == 0 {
+		t.Fatal("balancedJSONObjectCandidates() returned no candidates")
+	}
+	resp, err := parseBrainJSON(text)
+	if err != nil {
+		t.Fatalf("parseBrainJSON() error = %v", err)
+	}
+	if got := resp.InfoLines(); !reflect.DeepEqual(got, []string{"brace { inside } string"}) {
+		t.Fatalf("InfoLines() = %#v, want string with braces preserved", got)
+	}
+	if len(resp.Nudges) != 1 || resp.Nudges[0].Message != "you should keep {this} intact" {
+		t.Fatalf("Nudges = %#v, want brace-containing message", resp.Nudges)
+	}
+}
+
+func TestRecoverLooseBrainResponseSalvagesInvalidJSONNudge(t *testing.T) {
+	text := `prefix {"info":["cache drift"],"nudges":[{"severity":"warn","message":"you need a test","verified":"route missing",}],"resolved_findings":["f-1"]} suffix`
+	resp := recoverLooseBrainResponse(text)
+	if got := resp.InfoLines(); !reflect.DeepEqual(got, []string{"cache drift"}) {
+		t.Fatalf("InfoLines() = %#v, want recovered info", got)
+	}
+	if !reflect.DeepEqual(resp.ResolvedFindings, []string{"f-1"}) {
+		t.Fatalf("ResolvedFindings = %#v, want [f-1]", resp.ResolvedFindings)
+	}
+	if len(resp.Nudges) != 1 {
+		t.Fatalf("Nudges = %#v, want exactly one recovered nudge", resp.Nudges)
+	}
+	if resp.Nudges[0].Message != "you need a test" || resp.Nudges[0].Verified != "route missing" {
+		t.Fatalf("Recovered nudge = %#v, want message+verified preserved", resp.Nudges[0])
 	}
 }
 

@@ -41,7 +41,7 @@ func NewArtifactSet(rootDir string) ArtifactSet {
 		TrupalLogPath:    filepath.Join(rootDir, "trupal.log"),
 		SteerLogPath:     filepath.Join(rootDir, "trupal.steer.jsonl"),
 		SessionJSONLPath: filepath.Join(rootDir, "session.jsonl"),
-		ProjectCopyDir:   filepath.Join(rootDir, "project"),
+		ProjectCopyDir:   filepath.Join(rootDir, "_project"),
 		AgentStdoutPath:  filepath.Join(rootDir, "agent.stdout.log"),
 		AgentStderrPath:  filepath.Join(rootDir, "agent.stderr.log"),
 		ScenarioYAMLPath: filepath.Join(rootDir, "scenario.yaml"),

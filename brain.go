@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,6 +58,15 @@ type BrainUsage struct {
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
+func (u BrainUsage) add(other BrainUsage) BrainUsage {
+	return BrainUsage{
+		InputTokens:              u.InputTokens + other.InputTokens,
+		OutputTokens:             u.OutputTokens + other.OutputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens + other.CacheCreationInputTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens + other.CacheReadInputTokens,
+	}
+}
+
 // BrainStats is the cumulative token and cost usage for the current trupal session.
 type BrainStats struct {
 	Provider                 string
@@ -82,6 +93,17 @@ func (s *BrainStats) addTurn(usage BrainUsage, costUSD float64) {
 	s.TotalCacheReadTokens += accounted.CacheReadInputTokens
 	s.TotalCostUSD += costUSD
 	s.LastUsage = usage
+	s.LastCostUSD = costUSD
+}
+
+func (s *BrainStats) addCodexTurn(rawUsage, accountedUsage BrainUsage, costUSD float64) {
+	s.TurnCount++
+	s.TotalInputTokens += accountedUsage.InputTokens
+	s.TotalOutputTokens += accountedUsage.OutputTokens
+	s.TotalCacheCreationTokens += accountedUsage.CacheCreationInputTokens
+	s.TotalCacheReadTokens += accountedUsage.CacheReadInputTokens
+	s.TotalCostUSD += costUSD
+	s.LastUsage = rawUsage
 	s.LastCostUSD = costUSD
 }
 
@@ -514,57 +536,43 @@ func (b *Brain) notifyCodex(reason, findingsJSON string) (*BrainResponse, error)
 	message := brainNotifyMessage(reason, findingsJSON)
 	prompt := codexPromptForTurn(b, message)
 	effort := effectiveBrainEffort(b.cfg, reason)
-
-	args := buildCodexBrainArgs(b, prompt, effort)
-
 	Debugf("[brain] codex exec notify: %s", truncate(message, 200))
-	start := time.Now()
-	command, err := brainCommand(ProviderCodex)
+	baseUsage := b.Stats().LastUsage
+	text, rawUsage, threadID, elapsed, err := b.runCodexBrainExec(prompt, effort)
 	if err != nil {
 		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), brainNotifyTimeout(b.cfg.BrainEffort))
-	defer cancel()
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	out, err := cmd.CombinedOutput()
-	elapsed := time.Since(start)
-	if ctx.Err() == context.DeadlineExceeded {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return nil, fmt.Errorf("codex exec brain timed out after %s", elapsed)
-	}
-	if err != nil {
-		Debugf("[brain] codex exec failed after %s: %v", elapsed, err)
-		return nil, fmt.Errorf("codex exec brain: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-
-	text, usage, threadID, parseErr := parseCodexExecOutput(out)
-	if parseErr != nil {
-		return nil, parseErr
-	}
-	if text == "" {
-		return nil, fmt.Errorf("codex brain returned empty output after %s", elapsed)
 	}
 	if threadID != "" {
 		b.codexThreadID = threadID
 	}
-
 	Debugf("[brain] codex response received after %s (%d chars)", elapsed, len(text))
 	resp, parseErr := parseBrainJSON(text)
+	accountedUsage := normalizeUsageForAccounting(b.cfg.BrainProvider, rawUsage, baseUsage)
 	if parseErr != nil {
 		Debugf("[brain] codex JSON parse failed, using raw text: %v", parseErr)
-		resp = &BrainResponse{Reasoning: text}
+		Debugf("[brain] codex raw response preview: %s", truncate(strings.ReplaceAll(text, "\n", " "), 500))
+		repairedResp, repairedRawUsage, repairedElapsed, repairErr := b.retryCodexBrainJSONRepair()
+		if repairErr != nil {
+			Debugf("[brain] codex JSON repair failed: %v", repairErr)
+			resp = recoverLooseBrainResponse(text)
+			if len(resp.Nudges) == 0 && len(resp.InfoLines()) == 0 && len(resp.ResolvedFindings) == 0 {
+				resp = &BrainResponse{Reasoning: text}
+			}
+		} else {
+			resp = repairedResp
+			accountedUsage = accountedUsage.add(normalizeUsageForAccounting(b.cfg.BrainProvider, repairedRawUsage, rawUsage))
+			rawUsage = repairedRawUsage
+			elapsed += repairedElapsed
+			Debugf("[brain] codex JSON repair succeeded after %s", repairedElapsed)
+		}
 	}
-	resp.Usage = usage
+	resp.Usage = accountedUsage
 
 	b.statsMu.Lock()
-	accountedUsage := normalizeUsageForAccounting(b.cfg.BrainProvider, usage, b.stats.LastUsage)
 	b.stats.Provider = b.cfg.BrainProvider
 	b.stats.CostKnown = false
 	b.stats.noteTurn(elapsed, effort)
-	b.stats.addTurn(usage, 0)
+	b.stats.addCodexTurn(rawUsage, accountedUsage, 0)
 	b.statsMu.Unlock()
 	Debugf("[brain] usage: in=%d out=%d cache_read=%d cache_create=%d cost=$0.0000",
 		accountedUsage.InputTokens,
@@ -574,6 +582,56 @@ func (b *Brain) notifyCodex(reason, findingsJSON string) (*BrainResponse, error)
 	)
 	resp.Usage = accountedUsage
 	return resp, nil
+}
+
+func (b *Brain) runCodexBrainExec(prompt, effort string) (text string, usage BrainUsage, threadID string, elapsed time.Duration, err error) {
+	args := buildCodexBrainArgs(b, prompt, effort)
+	start := time.Now()
+	command, err := brainCommand(ProviderCodex)
+	if err != nil {
+		return "", BrainUsage{}, "", 0, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), brainNotifyTimeout(b.cfg.BrainEffort))
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.CombinedOutput()
+	elapsed = time.Since(start)
+	if ctx.Err() == context.DeadlineExceeded {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return "", BrainUsage{}, "", elapsed, fmt.Errorf("codex exec brain timed out after %s", elapsed)
+	}
+	if err != nil {
+		Debugf("[brain] codex exec failed after %s: %v", elapsed, err)
+		return "", BrainUsage{}, "", elapsed, fmt.Errorf("codex exec brain: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	text, usage, threadID, err = parseCodexExecOutput(out)
+	if err != nil {
+		return "", BrainUsage{}, "", elapsed, err
+	}
+	if text == "" {
+		return "", BrainUsage{}, "", elapsed, fmt.Errorf("codex brain returned empty output after %s", elapsed)
+	}
+	return text, usage, threadID, elapsed, nil
+}
+
+func (b *Brain) retryCodexBrainJSONRepair() (*BrainResponse, BrainUsage, time.Duration, error) {
+	repairPrompt := "Your previous answer was not valid JSON. Re-emit the same analysis as exactly one JSON object matching the existing TruPal schema. Return JSON only: no prose, no markdown, no code fences."
+	text, usage, threadID, elapsed, err := b.runCodexBrainExec(repairPrompt, "low")
+	if err != nil {
+		return nil, BrainUsage{}, elapsed, err
+	}
+	if threadID != "" {
+		b.codexThreadID = threadID
+	}
+	resp, parseErr := parseBrainJSON(text)
+	if parseErr != nil {
+		Debugf("[brain] codex JSON repair preview: %s", truncate(strings.ReplaceAll(text, "\n", " "), 500))
+		return nil, BrainUsage{}, elapsed, parseErr
+	}
+	return resp, usage, elapsed, nil
 }
 
 func codexPromptForTurn(b *Brain, message string) string {
@@ -771,16 +829,197 @@ func parseBrainJSON(text string) (*BrainResponse, error) {
 	if err := json.Unmarshal([]byte(text), &resp); err == nil {
 		return &resp, nil
 	}
-
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start >= 0 && end > start {
-		if err := json.Unmarshal([]byte(text[start:end+1]), &resp); err == nil {
+	for _, candidate := range brainJSONCandidates(text) {
+		if !looksLikeBrainJSON(candidate) {
+			continue
+		}
+		if err := json.Unmarshal([]byte(candidate), &resp); err == nil {
 			return &resp, nil
 		}
 	}
 
 	return nil, fmt.Errorf("no valid JSON in brain response")
+}
+
+func looksLikeBrainJSON(candidate string) bool {
+	return strings.Contains(candidate, `"nudges"`) ||
+		strings.Contains(candidate, `"info"`) ||
+		strings.Contains(candidate, `"observations"`) ||
+		strings.Contains(candidate, `"resolved_findings"`) ||
+		strings.Contains(candidate, `"reasoning"`)
+}
+
+func brainJSONCandidates(text string) []string {
+	var candidates []string
+	seen := map[string]bool{}
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || seen[candidate] {
+			return
+		}
+		seen[candidate] = true
+		candidates = append(candidates, candidate)
+	}
+	for _, block := range fencedJSONBlocks(text) {
+		add(block)
+	}
+	for _, block := range balancedJSONObjectCandidates(text) {
+		add(block)
+	}
+	return candidates
+}
+
+var (
+	jsonStringFieldRE = regexp.MustCompile(`"(?P<field>severity|message|claim|verified|impact|tell|reasoning)"\s*:\s*"((?:\\.|[^"\\])*)"`)
+	jsonInfoFieldRE   = regexp.MustCompile(`"(?:info|observations)"\s*:\s*\[((?:\s*"(?:\\.|[^"\\])*"\s*,?)*)\]`)
+	jsonResolvedRE    = regexp.MustCompile(`"resolved_findings"\s*:\s*\[((?:\s*"(?:\\.|[^"\\])*"\s*,?)*)\]`)
+	jsonQuotedRE      = regexp.MustCompile(`"((?:\\.|[^"\\])*)"`)
+)
+
+func recoverLooseBrainResponse(text string) *BrainResponse {
+	resp := &BrainResponse{}
+	for _, candidate := range brainJSONCandidates(text) {
+		if len(resp.InfoLines()) == 0 {
+			if info := recoverJSONArrayStrings(jsonInfoFieldRE, candidate); len(info) > 0 {
+				resp.Info = info
+			}
+		}
+		if len(resp.ResolvedFindings) == 0 {
+			if resolved := recoverJSONArrayStrings(jsonResolvedRE, candidate); len(resolved) > 0 {
+				resp.ResolvedFindings = resolved
+			}
+		}
+		fields := jsonStringFieldRE.FindAllStringSubmatch(candidate, -1)
+		if len(fields) == 0 {
+			continue
+		}
+		var current BrainNudge
+		var haveMessage bool
+		for _, match := range fields {
+			fieldName := match[1]
+			value, err := strconv.Unquote(`"` + match[2] + `"`)
+			if err != nil {
+				value = match[2]
+			}
+			switch fieldName {
+			case "severity":
+				if haveMessage {
+					resp.Nudges = append(resp.Nudges, current)
+					current = BrainNudge{}
+					haveMessage = false
+				}
+				current.Severity = value
+			case "message":
+				if haveMessage {
+					resp.Nudges = append(resp.Nudges, current)
+					current = BrainNudge{}
+				}
+				current.Message = value
+				haveMessage = true
+			case "claim":
+				current.Claim = value
+			case "verified":
+				current.Verified = value
+			case "impact":
+				current.Impact = value
+			case "tell":
+				current.Tell = value
+			case "reasoning":
+				current.Reasoning = value
+			}
+		}
+		if haveMessage {
+			resp.Nudges = append(resp.Nudges, current)
+		}
+		if len(resp.Nudges) > 0 {
+			break
+		}
+	}
+	return resp
+}
+
+func recoverJSONArrayStrings(re *regexp.Regexp, text string) []string {
+	match := re.FindStringSubmatch(text)
+	if len(match) < 2 {
+		return nil
+	}
+	items := jsonQuotedRE.FindAllStringSubmatch(match[1], -1)
+	var out []string
+	for _, item := range items {
+		value, err := strconv.Unquote(`"` + item[1] + `"`)
+		if err != nil {
+			value = item[1]
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func fencedJSONBlocks(text string) []string {
+	var out []string
+	lines := strings.Split(text, "\n")
+	var inFence bool
+	var buf []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			if inFence {
+				out = append(out, strings.Join(buf, "\n"))
+				inFence = false
+				buf = nil
+			} else {
+				inFence = true
+				buf = nil
+			}
+			continue
+		}
+		if inFence {
+			buf = append(buf, line)
+		}
+	}
+	return out
+}
+
+func balancedJSONObjectCandidates(text string) []string {
+	var out []string
+	runes := []rune(text)
+	for start := 0; start < len(runes); start++ {
+		if runes[start] != '{' {
+			continue
+		}
+		depth := 0
+		inString := false
+		escaped := false
+		for end := start; end < len(runes); end++ {
+			r := runes[end]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if inString {
+				if r == '\\' {
+					escaped = true
+				} else if r == '"' {
+					inString = false
+				}
+				continue
+			}
+			switch r {
+			case '"':
+				inString = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					out = append(out, string(runes[start:end+1]))
+					start = end
+					end = len(runes)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // Stop kills the brain subprocess. Non-blocking — closes stdin to unblock Notify.

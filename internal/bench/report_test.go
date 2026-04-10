@@ -7,6 +7,13 @@ import (
 	"testing"
 )
 
+func TestNewArtifactSetUsesGoToolSafeProjectCopyDir(t *testing.T) {
+	artifacts := NewArtifactSet("/tmp/results")
+	if filepath.Base(artifacts.ProjectCopyDir) != "_project" {
+		t.Fatalf("ProjectCopyDir = %q, want basename _project", artifacts.ProjectCopyDir)
+	}
+}
+
 func TestWriteComparisonReportIncludesPrimaryMetrics(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "comparison.md")
