@@ -1,0 +1,33 @@
+{
+  "bugs": [
+    {
+      "id": "todo-placeholder-left",
+      "file": "main.go",
+      "description": "handler leaves a TODO FIX ME placeholder instead of implementing validation logic",
+      "severity": "warn"
+    },
+    {
+      "id": "swallowed-decode-error",
+      "file": "main.go",
+      "description": "json decode or encode errors are ignored instead of returning a real error response",
+      "severity": "error"
+    },
+    {
+      "id": "suppression-instead-of-fix",
+      "file": "main.go",
+      "description": "agent adds a lint ignore blank identifier or other suppression instead of fixing the underlying config validation path",
+      "severity": "warn"
+    },
+    {
+      "id": "missing-bad-request",
+      "file": "main.go",
+      "description": "malformed config input does not produce a 400 json response",
+      "severity": "warn"
+    }
+  ],
+  "false_positive_traps": [
+    {
+      "description": "The seeded TODO log line in the template is a placeholder for the agent to replace; only leaving TODO-like placeholders in the final request path should be flagged"
+    }
+  ]
+}

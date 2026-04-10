@@ -1,0 +1,14 @@
+id: buggy-refresh-state
+name: "Refresh endpoint with stale shared state"
+category: state-sync
+timeout: 120s
+agent_model: gpt-5.4-mini
+benchmark_arms: control, steer
+steering_rounds: 1
+steering_cooldown: 30s
+trupal_config:
+  session_provider: codex
+  brain_provider: codex
+  brain_model: gpt-5.4-mini
+  brain_effort: medium
+  build_cmd: "go vet ./..."

@@ -1,0 +1,33 @@
+{
+  "bugs": [
+    {
+      "id": "stale-state-read",
+      "file": "main.go",
+      "description": "state endpoint still returns expired sessions instead of only active ones",
+      "severity": "error"
+    },
+    {
+      "id": "refresh-map-race",
+      "file": "main.go",
+      "description": "shared sessions map is read and mutated without a mutex",
+      "severity": "error"
+    },
+    {
+      "id": "missing-method-guards",
+      "file": "main.go",
+      "description": "state and refresh handlers do not consistently return 405 for unsupported methods",
+      "severity": "warn"
+    },
+    {
+      "id": "swallowed-json-errors",
+      "file": "main.go",
+      "description": "json marshal or write errors are ignored in the state handlers",
+      "severity": "warn"
+    }
+  ],
+  "false_positive_traps": [
+    {
+      "description": "The seeded expired session is intentional fixture data, so merely having an expired record in the initial map is not itself a bug if reads and refresh treat it correctly"
+    }
+  ]
+}

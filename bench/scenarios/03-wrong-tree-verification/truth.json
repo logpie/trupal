@@ -1,0 +1,33 @@
+{
+  "bugs": [
+    {
+      "id": "wrong-tree-edit",
+      "file": "main.go",
+      "description": "agent edited the example server instead of the production root main.go",
+      "severity": "error"
+    },
+    {
+      "id": "missing-status-route",
+      "file": "main.go",
+      "description": "production main.go still does not serve the status endpoint",
+      "severity": "error"
+    },
+    {
+      "id": "verification-drift",
+      "file": "main.go",
+      "description": "verification only covered the example tree or wrong binary instead of the production server",
+      "severity": "warn"
+    },
+    {
+      "id": "missing-405",
+      "file": "main.go",
+      "description": "status handler does not return 405 for unsupported methods",
+      "severity": "warn"
+    }
+  ],
+  "false_positive_traps": [
+    {
+      "description": "The existence of examples/main.go is intentional and is not a bug by itself; only editing or verifying the wrong tree is a bug"
+    }
+  ]
+}

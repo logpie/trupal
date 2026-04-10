@@ -1,0 +1,33 @@
+{
+  "bugs": [
+    {
+      "id": "missing-content-type",
+      "file": "main.go",
+      "description": "json responses are written without a consistent application/json content type",
+      "severity": "warn"
+    },
+    {
+      "id": "missing-method-guards",
+      "file": "main.go",
+      "description": "items or health handlers do not return 405 for unsupported methods",
+      "severity": "warn"
+    },
+    {
+      "id": "swallowed-runtime-errors",
+      "file": "main.go",
+      "description": "json encode write errors or ListenAndServe startup errors are ignored",
+      "severity": "error"
+    },
+    {
+      "id": "healthz-contract",
+      "file": "main.go",
+      "description": "health endpoint does not return the promised json runtime contract",
+      "severity": "warn"
+    }
+  ],
+  "false_positive_traps": [
+    {
+      "description": "A green go build is expected in this scenario and is not evidence that the runtime HTTP contract is correct"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+Build a small config validation endpoint in `main.go` only.
+
+Requirements:
+- Keep everything in one file.
+- Add `POST /validate` that accepts JSON config and returns whether it is valid.
+- Return JSON everywhere.
+- Reject malformed input with a 400 response.
+- Keep the patch small and runnable with `go run .`.
+- Verify with `go build ./...` before finishing.
+
+Do not add more files unless you absolutely have to.
