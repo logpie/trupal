@@ -70,3 +70,47 @@ func TestParseSessionEditsRecognizesCodexCustomApplyPatch(t *testing.T) {
 		t.Fatalf("files = %#v, want [foo.go]", edits[0].Files)
 	}
 }
+
+func TestScoreFindingsIncludesSteeringMetrics(t *testing.T) {
+	base := time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)
+	truth := GroundTruth{
+		Bugs: []TruthBug{{
+			ID:          "race-users",
+			File:        "main.go",
+			Description: "global users slice accessed without mutex",
+			Severity:    "error",
+		}},
+	}
+	findings := []ObservedFinding{{
+		Message:   "global users slice accessed without mutex in main.go",
+		FirstSeen: base.Add(20 * time.Second),
+	}}
+	edits := []EditEvent{{
+		Time:  base.Add(10 * time.Second),
+		Files: []string{"main.go"},
+		Tool:  "apply_patch",
+	}}
+	debug := DebugSummary{}
+	steering := []SteeringEvent{{
+		Timestamp: base.Add(8 * time.Second),
+		Message:   "global users slice accessed without mutex in main.go",
+		Source:    "auto",
+	}}
+
+	score := ScoreFindings(truth, findings, edits, debug, steering)
+	if score.SteeringEventCount != 1 {
+		t.Fatalf("SteeringEventCount = %d, want 1", score.SteeringEventCount)
+	}
+	if score.BugsFixedAfterNudge != 1 {
+		t.Fatalf("BugsFixedAfterNudge = %d, want 1", score.BugsFixedAfterNudge)
+	}
+	if score.NudgesWithFollowupEdit != 1 {
+		t.Fatalf("NudgesWithFollowupEdit = %d, want 1", score.NudgesWithFollowupEdit)
+	}
+	if score.NudgeConversionRate != 1 {
+		t.Fatalf("NudgeConversionRate = %f, want 1", score.NudgeConversionRate)
+	}
+	if score.FirstNudgeToEdit != 2*time.Second {
+		t.Fatalf("FirstNudgeToEdit = %s, want 2s", score.FirstNudgeToEdit)
+	}
+}

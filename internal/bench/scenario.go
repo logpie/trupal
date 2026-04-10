@@ -11,13 +11,16 @@ import (
 )
 
 type Scenario struct {
-	ID           string
-	Name         string
-	Category     string
-	Timeout      time.Duration
-	ClaudeModel  string
-	AgentModel   string
-	TrupalConfig TrupalConfig
+	ID               string
+	Name             string
+	Category         string
+	Timeout          time.Duration
+	ClaudeModel      string
+	AgentModel       string
+	BenchmarkArms    []BenchmarkArm
+	SteeringRounds   int
+	SteeringCooldown time.Duration
+	TrupalConfig     TrupalConfig
 
 	RootDir     string
 	ScenarioYML string
@@ -36,6 +39,13 @@ type TrupalConfig struct {
 	BrainEffort     string
 	BuildCmd        string
 }
+
+type BenchmarkArm string
+
+const (
+	ArmControl BenchmarkArm = "control"
+	ArmSteer   BenchmarkArm = "steer"
+)
 
 type GroundTruth struct {
 	Bugs               []TruthBug          `json:"bugs"`
@@ -70,6 +80,13 @@ func (s Scenario) EffectiveAgentModel() string {
 		return strings.TrimSpace(s.AgentModel)
 	}
 	return strings.TrimSpace(s.ClaudeModel)
+}
+
+func (s Scenario) EffectiveBenchmarkArms() []BenchmarkArm {
+	if len(s.BenchmarkArms) == 0 {
+		return []BenchmarkArm{ArmControl}
+	}
+	return append([]BenchmarkArm(nil), s.BenchmarkArms...)
 }
 
 func LoadScenario(rootDir, name string) (Scenario, error) {
@@ -163,6 +180,22 @@ func loadScenarioDir(dir string) (Scenario, error) {
 	if scenario.EffectiveAgentModel() == "" {
 		return Scenario{}, fmt.Errorf("scenario %s is missing agent model", scenario.ID)
 	}
+	if len(scenario.BenchmarkArms) == 0 {
+		scenario.BenchmarkArms = []BenchmarkArm{ArmControl}
+	}
+	for _, arm := range scenario.BenchmarkArms {
+		switch arm {
+		case ArmControl, ArmSteer:
+		default:
+			return Scenario{}, fmt.Errorf("scenario %s has unsupported benchmark arm %q", scenario.ID, arm)
+		}
+	}
+	if scenario.SteeringRounds <= 0 {
+		scenario.SteeringRounds = 1
+	}
+	if scenario.SteeringCooldown <= 0 {
+		scenario.SteeringCooldown = 30 * time.Second
+	}
 
 	return scenario, nil
 }
@@ -216,6 +249,20 @@ func parseScenarioYAML(raw []byte) (Scenario, error) {
 				scenario.ClaudeModel = value
 			case "codex_model", "agent_model":
 				scenario.AgentModel = value
+			case "benchmark_arms":
+				scenario.BenchmarkArms = parseBenchmarkArms(value)
+			case "steering_rounds":
+				var rounds int
+				if _, err := fmt.Sscanf(value, "%d", &rounds); err != nil {
+					return Scenario{}, fmt.Errorf("parse steering_rounds %q: %w", value, err)
+				}
+				scenario.SteeringRounds = rounds
+			case "steering_cooldown":
+				d, err := time.ParseDuration(value)
+				if err != nil {
+					return Scenario{}, fmt.Errorf("parse steering_cooldown %q: %w", value, err)
+				}
+				scenario.SteeringCooldown = d
 			default:
 				return Scenario{}, fmt.Errorf("unsupported scenario key %q on line %d", key, lineNo+1)
 			}
@@ -256,4 +303,20 @@ func parseYAMLScalar(raw string) string {
 		}
 	}
 	return value
+}
+
+func parseBenchmarkArms(raw string) []BenchmarkArm {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	arms := make([]BenchmarkArm, 0, len(parts))
+	for _, part := range parts {
+		arm := BenchmarkArm(strings.ToLower(strings.TrimSpace(part)))
+		if arm == "" {
+			continue
+		}
+		arms = append(arms, arm)
+	}
+	return arms
 }

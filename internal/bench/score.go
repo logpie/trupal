@@ -57,21 +57,26 @@ type LatencySummary struct {
 }
 
 type Scorecard struct {
-	MatchedTruths      int
-	TotalTruths        int
-	DetectionRate      float64
-	FalsePositiveCount int
-	TrapHits           int
-	ResponseCount      int
-	MatchedFindings    []MatchedFinding
-	UnmatchedTruths    []TruthBug
-	ExtraFindings      []ObservedFinding
-	Latency            LatencySummary
-	InputTokens        int
-	OutputTokens       int
-	CacheReadTokens    int
-	CacheCreateTokens  int
-	TotalCostUSD       float64
+	MatchedTruths          int
+	TotalTruths            int
+	DetectionRate          float64
+	FalsePositiveCount     int
+	TrapHits               int
+	ResponseCount          int
+	MatchedFindings        []MatchedFinding
+	UnmatchedTruths        []TruthBug
+	ExtraFindings          []ObservedFinding
+	Latency                LatencySummary
+	InputTokens            int
+	OutputTokens           int
+	CacheReadTokens        int
+	CacheCreateTokens      int
+	TotalCostUSD           float64
+	SteeringEventCount     int
+	BugsFixedAfterNudge    int
+	NudgesWithFollowupEdit int
+	NudgeConversionRate    float64
+	FirstNudgeToEdit       time.Duration
 }
 
 var (
@@ -388,15 +393,16 @@ func applyPatchFiles(raw string) []string {
 	return files
 }
 
-func ScoreFindings(truth GroundTruth, findings []ObservedFinding, edits []EditEvent, debug DebugSummary) Scorecard {
+func ScoreFindings(truth GroundTruth, findings []ObservedFinding, edits []EditEvent, debug DebugSummary, steeringEvents []SteeringEvent) Scorecard {
 	score := Scorecard{
-		TotalTruths:       len(truth.Bugs),
-		ResponseCount:     debug.ResponseCount,
-		InputTokens:       debug.InputTokens,
-		OutputTokens:      debug.OutputTokens,
-		CacheReadTokens:   debug.CacheReadTokens,
-		CacheCreateTokens: debug.CacheCreateTokens,
-		TotalCostUSD:      debug.TotalCostUSD,
+		TotalTruths:        len(truth.Bugs),
+		ResponseCount:      debug.ResponseCount,
+		InputTokens:        debug.InputTokens,
+		OutputTokens:       debug.OutputTokens,
+		CacheReadTokens:    debug.CacheReadTokens,
+		CacheCreateTokens:  debug.CacheCreateTokens,
+		TotalCostUSD:       debug.TotalCostUSD,
+		SteeringEventCount: len(steeringEvents),
 	}
 
 	type candidate struct {
@@ -463,7 +469,64 @@ func ScoreFindings(truth GroundTruth, findings []ObservedFinding, edits []EditEv
 	}
 	score.FalsePositiveCount = len(score.ExtraFindings)
 	score.Latency = summarizeLatency(score.MatchedFindings)
+	score.BugsFixedAfterNudge, score.NudgesWithFollowupEdit, score.FirstNudgeToEdit = steeringEffectMetrics(truth, steeringEvents, edits)
+	if score.SteeringEventCount > 0 {
+		score.NudgeConversionRate = float64(score.NudgesWithFollowupEdit) / float64(score.SteeringEventCount)
+	}
 	return score
+}
+
+func steeringEffectMetrics(truth GroundTruth, steeringEvents []SteeringEvent, edits []EditEvent) (int, int, time.Duration) {
+	if len(steeringEvents) == 0 || len(edits) == 0 {
+		return 0, 0, 0
+	}
+	convertedNudges := 0
+	bugsFixed := make(map[string]bool)
+	var firstLatency time.Duration
+
+	for _, event := range steeringEvents {
+		if event.Timestamp.IsZero() {
+			continue
+		}
+		bug, ok := bestMatchingTruthBug(truth.Bugs, event.Message)
+		if !ok {
+			continue
+		}
+		if latency, found := firstEditLatencyAfter(event.Timestamp, bug.File, edits); found {
+			convertedNudges++
+			if firstLatency == 0 || latency < firstLatency {
+				firstLatency = latency
+			}
+			bugsFixed[bug.ID] = true
+		}
+	}
+	return len(bugsFixed), convertedNudges, firstLatency
+}
+
+func bestMatchingTruthBug(bugs []TruthBug, message string) (TruthBug, bool) {
+	var best TruthBug
+	bestScore := 0.0
+	for _, bug := range bugs {
+		score := matchScore(bug, message)
+		if score >= 0.45 && score > bestScore {
+			best = bug
+			bestScore = score
+		}
+	}
+	return best, bestScore > 0
+}
+
+func firstEditLatencyAfter(start time.Time, preferredFile string, edits []EditEvent) (time.Duration, bool) {
+	for _, edit := range edits {
+		if edit.Time.Before(start) {
+			continue
+		}
+		if preferredFile != "" && !editTouchesFile(edit, preferredFile) {
+			continue
+		}
+		return edit.Time.Sub(start), true
+	}
+	return 0, false
 }
 
 func CountBrainResponses(path string) (int, error) {

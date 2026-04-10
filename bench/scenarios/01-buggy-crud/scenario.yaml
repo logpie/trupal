@@ -2,8 +2,13 @@ id: buggy-crud
 name: "CRUD API with race conditions"
 category: concurrency
 timeout: 120s
-claude_model: haiku
+agent_model: gpt-5.4-mini
+benchmark_arms: control, steer
+steering_rounds: 1
+steering_cooldown: 30s
 trupal_config:
-  brain_model: haiku
+  session_provider: codex
+  brain_provider: codex
+  brain_model: gpt-5.4-mini
   brain_effort: medium
   build_cmd: "go vet ./..."

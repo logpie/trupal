@@ -9,9 +9,8 @@ func TestBenchmarkAgentPromptForcesNonInteractiveExecution(t *testing.T) {
 	prompt := benchmarkAgentPrompt("Implement the API")
 
 	for _, want := range []string{
-		"Do not ask clarifying questions.",
-		"Do not stop at planning, brainstorming, or design.",
-		"implement the task end-to-end",
+		"Avoid asking the user questions during the run.",
+		"implement the task directly",
 		"Task:",
 		"Implement the API",
 	} {

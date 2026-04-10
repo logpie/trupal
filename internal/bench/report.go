@@ -11,6 +11,7 @@ func WriteReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "# TruPal Benchmark Report\n\n")
 	fmt.Fprintf(&b, "## Scenario\n\n")
 	fmt.Fprintf(&b, "- ID: `%s`\n", result.Scenario.ID)
+	fmt.Fprintf(&b, "- Arm: `%s`\n", result.Arm)
 	fmt.Fprintf(&b, "- Name: %s\n", result.Scenario.Name)
 	fmt.Fprintf(&b, "- Category: `%s`\n", result.Scenario.Category)
 	fmt.Fprintf(&b, "- Started: `%s`\n", result.StartedAt.Format("2006-01-02 15:04:05 MST"))
@@ -30,6 +31,14 @@ func WriteReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- False positives: `%d`\n", result.Score.FalsePositiveCount)
 	fmt.Fprintf(&b, "- Trap hits: `%d`\n", result.Score.TrapHits)
 	fmt.Fprintf(&b, "- Brain responses: `%d`\n", result.Score.ResponseCount)
+	fmt.Fprintf(&b, "- Steering events: `%d`\n", result.Score.SteeringEventCount)
+	if result.Score.SteeringEventCount > 0 {
+		fmt.Fprintf(&b, "- Bugs fixed after nudge: `%d`\n", result.Score.BugsFixedAfterNudge)
+		fmt.Fprintf(&b, "- Nudge conversion: `%.1f%%` (%d/%d)\n", result.Score.NudgeConversionRate*100, result.Score.NudgesWithFollowupEdit, result.Score.SteeringEventCount)
+		if result.Score.FirstNudgeToEdit > 0 {
+			fmt.Fprintf(&b, "- First nudge to relevant edit: `%s`\n", result.Score.FirstNudgeToEdit)
+		}
+	}
 	if result.Score.Latency.Count > 0 {
 		fmt.Fprintf(&b, "- Matched latency avg/max: `%s` / `%s`\n", result.Score.Latency.Average, result.Score.Latency.Max)
 	}
@@ -97,6 +106,43 @@ func WriteReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- Session JSONL: `%s`\n", result.Artifacts.SessionJSONLPath)
 	fmt.Fprintf(&b, "- Final project copy: `%s`\n", result.Artifacts.ProjectCopyDir)
 
+	return os.WriteFile(path, []byte(b.String()), 0644)
+}
+
+func WriteComparisonReport(path string, control, steer *RunResult) error {
+	var b strings.Builder
+	uplift := steer.Score.MatchedTruths - control.Score.MatchedTruths
+	extraCost := steer.Score.TotalCostUSD - control.Score.TotalCostUSD
+	costPerExtraBugFixed := 0.0
+	if uplift > 0 {
+		costPerExtraBugFixed = extraCost / float64(uplift)
+	}
+
+	fmt.Fprintf(&b, "# TruPal Steering Comparison\n\n")
+	fmt.Fprintf(&b, "## Scenario\n\n")
+	fmt.Fprintf(&b, "- ID: `%s`\n", control.Scenario.ID)
+	fmt.Fprintf(&b, "- Name: %s\n", control.Scenario.Name)
+	fmt.Fprintf(&b, "- Primary metric: steering uplift `%+d`\n", uplift)
+	fmt.Fprintf(&b, "- Extra cost vs control: `$%.4f`\n", extraCost)
+	if uplift > 0 {
+		fmt.Fprintf(&b, "- Cost per extra bug fixed: `$%.4f`\n", costPerExtraBugFixed)
+	}
+
+	fmt.Fprintf(&b, "\n## Arms\n\n")
+	fmt.Fprintf(&b, "| Metric | control | steer |\n")
+	fmt.Fprintf(&b, "| --- | ---: | ---: |\n")
+	fmt.Fprintf(&b, "| Matched truths | %d | %d |\n", control.Score.MatchedTruths, steer.Score.MatchedTruths)
+	fmt.Fprintf(&b, "| Residual truths | %d | %d |\n", len(control.Score.UnmatchedTruths), len(steer.Score.UnmatchedTruths))
+	fmt.Fprintf(&b, "| False positives | %d | %d |\n", control.Score.FalsePositiveCount, steer.Score.FalsePositiveCount)
+	fmt.Fprintf(&b, "| Trap hits | %d | %d |\n", control.Score.TrapHits, steer.Score.TrapHits)
+	fmt.Fprintf(&b, "| Cost (USD) | %.4f | %.4f |\n", control.Score.TotalCostUSD, steer.Score.TotalCostUSD)
+	fmt.Fprintf(&b, "| Steering events | %d | %d |\n", control.Score.SteeringEventCount, steer.Score.SteeringEventCount)
+	fmt.Fprintf(&b, "| Bugs fixed after nudge | %d | %d |\n", control.Score.BugsFixedAfterNudge, steer.Score.BugsFixedAfterNudge)
+	fmt.Fprintf(&b, "| Nudge conversion | %.1f%% | %.1f%% |\n", control.Score.NudgeConversionRate*100, steer.Score.NudgeConversionRate*100)
+
+	fmt.Fprintf(&b, "\n## Reports\n\n")
+	fmt.Fprintf(&b, "- control: `%s`\n", control.Artifacts.ReportPath)
+	fmt.Fprintf(&b, "- steer: `%s`\n", steer.Artifacts.ReportPath)
 	return os.WriteFile(path, []byte(b.String()), 0644)
 }
 

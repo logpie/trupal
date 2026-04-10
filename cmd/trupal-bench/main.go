@@ -27,6 +27,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "run-paired":
+		if err := runPaired(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "run-all":
 		if err := runAll(repoRoot, os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -43,6 +48,7 @@ func runSingle(repoRoot string, args []string) error {
 	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
 	codexCmd := fs.String("codex-cmd", "", "optional shell command for Codex baseline audit")
 	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
+	arm := fs.String("arm", "", "benchmark arm to run (control or steer)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -61,11 +67,72 @@ func runSingle(repoRoot string, args []string) error {
 		return err
 	}
 
-	result, err := runner.RunScenario(fs.Arg(0))
+	var result *bench.RunResult
+	if *arm != "" {
+		result, err = runner.RunScenarioArm(fs.Arg(0), bench.BenchmarkArm(*arm))
+	} else {
+		result, err = runner.RunScenario(fs.Arg(0))
+	}
 	if err != nil {
 		return err
 	}
 	fmt.Println(result.Artifacts.ReportPath)
+	return nil
+}
+
+func runPaired(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("run-paired", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	codexCmd := fs.String("codex-cmd", "", "optional shell command for Codex baseline audit")
+	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: trupal-bench run-paired [flags] <scenario>")
+	}
+
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		CodexCmd:     *codexCmd,
+		KeepTemp:     *keepTemp,
+	})
+	if err != nil {
+		return err
+	}
+
+	results, err := runner.RunScenarioPair(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if len(results) < 2 {
+		for _, result := range results {
+			fmt.Println(result.Artifacts.ReportPath)
+		}
+		return nil
+	}
+	var control, steer *bench.RunResult
+	for _, result := range results {
+		switch result.Arm {
+		case bench.ArmControl:
+			control = result
+		case bench.ArmSteer:
+			steer = result
+		}
+	}
+	if control == nil || steer == nil {
+		return fmt.Errorf("paired run requires control and steer arms")
+	}
+	comparisonPath := filepath.Join(*resultsDir, fmt.Sprintf("%s-vs-%s-%s.md", control.Scenario.ID, control.Arm, steer.Arm))
+	if err := bench.WriteComparisonReport(comparisonPath, control, steer); err != nil {
+		return err
+	}
+	fmt.Println(comparisonPath)
+	for _, result := range results {
+		fmt.Println(result.Artifacts.ReportPath)
+	}
 	return nil
 }
 
@@ -125,5 +192,6 @@ func findRepoRoot() (string, error) {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run [flags] <scenario>")
+	fmt.Fprintln(os.Stderr, "  trupal-bench run-paired [flags] <scenario>")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-all [flags]")
 }

@@ -33,19 +33,21 @@ type CodexAuditResult struct {
 }
 
 type RunResult struct {
-	Scenario      Scenario
-	StartedAt     time.Time
-	FinishedAt    time.Time
-	Duration      time.Duration
-	ProjectDir    string
-	TimedOut      bool
-	AgentDuration time.Duration
-	AgentExitCode int
-	AgentError    string
-	SessionJSONL  string
-	Artifacts     ArtifactSet
-	Score         Scorecard
-	CodexAudit    *CodexAuditResult
+	Scenario       Scenario
+	Arm            BenchmarkArm
+	StartedAt      time.Time
+	FinishedAt     time.Time
+	Duration       time.Duration
+	ProjectDir     string
+	TimedOut       bool
+	AgentDuration  time.Duration
+	AgentExitCode  int
+	AgentError     string
+	SessionJSONL   string
+	Artifacts      ArtifactSet
+	SteeringEvents []SteeringEvent
+	Score          Scorecard
+	CodexAudit     *CodexAuditResult
 }
 
 func NewRunner(opts RunnerOptions) (*Runner, error) {
@@ -90,7 +92,33 @@ func (r *Runner) RunScenario(name string) (*RunResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return r.runScenario(scenario)
+	arms := scenario.EffectiveBenchmarkArms()
+	return r.runScenario(scenario, arms[0])
+}
+
+func (r *Runner) RunScenarioArm(name string, arm BenchmarkArm) (*RunResult, error) {
+	scenario, err := LoadScenario(r.opts.ScenariosDir, name)
+	if err != nil {
+		return nil, err
+	}
+	return r.runScenario(scenario, arm)
+}
+
+func (r *Runner) RunScenarioPair(name string) ([]*RunResult, error) {
+	scenario, err := LoadScenario(r.opts.ScenariosDir, name)
+	if err != nil {
+		return nil, err
+	}
+	arms := scenario.EffectiveBenchmarkArms()
+	results := make([]*RunResult, 0, len(arms))
+	for _, arm := range arms {
+		result, err := r.runScenario(scenario, arm)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
 }
 
 func (r *Runner) RunAll() ([]*RunResult, error) {
@@ -101,18 +129,20 @@ func (r *Runner) RunAll() ([]*RunResult, error) {
 
 	results := make([]*RunResult, 0, len(scenarios))
 	for _, scenario := range scenarios {
-		result, err := r.runScenario(scenario)
-		if err != nil {
-			return results, err
+		for _, arm := range scenario.EffectiveBenchmarkArms() {
+			result, err := r.runScenario(scenario, arm)
+			if err != nil {
+				return results, err
+			}
+			results = append(results, result)
 		}
-		results = append(results, result)
 	}
 	return results, nil
 }
 
-func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
+func (r *Runner) runScenario(scenario Scenario, arm BenchmarkArm) (*RunResult, error) {
 	setupStartedAt := time.Now()
-	runSlug := setupStartedAt.Format("20060102-150405") + "-" + scenario.ID
+	runSlug := setupStartedAt.Format("20060102-150405") + "-" + scenario.ID + "-" + string(arm)
 	artifactsDir := filepath.Join(r.opts.ResultsDir, runSlug)
 	if err := os.MkdirAll(artifactsDir, 0755); err != nil {
 		return nil, fmt.Errorf("create artifacts dir: %w", err)
@@ -120,6 +150,7 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 
 	result := &RunResult{
 		Scenario:  scenario,
+		Arm:       arm,
 		Artifacts: NewArtifactSet(artifactsDir),
 	}
 
@@ -144,6 +175,16 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 	if err := r.copyScenarioInputs(result); err != nil {
 		return nil, err
 	}
+
+	if scenario.SessionProvider() == "codex" {
+		return r.runScenarioInteractiveCodex(result)
+	}
+	return r.runScenarioLegacy(result)
+}
+
+func (r *Runner) runScenarioLegacy(result *RunResult) (*RunResult, error) {
+	scenario := result.Scenario
+	projectDir := result.ProjectDir
 
 	sessionName, err := r.startTrupal(projectDir, scenario.ID)
 	if err != nil {
@@ -199,7 +240,88 @@ func (r *Runner) runScenario(scenario Scenario) (*RunResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse session edits: %w", err)
 	}
-	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Nudges), edits, debugSummary)
+	result.SteeringEvents, err = ParseSteeringEvents(result.Artifacts.SteerLogPath)
+	if err != nil {
+		return nil, fmt.Errorf("parse steering log: %w", err)
+	}
+	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Nudges), edits, debugSummary, result.SteeringEvents)
+
+	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
+		return nil, fmt.Errorf("write report: %w", err)
+	}
+
+	return result, nil
+}
+
+func (r *Runner) runScenarioInteractiveCodex(result *RunResult) (*RunResult, error) {
+	scenario := result.Scenario
+	projectDir := result.ProjectDir
+
+	sessionName, codexPaneID, trupalPaneID, err := r.startInteractiveCodexSession(projectDir, scenario.ID, scenario.EffectiveAgentModel())
+	if err != nil {
+		return nil, err
+	}
+	defer r.stopTmuxSession(sessionName)
+
+	if err := r.waitForCodexReady(codexPaneID); err != nil {
+		return nil, err
+	}
+	if err := r.waitForTrupalWatch(projectDir, trupalPaneID); err != nil {
+		return nil, err
+	}
+	if result.Arm == ArmSteer {
+		if err := r.sendKeys(trupalPaneID, "a"); err != nil {
+			return nil, fmt.Errorf("enable auto steer: %w", err)
+		}
+	}
+
+	startedAt := time.Now()
+	if err := r.submitLiteral(codexPaneID, singleLinePrompt(benchmarkAgentPrompt(scenario.TaskPrompt))); err != nil {
+		return nil, fmt.Errorf("submit benchmark prompt: %w", err)
+	}
+	result.StartedAt = startedAt
+
+	finishedAt, agentExitCode, timedOut, err := r.waitForInteractiveCodex(result, codexPaneID, trupalPaneID)
+	if err != nil {
+		return nil, err
+	}
+	result.FinishedAt = finishedAt
+	result.Duration = finishedAt.Sub(startedAt)
+	result.AgentDuration = result.Duration
+	result.AgentExitCode = agentExitCode
+	result.TimedOut = timedOut
+
+	time.Sleep(3 * time.Second)
+	if result.SessionJSONL == "" {
+		result.SessionJSONL, _ = FindLatestSessionJSONL(projectDir, scenario.SessionProvider())
+	}
+	paneID, _ := ReadPaneID(filepath.Join(projectDir, ".trupal.pid"))
+	if strings.TrimSpace(paneID) == "" {
+		paneID = trupalPaneID
+	}
+	if err := CollectArtifacts(projectDir, result.Artifacts, result.SessionJSONL, paneID); err != nil {
+		return nil, err
+	}
+
+	result.CodexAudit = r.runCodexAudit(result)
+
+	findings, err := ParseTrupalLog(result.Artifacts.TrupalLogPath, result.StartedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse trupal log: %w", err)
+	}
+	debugSummary, err := ParseDebugLog(result.Artifacts.DebugLogPath, result.StartedAt)
+	if err != nil {
+		return nil, fmt.Errorf("parse debug log: %w", err)
+	}
+	edits, err := ParseSessionEdits(result.Artifacts.SessionJSONLPath)
+	if err != nil {
+		return nil, fmt.Errorf("parse session edits: %w", err)
+	}
+	result.SteeringEvents, err = ParseSteeringEvents(result.Artifacts.SteerLogPath)
+	if err != nil {
+		return nil, fmt.Errorf("parse steering log: %w", err)
+	}
+	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Nudges), edits, debugSummary, result.SteeringEvents)
 
 	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
 		return nil, fmt.Errorf("write report: %w", err)
@@ -225,6 +347,166 @@ func (r *Runner) buildTrupalBinary() error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("build trupal binary: %w\n%s", err, string(out))
+	}
+	return nil
+}
+
+func (r *Runner) startInteractiveCodexSession(projectDir, scenarioID, model string) (string, string, string, error) {
+	sessionName := tmuxSessionName(scenarioID + "-interactive")
+	r.stopTmuxSession(sessionName)
+
+	codexCmd := fmt.Sprintf("codex -C %s --dangerously-bypass-approvals-and-sandbox", shellQuote(projectDir))
+	if strings.TrimSpace(model) != "" {
+		codexCmd += " --model " + shellQuote(strings.TrimSpace(model))
+	}
+	out, err := exec.Command("tmux", "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", sessionName, "-c", projectDir, codexCmd).CombinedOutput()
+	if err != nil {
+		return "", "", "", fmt.Errorf("start codex tmux session: %w\n%s", err, string(out))
+	}
+	codexPaneID := strings.TrimSpace(string(out))
+	if codexPaneID == "" {
+		return "", "", "", fmt.Errorf("start codex tmux session: missing pane id")
+	}
+
+	out, err = exec.Command("tmux", "split-window", "-P", "-F", "#{pane_id}", "-v", "-t", codexPaneID, "-c", projectDir, fmt.Sprintf("%s watch %s %s", shellQuote(r.trupalBin), shellQuote(projectDir), shellQuote(projectDir))).CombinedOutput()
+	if err != nil {
+		return "", "", "", fmt.Errorf("start trupal watch pane: %w\n%s", err, string(out))
+	}
+	trupalPaneID := strings.TrimSpace(string(out))
+	if trupalPaneID == "" {
+		return "", "", "", fmt.Errorf("start trupal watch pane: missing pane id")
+	}
+	return sessionName, codexPaneID, trupalPaneID, nil
+}
+
+func (r *Runner) waitForTrupalWatch(projectDir, trupalPaneID string) error {
+	deadline := time.Now().Add(20 * time.Second)
+	pidFile := filepath.Join(projectDir, ".trupal.pid")
+	debugPath := filepath.Join(projectDir, ".trupal.debug")
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(pidFile); err == nil {
+			if _, err := os.Stat(debugPath); err == nil {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	capture, captureErr := exec.Command("tmux", "capture-pane", "-p", "-t", trupalPaneID).CombinedOutput()
+	if captureErr != nil {
+		return fmt.Errorf("trupal watch did not start (also failed to capture pane %s: %v)", trupalPaneID, captureErr)
+	}
+	return fmt.Errorf("trupal watch did not start; pane %s output:\n%s", trupalPaneID, string(capture))
+}
+
+func (r *Runner) waitForCodexReady(codexPaneID string) error {
+	deadline := time.Now().Add(20 * time.Second)
+	sawTrustPrompt := false
+	for time.Now().Before(deadline) {
+		capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
+		text := string(capture)
+		switch {
+		case strings.Contains(text, "Do you trust the contents of this directory?"):
+			sawTrustPrompt = true
+			if err := r.sendKeys(codexPaneID, "C-m"); err != nil {
+				return err
+			}
+			time.Sleep(2 * time.Second)
+		case strings.Contains(text, "Use /skills") || strings.Contains(text, "Tip:"):
+			if !sawTrustPrompt {
+				time.Sleep(1500 * time.Millisecond)
+				verify, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
+				if strings.Contains(string(verify), "Do you trust the contents of this directory?") {
+					continue
+				}
+			}
+			return nil
+		default:
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
+	return fmt.Errorf("codex did not become ready:\n%s", string(capture))
+}
+
+func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalPaneID string) (time.Time, int, bool, error) {
+	deadline := result.StartedAt.Add(result.Scenario.Timeout)
+	quietWindow := 8 * time.Second
+	if result.Arm == ArmSteer {
+		quietWindow = result.Scenario.SteeringCooldown + 5*time.Second
+	}
+	autoDisabled := result.Arm != ArmSteer
+
+	for {
+		if result.SessionJSONL == "" {
+			result.SessionJSONL, _ = FindLatestSessionJSONL(result.ProjectDir, result.Scenario.SessionProvider())
+		}
+
+		var lastActivity time.Time
+		if result.SessionJSONL != "" {
+			if info, err := os.Stat(result.SessionJSONL); err == nil {
+				lastActivity = info.ModTime()
+			}
+		}
+
+		events, err := ParseSteeringEvents(filepath.Join(result.ProjectDir, ".trupal.steer.jsonl"))
+		if err != nil {
+			return time.Time{}, -1, false, err
+		}
+		if len(events) > 0 && events[len(events)-1].Timestamp.After(lastActivity) {
+			lastActivity = events[len(events)-1].Timestamp
+		}
+		if result.Arm == ArmSteer && !autoDisabled && len(events) >= result.Scenario.SteeringRounds {
+			if err := r.sendKeys(trupalPaneID, "a"); err != nil {
+				return time.Time{}, -1, false, fmt.Errorf("disable auto steer after %d rounds: %w", result.Scenario.SteeringRounds, err)
+			}
+			autoDisabled = true
+			lastActivity = time.Now()
+		}
+
+		now := time.Now()
+		if result.SessionJSONL != "" && lastActivity.After(result.StartedAt) && now.Sub(lastActivity) >= quietWindow {
+			capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
+			if !strings.Contains(string(capture), "Working (") {
+				return now, 0, false, nil
+			}
+		}
+		if !now.Before(deadline) {
+			_ = r.sendKeys(codexPaneID, "C-c")
+			return now, 124, true, nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func (r *Runner) sendLiteral(paneID, text string) error {
+	out, err := exec.Command("tmux", "send-keys", "-t", paneID, "-l", text).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux send-keys -l: %w\n%s", err, string(out))
+	}
+	return nil
+}
+
+func (r *Runner) submitLiteral(paneID, text string) error {
+	if err := r.sendLiteral(paneID, text); err != nil {
+		return err
+	}
+	delay := 200 * time.Millisecond
+	if extra := time.Duration(len(text)) * time.Millisecond; extra > delay {
+		delay = extra
+	}
+	if delay > 3*time.Second {
+		delay = 3 * time.Second
+	}
+	time.Sleep(delay)
+	return r.sendKeys(paneID, "Enter")
+}
+
+func (r *Runner) sendKeys(paneID string, keys ...string) error {
+	args := append([]string{"send-keys", "-t", paneID}, keys...)
+	out, err := exec.Command("tmux", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux send-keys %v: %w\n%s", keys, err, string(out))
 	}
 	return nil
 }
@@ -448,15 +730,18 @@ func benchmarkAgentPrompt(task string) string {
 You are running inside a non-interactive benchmark harness.
 
 Requirements for this run:
-- Do not ask clarifying questions.
-- Do not stop at planning, brainstorming, or design.
-- Do not invoke brainstorming or planning skills that require user approval before implementation.
-- Make reasonable assumptions yourself and implement the task end-to-end in the current working directory.
+- Work autonomously in the current working directory.
+- Make reasonable assumptions yourself and implement the task directly.
+- Avoid asking the user questions during the run.
 - Verify the resulting code with focused commands before you finish.
 - End with a brief summary of what you changed and what you verified.
 
 Task:
 ` + "\n" + task)
+}
+
+func singleLinePrompt(prompt string) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(prompt, "\n", " ")), " ")
 }
 
 func (r *Runner) waitForBrain(result *RunResult, ccFinishedAt time.Time) (time.Time, error) {
