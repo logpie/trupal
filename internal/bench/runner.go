@@ -187,7 +187,13 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 		return nil, err
 	}
 	if arm == ArmSteer {
+		if err := r.waitForTrupalReady(trupalPaneID); err != nil {
+			return nil, err
+		}
 		if err := r.sendKeys(trupalPaneID, "a"); err != nil {
+			return nil, err
+		}
+		if err := r.waitForTrupalAuto(trupalPaneID); err != nil {
 			return nil, err
 		}
 	}
@@ -195,7 +201,7 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	if err := r.submitLiteral(codexPaneID, singleLinePrompt(benchmarkAgentPrompt(task.ProblemStatement))); err != nil {
 		return nil, err
 	}
-	sessionJSONL, err := r.waitForBenchmarkSessionJSONL(workspace, "codex", 20*time.Second)
+	sessionJSONL, err := r.waitForBenchmarkSessionJSONL(workspace, "codex", 20*time.Second, codexPaneID)
 	if err != nil {
 		return nil, err
 	}
@@ -243,15 +249,25 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	return result, nil
 }
 
-func (r *Runner) waitForBenchmarkSessionJSONL(projectDir, provider string, timeout time.Duration) (string, error) {
+func (r *Runner) waitForBenchmarkSessionJSONL(projectDir, provider string, timeout time.Duration, codexPaneID string) (string, error) {
 	deadline := time.Now().Add(timeout)
+	retriedSubmit := false
 	for time.Now().Before(deadline) {
 		if path, _ := FindLatestSessionJSONL(projectDir, provider); strings.TrimSpace(path) != "" {
 			return path, nil
 		}
+		if !retriedSubmit && time.Until(deadline) < timeout/2 {
+			capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
+			text := string(capture)
+			if strings.Contains(text, "[Pasted Content") || strings.Contains(text, "› ") {
+				_ = r.sendKeys(codexPaneID, "C-m")
+				retriedSubmit = true
+			}
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return "", fmt.Errorf("benchmark session JSONL not found for %s under %s within %s", provider, projectDir, timeout)
+	capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
+	return "", fmt.Errorf("benchmark session JSONL not found for %s under %s within %s; codex pane:\n%s", provider, projectDir, timeout, string(capture))
 }
 
 func (r *Runner) PrepareSWEBenchTask(manifestPath, instanceID string) (SWEBenchTask, string, error) {
@@ -705,6 +721,33 @@ func (r *Runner) waitForTrupalWatch(projectDir, trupalPaneID string) error {
 		return fmt.Errorf("trupal watch did not start (also failed to capture pane %s: %v)", trupalPaneID, captureErr)
 	}
 	return fmt.Errorf("trupal watch did not start; pane %s output:\n%s", trupalPaneID, string(capture))
+}
+
+func (r *Runner) waitForTrupalReady(trupalPaneID string) error {
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", trupalPaneID).CombinedOutput()
+		text := string(capture)
+		if strings.Contains(text, "send s") && strings.Contains(text, "auto a") {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", trupalPaneID).CombinedOutput()
+	return fmt.Errorf("trupal TUI not ready for steering toggle:\n%s", string(capture))
+}
+
+func (r *Runner) waitForTrupalAuto(trupalPaneID string) error {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", trupalPaneID).CombinedOutput()
+		if strings.Contains(string(capture), "steer auto") {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", trupalPaneID).CombinedOutput()
+	return fmt.Errorf("trupal did not switch to auto steer:\n%s", string(capture))
 }
 
 func (r *Runner) waitForCodexReady(codexPaneID string) error {
