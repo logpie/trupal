@@ -856,3 +856,51 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestCtrlCRequiresSecondPressToQuit(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = newM.(model)
+	if cmd != nil {
+		t.Fatal("expected first ctrl+c to not quit immediately")
+	}
+	if !m.quitPending {
+		t.Fatal("expected quitPending after first ctrl+c")
+	}
+	if !containsStr(m.View(), "press ctrl+c again to quit") {
+		t.Fatalf("expected quit confirmation hint, got %q", m.View())
+	}
+
+	newM, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = newM.(model)
+	if cmd == nil {
+		t.Fatal("expected second ctrl+c to quit")
+	}
+	if !m.quitting {
+		t.Fatal("expected quitting on second ctrl+c")
+	}
+}
+
+func TestEscCancelsPendingQuit(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = newM.(model)
+	if !m.quitPending {
+		t.Fatal("expected quitPending after ctrl+c")
+	}
+
+	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = newM.(model)
+	if cmd != nil {
+		t.Fatal("expected esc cancel to not quit")
+	}
+	if m.quitPending {
+		t.Fatal("expected esc to clear quitPending")
+	}
+}

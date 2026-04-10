@@ -156,7 +156,8 @@ type model struct {
 	// Selection
 	sel *Selection
 
-	quitting bool
+	quitting    bool
+	quitPending bool
 }
 
 type brainIndicatorState struct {
@@ -234,9 +235,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			m.quitting = true
-			return m, tea.Quit
+			if m.quitPending {
+				m.quitting = true
+				return m, tea.Quit
+			}
+			m.quitPending = true
+			return m, nil
 		case "up", "k":
+			m.quitPending = false
 			if m.issuesPopupVisible {
 				if len(m.issueItems) > 0 {
 					m.issueCursor = (m.issueCursor - 1 + len(m.issueItems)) % len(m.issueItems)
@@ -245,6 +251,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveSelection(-1)
 			}
 		case "down", "j":
+			m.quitPending = false
 			if m.issuesPopupVisible {
 				if len(m.issueItems) > 0 {
 					m.issueCursor = (m.issueCursor + 1) % len(m.issueItems)
@@ -253,10 +260,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveSelection(1)
 			}
 		case "pgup":
+			m.quitPending = false
 			m.scroll(10)
 		case "pgdown":
+			m.quitPending = false
 			m.scroll(-10)
 		case "g", "home":
+			m.quitPending = false
 			if len(m.entries) > 0 {
 				m.selectedEntry = 0
 				m.scrollSelectedIntoView()
@@ -264,6 +274,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scrollOffset = m.maxScroll()
 			}
 		case "G", "end":
+			m.quitPending = false
 			if len(m.entries) > 0 {
 				m.selectedEntry = len(m.entries) - 1
 				m.scrollSelectedIntoView()
@@ -271,6 +282,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scrollOffset = 0
 			}
 		case "o":
+			m.quitPending = false
 			if m.popupVisible() {
 				m.setPopupVisible(false)
 			}
@@ -285,6 +297,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "p":
+			m.quitPending = false
 			if len(m.issueItems) > 0 {
 				for key := range m.detailOpen {
 					m.detailOpen[key] = false
@@ -296,16 +309,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "]":
+			m.quitPending = false
 			if len(m.issueItems) > 0 && m.popupVisible() {
 				m.issueCursor = (m.issueCursor + 1) % len(m.issueItems)
 			}
 		case "[":
+			m.quitPending = false
 			if len(m.issueItems) > 0 && m.popupVisible() {
 				m.issueCursor = (m.issueCursor - 1 + len(m.issueItems)) % len(m.issueItems)
 			}
 		case "esc":
+			if m.quitPending {
+				m.quitPending = false
+				return m, nil
+			}
 			m.setPopupVisible(false)
 		case "enter", " ":
+			m.quitPending = false
 			if m.popupVisible() && len(m.issueItems) > 0 {
 				m.jumpToIssue(m.issueItems[m.issueCursor].Key())
 				m.setPopupVisible(false)
@@ -701,7 +721,7 @@ func (m model) agentUsageCandidates() []string {
 	}
 
 	metrics := []dockMetric{
-		{Label: "in", Value: formatTokenCount(stats.TotalInputTokens)},
+		{Label: "in", Value: formatTokenCount(stats.UncachedPromptTokens())},
 		{Label: "cache", Value: formatTokenCount(stats.TotalCachedTokens)},
 		{Label: "hit", Value: fmt.Sprintf("%d%%", stats.CacheHitRate()), Accent: true},
 		{Label: "out", Value: formatTokenCount(stats.TotalOutputTokens)},
@@ -1754,6 +1774,9 @@ func (m model) View() string {
 		}
 		if remaining > 0 {
 			hint := controlsHint()
+			if m.quitPending {
+				hint = "press ctrl+c again to quit  esc cancel"
+			}
 			if len(m.issueItems) > 0 {
 				if m.popupVisible() {
 					hint = issueControlsHint()

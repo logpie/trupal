@@ -25,10 +25,16 @@ func (s AgentUsageStats) Available() bool {
 }
 
 func (s AgentUsageStats) PromptTokens() int {
+	if normalizeProvider(s.Provider, ProviderClaude) == ProviderCodex {
+		return s.TotalInputTokens
+	}
 	return s.TotalInputTokens + s.TotalCachedTokens
 }
 
 func (s AgentUsageStats) LastPromptTokens() int {
+	if normalizeProvider(s.Provider, ProviderClaude) == ProviderCodex {
+		return s.LastInputTokens
+	}
 	return s.LastInputTokens + s.LastCachedTokens
 }
 
@@ -46,6 +52,28 @@ func (s AgentUsageStats) LastCacheHitRate() int {
 		return 0
 	}
 	return (s.LastCachedTokens*100 + total/2) / total
+}
+
+func (s AgentUsageStats) UncachedPromptTokens() int {
+	if normalizeProvider(s.Provider, ProviderClaude) == ProviderCodex {
+		uncached := s.TotalInputTokens - s.TotalCachedTokens
+		if uncached < 0 {
+			return 0
+		}
+		return uncached
+	}
+	return s.TotalInputTokens
+}
+
+func (s AgentUsageStats) LastUncachedPromptTokens() int {
+	if normalizeProvider(s.Provider, ProviderClaude) == ProviderCodex {
+		uncached := s.LastInputTokens - s.LastCachedTokens
+		if uncached < 0 {
+			return 0
+		}
+		return uncached
+	}
+	return s.LastInputTokens
 }
 
 func ReadAgentUsageStats(path, provider string) AgentUsageStats {

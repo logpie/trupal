@@ -33,3 +33,30 @@ func TestReadAgentUsageStatsAggregatesClaudeAssistantTurns(t *testing.T) {
 		t.Fatalf("LastCachedTokens = %d, want 8", stats.LastCachedTokens)
 	}
 }
+
+func TestAgentUsageStatsCodexSemanticsTreatCachedAsSubsetOfInput(t *testing.T) {
+	stats := AgentUsageStats{
+		Provider:          ProviderCodex,
+		TotalInputTokens:  178922,
+		TotalCachedTokens: 171904,
+		TotalOutputTokens: 4431,
+		LastInputTokens:   32340,
+		LastCachedTokens:  26624,
+		LastOutputTokens:  348,
+	}
+	if got := stats.PromptTokens(); got != 178922 {
+		t.Fatalf("PromptTokens = %d, want 178922", got)
+	}
+	if got := stats.UncachedPromptTokens(); got != 7018 {
+		t.Fatalf("UncachedPromptTokens = %d, want 7018", got)
+	}
+	if got := stats.CacheHitRate(); got != 96 {
+		t.Fatalf("CacheHitRate = %d, want 96", got)
+	}
+	if got := stats.LastUncachedPromptTokens(); got != 5716 {
+		t.Fatalf("LastUncachedPromptTokens = %d, want 5716", got)
+	}
+	if got := stats.LastCacheHitRate(); got != 82 {
+		t.Fatalf("LastCacheHitRate = %d, want 82", got)
+	}
+}
