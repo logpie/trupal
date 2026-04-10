@@ -33,20 +33,27 @@ func LoadSWEBenchTask(manifestPath, instanceID string) (SWEBenchTask, error) {
 		return SWEBenchTask{}, fmt.Errorf("read SWE-bench manifest: %w", err)
 	}
 
-	var one SWEBenchTask
-	if err := json.Unmarshal(raw, &one); err == nil && strings.TrimSpace(one.InstanceID) != "" {
-		one.ManifestPath = manifestPath
-		if instanceID == "" || one.InstanceID == instanceID {
-			return validateSWEBenchTask(one)
+	var single map[string]any
+	if err := json.Unmarshal(raw, &single); err == nil && len(single) > 0 {
+		task, err := taskFromRawMap(single)
+		if err == nil && strings.TrimSpace(task.InstanceID) != "" {
+			task.ManifestPath = manifestPath
+			if instanceID == "" || task.InstanceID == instanceID {
+				return validateSWEBenchTask(task)
+			}
+			return SWEBenchTask{}, fmt.Errorf("instance %q not found in %s", instanceID, manifestPath)
 		}
-		return SWEBenchTask{}, fmt.Errorf("instance %q not found in %s", instanceID, manifestPath)
 	}
 
-	var many []SWEBenchTask
+	var many []map[string]any
 	if err := json.Unmarshal(raw, &many); err != nil {
 		return SWEBenchTask{}, fmt.Errorf("parse SWE-bench manifest %s: %w", manifestPath, err)
 	}
-	for _, task := range many {
+	for _, item := range many {
+		task, err := taskFromRawMap(item)
+		if err != nil {
+			return SWEBenchTask{}, fmt.Errorf("parse SWE-bench manifest %s: %w", manifestPath, err)
+		}
 		task.ManifestPath = manifestPath
 		if instanceID == "" || task.InstanceID == instanceID {
 			return validateSWEBenchTask(task)
@@ -107,4 +114,64 @@ func (t SWEBenchTask) CloneSource() string {
 		return repo
 	}
 	return "https://github.com/" + repo + ".git"
+}
+
+func taskFromRawMap(raw map[string]any) (SWEBenchTask, error) {
+	task := SWEBenchTask{
+		InstanceID:             firstString(raw, "instance_id"),
+		Repo:                   firstString(raw, "repo"),
+		RepoURL:                firstString(raw, "repo_url"),
+		BaseCommit:             firstString(raw, "base_commit"),
+		EnvironmentSetupCommit: firstString(raw, "environment_setup_commit"),
+		ProblemStatement:       firstString(raw, "problem_statement"),
+		FailToPass:             firstStringSlice(raw, "FAIL_TO_PASS", "fail_to_pass"),
+		PassToPass:             firstStringSlice(raw, "PASS_TO_PASS", "pass_to_pass"),
+		TestPatch:              firstString(raw, "test_patch"),
+		Patch:                  firstString(raw, "patch"),
+		Version:                firstString(raw, "version"),
+		SetupCommand:           firstString(raw, "setup_command", "before_repo_set_cmd"),
+		EvalCommand:            firstString(raw, "evaluation_command"),
+		DockerImage:            firstString(raw, "docker_image", "dockerhub_tag"),
+		DockerEvalCommand:      firstString(raw, "docker_evaluation_command"),
+	}
+	return task, nil
+}
+
+func firstString(raw map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := raw[key]; ok {
+			if s, ok := v.(string); ok {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
+}
+
+func firstStringSlice(raw map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		v, ok := raw[key]
+		if !ok {
+			continue
+		}
+		switch vv := v.(type) {
+		case []any:
+			var out []string
+			for _, item := range vv {
+				if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+					out = append(out, strings.TrimSpace(s))
+				}
+			}
+			return out
+		case string:
+			var out []string
+			if err := json.Unmarshal([]byte(vv), &out); err == nil {
+				return out
+			}
+			if strings.TrimSpace(vv) != "" {
+				return []string{strings.TrimSpace(vv)}
+			}
+		}
+	}
+	return nil
 }

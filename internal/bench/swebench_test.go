@@ -51,6 +51,36 @@ func TestLoadSWEBenchTaskFromArrayManifest(t *testing.T) {
 	}
 }
 
+func TestLoadSWEBenchTaskSupportsLowercaseProFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.json")
+	if err := os.WriteFile(path, []byte(`{
+  "instance_id": "pro-1",
+  "repo": "example/pro",
+  "base_commit": "abc123",
+  "problem_statement": "Fix it",
+  "fail_to_pass": "[\"tests::a\"]",
+  "pass_to_pass": ["tests::b"],
+  "before_repo_set_cmd": "echo setup",
+  "dockerhub_tag": "python:3.12-slim"
+}`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	task, err := LoadSWEBenchTask(path, "pro-1")
+	if err != nil {
+		t.Fatalf("LoadSWEBenchTask() error = %v", err)
+	}
+	if len(task.FailToPass) != 1 || task.FailToPass[0] != "tests::a" {
+		t.Fatalf("FailToPass = %#v", task.FailToPass)
+	}
+	if len(task.PassToPass) != 1 || task.PassToPass[0] != "tests::b" {
+		t.Fatalf("PassToPass = %#v", task.PassToPass)
+	}
+	if task.SetupCommand != "echo setup" || task.DockerImage != "python:3.12-slim" {
+		t.Fatalf("unexpected pro fields %#v", task)
+	}
+}
+
 func TestPrepareSWEBenchWorkspaceClonesAndChecksOutBaseCommit(t *testing.T) {
 	repoDir := t.TempDir()
 	run := func(dir string, args ...string) {
