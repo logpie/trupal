@@ -17,3 +17,7 @@ func (i CurrentIssue) Key() string {
 	}
 	return strings.TrimSpace(i.Nudge)
 }
+
+func (i CurrentIssue) Message() string {
+	return strings.TrimSpace(i.Nudge)
+}

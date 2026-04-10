@@ -157,3 +157,18 @@ func TestParseTomlLineStripsInlineComments(t *testing.T) {
 		t.Fatalf("got (%q, %q), want (%q, %q)", key, value, "brain_provider", "codex")
 	}
 }
+
+func TestPaneMatchesProviderRecognizesCodexWrappedByNode(t *testing.T) {
+	if !paneMatchesProvider(ProviderCodex, "node", "cd /tmp && codex -C /tmp --model gpt-5.4-mini") {
+		t.Fatal("expected codex start command under node to match provider")
+	}
+	if paneMatchesProvider(ProviderCodex, "zsh", "") {
+		t.Fatal("did not expect unrelated pane to match codex")
+	}
+}
+
+func TestFindAgentPaneStrictRequiresProjectMatch(t *testing.T) {
+	if got := findAgentPaneStrict("/tmp/project", ProviderCodex); got != "" {
+		t.Fatalf("expected no strict pane match in unit test environment, got %q", got)
+	}
+}

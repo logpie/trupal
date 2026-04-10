@@ -904,3 +904,273 @@ func TestEscCancelsPendingQuit(t *testing.T) {
 		t.Fatal("expected esc to clear quitPending")
 	}
 }
+
+func TestManualSendSelectedNudge(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.repoRoot = "/tmp/repo"
+	m.agentPaneID = "%pane"
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "Restrict /state to GET"}}
+	m.entries = []timelineEntry{{ID: "f-1", Kind: "issue", Summary: "Restrict /state to GET"}}
+
+	var sentPane, sentMsg string
+	prevSend := sendSteeringMessage
+	sendSteeringMessage = func(paneID, message string) error {
+		sentPane = paneID
+		sentMsg = message
+		return nil
+	}
+	defer func() { sendSteeringMessage = prevSend }()
+
+	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = newM.(model)
+	if cmd == nil {
+		t.Fatal("expected send command")
+	}
+	msg := cmd()
+	if sentPane != "%pane" || sentMsg != "Restrict /state to GET" {
+		t.Fatalf("unexpected sent target/message: %q %q", sentPane, sentMsg)
+	}
+	newM, _ = m.Update(msg)
+	m = newM.(model)
+	if _, ok := m.sentNudges["f-1"]; !ok {
+		t.Fatal("expected sent state recorded")
+	}
+	if !containsStr(m.View(), "nudge sent") {
+		t.Fatalf("expected send toast, got %q", m.View())
+	}
+}
+
+func TestAutoSteerToggle(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = newM.(model)
+	if !m.steerModeAuto {
+		t.Fatal("expected auto mode on")
+	}
+	newM, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = newM.(model)
+	if m.steerModeAuto {
+		t.Fatal("expected auto mode off")
+	}
+}
+
+func TestAutoSteerUsesTopIssueNotCurrentSelection(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.repoRoot = "/tmp/repo"
+	m.agentPaneID = "%pane"
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "First issue"}, {ID: "f-2", Nudge: "Second issue"}}
+	m.entries = []timelineEntry{{ID: "f-2", Kind: "issue", Summary: "Second issue"}}
+	m.selectedEntry = 0
+	m.steerModeAuto = true
+
+	var sentMsg string
+	prevSend := sendSteeringMessage
+	sendSteeringMessage = func(paneID, message string) error { sentMsg = message; return nil }
+	defer func() { sendSteeringMessage = prevSend }()
+
+	newM, cmd := m.Update(statusMsg{agentPaneID: "%pane", repoRoot: "/tmp/repo", issues: m.issueItems})
+	_ = newM
+	if cmd == nil {
+		t.Fatal("expected auto send command")
+	}
+	_ = cmd()
+	if sentMsg != "First issue" {
+		t.Fatalf("expected top issue to send, got %q", sentMsg)
+	}
+}
+
+func TestAutoSteerSkipsAlreadySentIssue(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.repoRoot = "/tmp/repo"
+	m.agentPaneID = "%pane"
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "First issue"}, {ID: "f-2", Nudge: "Second issue"}}
+	m.steerModeAuto = true
+	m.sentNudges["f-1"] = SteeringSendState{Message: "First issue", Source: "manual", At: time.Now()}
+
+	var sentMsg string
+	prevSend := sendSteeringMessage
+	sendSteeringMessage = func(paneID, message string) error { sentMsg = message; return nil }
+	defer func() { sendSteeringMessage = prevSend }()
+
+	newM, cmd := m.Update(statusMsg{agentPaneID: "%pane", repoRoot: "/tmp/repo", issues: m.issueItems})
+	_ = newM
+	if cmd == nil {
+		t.Fatal("expected auto send command")
+	}
+	_ = cmd()
+	if sentMsg != "Second issue" {
+		t.Fatalf("expected next eligible issue to send, got %q", sentMsg)
+	}
+}
+
+func TestAutoSteerRespectsGlobalCooldown(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.repoRoot = "/tmp/repo"
+	m.agentPaneID = "%pane"
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "First issue"}, {ID: "f-2", Nudge: "Second issue"}}
+	m.steerModeAuto = true
+	m.lastSteerAt = time.Now()
+
+	newM, cmd := m.Update(statusMsg{agentPaneID: "%pane", repoRoot: "/tmp/repo", issues: m.issueItems})
+	_ = newM
+	if cmd != nil {
+		t.Fatal("expected auto send to be suppressed during cooldown")
+	}
+}
+
+func TestAutoSteerKeepsSingleActiveSendUntilIssueChanges(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.repoRoot = "/tmp/repo"
+	m.agentPaneID = "%pane"
+	m.steerModeAuto = true
+
+	newM, _ := m.Update(steeringSentMsg{
+		findingID: "f-1",
+		message:   "First issue",
+		source:    "auto",
+		at:        time.Now().Add(-time.Minute),
+	})
+	m = newM.(model)
+
+	newM, cmd := m.Update(statusMsg{
+		agentPaneID: "%pane",
+		repoRoot:    "/tmp/repo",
+		issues:      []CurrentIssue{{ID: "f-1", Nudge: "First issue"}},
+	})
+	m = newM.(model)
+	if cmd != nil {
+		t.Fatal("expected unchanged active issue to suppress auto resend")
+	}
+	if m.activeSteerKey != "f-1" {
+		t.Fatalf("expected active steer key to remain set, got %q", m.activeSteerKey)
+	}
+}
+
+func TestAutoSteerAdvancesAfterActiveIssueClears(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.repoRoot = "/tmp/repo"
+	m.agentPaneID = "%pane"
+	m.steerModeAuto = true
+
+	newM, _ := m.Update(steeringSentMsg{
+		findingID: "f-1",
+		message:   "First issue",
+		source:    "auto",
+		at:        time.Now().Add(-time.Minute),
+	})
+	m = newM.(model)
+
+	var sentMsg string
+	prevSend := sendSteeringMessage
+	sendSteeringMessage = func(paneID, message string) error { sentMsg = message; return nil }
+	defer func() { sendSteeringMessage = prevSend }()
+
+	newM, cmd := m.Update(statusMsg{
+		agentPaneID: "%pane",
+		repoRoot:    "/tmp/repo",
+		issues:      []CurrentIssue{{ID: "f-2", Nudge: "Second issue"}},
+	})
+	_ = newM
+	if cmd == nil {
+		t.Fatal("expected next issue to send after active issue cleared")
+	}
+	_ = cmd()
+	if sentMsg != "Second issue" {
+		t.Fatalf("expected next issue to send, got %q", sentMsg)
+	}
+}
+
+func TestAutoSteerResendsWhenIssueMessageChanges(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.repoRoot = "/tmp/repo"
+	m.agentPaneID = "%pane"
+	m.steerModeAuto = true
+
+	newM, _ := m.Update(steeringSentMsg{
+		findingID: "f-1",
+		message:   "Old message",
+		source:    "auto",
+		at:        time.Now().Add(-time.Minute),
+	})
+	m = newM.(model)
+
+	var sentMsg string
+	prevSend := sendSteeringMessage
+	sendSteeringMessage = func(paneID, message string) error { sentMsg = message; return nil }
+	defer func() { sendSteeringMessage = prevSend }()
+
+	newM, cmd := m.Update(statusMsg{
+		agentPaneID: "%pane",
+		repoRoot:    "/tmp/repo",
+		issues:      []CurrentIssue{{ID: "f-1", Nudge: "New message"}},
+	})
+	_ = newM
+	if cmd == nil {
+		t.Fatal("expected changed issue message to send a fresh nudge")
+	}
+	_ = cmd()
+	if sentMsg != "New message" {
+		t.Fatalf("expected updated issue message to send, got %q", sentMsg)
+	}
+}
+
+func TestIssuesPopupShowsSentStatus(t *testing.T) {
+	m := initialModel("test")
+	m.width = 100
+	m.height = 20
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "First issue"}}
+	m.sentNudges["f-1"] = SteeringSendState{
+		Message: "First issue",
+		Source:  "auto",
+		At:      time.Date(2026, 4, 10, 8, 15, 0, 0, time.Local),
+	}
+	m.activeSteerKey = "f-1"
+	m.activeSteerMessage = "First issue"
+	m.setPopupVisible(true)
+
+	lines := strings.Join(m.issuesPopupLines(), "\n")
+	if !containsStr(lines, "sent auto") || !containsStr(lines, "active") {
+		t.Fatalf("expected issues popup to show sent status, got %q", lines)
+	}
+}
+
+func TestManualSendReportsLogFailureSeparately(t *testing.T) {
+	m := initialModel("test")
+	m.width = 80
+	m.height = 15
+	m.repoRoot = "/tmp/repo"
+	m.agentPaneID = "%pane"
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "Restrict /state to GET"}}
+	m.entries = []timelineEntry{{ID: "f-1", Kind: "issue", Summary: "Restrict /state to GET"}}
+
+	prevSend := sendSteeringMessage
+	prevLog := recordSteeringEvent
+	sendSteeringMessage = func(paneID, message string) error { return nil }
+	recordSteeringEvent = func(repoRoot string, event SteeringEvent) error { return fmt.Errorf("log fail") }
+	defer func() { sendSteeringMessage = prevSend; recordSteeringEvent = prevLog }()
+
+	newM, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = newM.(model)
+	msg := cmd()
+	newM, _ = m.Update(msg)
+	m = newM.(model)
+	if !containsStr(m.View(), "log failed") {
+		t.Fatalf("expected log-failure toast, got %q", m.View())
+	}
+}

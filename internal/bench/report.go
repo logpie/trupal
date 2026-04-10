@@ -91,6 +91,7 @@ func WriteReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- Pane capture: `%s`\n", result.Artifacts.PaneCapturePath)
 	fmt.Fprintf(&b, "- Debug log: `%s`\n", result.Artifacts.DebugLogPath)
 	fmt.Fprintf(&b, "- TruPal log: `%s`\n", result.Artifacts.TrupalLogPath)
+	fmt.Fprintf(&b, "- Steer log: `%s`\n", result.Artifacts.SteerLogPath)
 	fmt.Fprintf(&b, "- Agent stdout: `%s`\n", result.Artifacts.AgentStdoutPath)
 	fmt.Fprintf(&b, "- Agent stderr: `%s`\n", result.Artifacts.AgentStderrPath)
 	fmt.Fprintf(&b, "- Session JSONL: `%s`\n", result.Artifacts.SessionJSONLPath)

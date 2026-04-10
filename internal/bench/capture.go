@@ -18,6 +18,7 @@ type ArtifactSet struct {
 	PaneCapturePath  string
 	DebugLogPath     string
 	TrupalLogPath    string
+	SteerLogPath     string
 	SessionJSONLPath string
 	ProjectCopyDir   string
 	AgentStdoutPath  string
@@ -37,6 +38,7 @@ func NewArtifactSet(rootDir string) ArtifactSet {
 		PaneCapturePath:  filepath.Join(rootDir, "pane.txt"),
 		DebugLogPath:     filepath.Join(rootDir, "trupal.debug"),
 		TrupalLogPath:    filepath.Join(rootDir, "trupal.log"),
+		SteerLogPath:     filepath.Join(rootDir, "trupal.steer.jsonl"),
 		SessionJSONLPath: filepath.Join(rootDir, "session.jsonl"),
 		ProjectCopyDir:   filepath.Join(rootDir, "project"),
 		AgentStdoutPath:  filepath.Join(rootDir, "agent.stdout.log"),
@@ -100,6 +102,9 @@ func CollectArtifacts(projectDir string, artifacts ArtifactSet, sessionJSONL, pa
 		return err
 	}
 	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.log"), artifacts.TrupalLogPath); err != nil {
+		return err
+	}
+	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.steer.jsonl"), artifacts.SteerLogPath); err != nil {
 		return err
 	}
 	if sessionJSONL != "" {

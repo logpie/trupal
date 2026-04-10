@@ -265,24 +265,58 @@ func findGitRoot(dir string) (string, error) {
 // given project directory. Returns "" if not found (falls back to splitting the current pane).
 func findAgentPane(projectDir, provider string) string {
 	command := providerPaneCommand(provider)
-	out, err := exec.Command("tmux", "list-panes", "-s", "-F", "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}").Output()
+	out, err := exec.Command("tmux", "list-panes", "-s", "-F", "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_start_command}").Output()
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) == 3 && parts[1] == command && pathsOverlap(parts[2], projectDir) {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) >= 3 && paneMatchesProvider(command, parts[1], indexedField(parts, 3)) && pathsOverlap(parts[2], projectDir) {
 			return parts[0]
 		}
 	}
 	// Fallback: any pane for the configured provider (better than nothing).
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) >= 2 && parts[1] == command {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) >= 2 && paneMatchesProvider(command, parts[1], indexedField(parts, 3)) {
 			return parts[0]
 		}
 	}
 	return ""
+}
+
+func findAgentPaneStrict(projectDir, provider string) string {
+	command := providerPaneCommand(provider)
+	out, err := exec.Command("tmux", "list-panes", "-s", "-F", "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_start_command}").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) >= 3 && paneMatchesProvider(command, parts[1], indexedField(parts, 3)) && pathsOverlap(parts[2], projectDir) {
+			return parts[0]
+		}
+	}
+	return ""
+}
+
+func paneMatchesProvider(command, currentCommand, startCommand string) bool {
+	currentCommand = strings.TrimSpace(currentCommand)
+	startCommand = strings.TrimSpace(startCommand)
+	if currentCommand == command {
+		return true
+	}
+	if command == ProviderCodex {
+		return strings.Contains(startCommand, "codex ")
+	}
+	return strings.Contains(startCommand, command)
+}
+
+func indexedField(parts []string, idx int) string {
+	if idx < 0 || idx >= len(parts) {
+		return ""
+	}
+	return parts[idx]
 }
 
 // getTmuxPaneID returns the pane ID of the pane this process is running in.

@@ -2,3 +2,4 @@ trupal
 .trupal.pid
 .trupal.log
 .trupal.debug
+.omx/

@@ -287,3 +287,10 @@ func TestTrajectoryInfoMessage(t *testing.T) {
 		t.Fatalf("unexpected repeated-edit trajectory info %q", got)
 	}
 }
+
+func TestCollectCurrentIssuesOmitsTrajectoryInfoFromSteerQueue(t *testing.T) {
+	summary := collectCurrentIssues(nil, nil, nil, []Finding{{Level: "error", Message: "build errors increasing"}}, 4)
+	if len(summary) != 0 {
+		t.Fatalf("expected trajectory findings to stay out of steer queue, got %#v", summary)
+	}
+}

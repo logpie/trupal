@@ -440,6 +440,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 		if jsonlPath != "" {
 			agentUsage = ReadAgentUsageStats(jsonlPath, cfg.SessionProvider)
 		}
+		agentPaneID := findAgentPaneStrict(repoRoot, cfg.SessionProvider)
 
 		// Drain brain results (non-blocking).
 		select {
@@ -671,6 +672,8 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			sessionModel:  sessionModel,
 			brainIdentity: state.BrainIdentity,
 			agentStats:    agentUsage,
+			repoRoot:      repoRoot,
+			agentPaneID:   agentPaneID,
 			buildOK:       buildOK,
 			buildErrs: func() int {
 				if state.Build != nil {
@@ -1227,7 +1230,7 @@ func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFindi
 			ID:       finding.Key,
 			Severity: finding.Level,
 			Status:   "shown",
-			Nudge:    shortIssueText(finding.Message),
+			Nudge:    steerablePatternNudge(finding),
 			Why:      shortIssueWhy(finding),
 			Ref:      issueRef(finding.Key, time.Time{}),
 		})
@@ -1240,19 +1243,6 @@ func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFindi
 			Nudge:    "deleted test: " + file,
 			Why:      "Removing test coverage can hide regressions unless the behavior is re-verified elsewhere.",
 			Ref:      "deleted-test",
-		})
-	}
-	for _, finding := range trajectory {
-		if finding.Level != "error" && finding.Message != "build errors increasing" {
-			continue
-		}
-		appendItem(CurrentIssue{
-			ID:       "trajectory:" + finding.Message,
-			Severity: finding.Level,
-			Status:   "shown",
-			Nudge:    shortIssueText(finding.Message),
-			Why:      "This is a process warning: the current session pattern suggests churn or non-progress, so the next step should be more deliberate.",
-			Ref:      "trajectory",
 		})
 	}
 	return items

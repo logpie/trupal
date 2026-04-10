@@ -75,6 +75,8 @@ type statusMsg struct {
 	sessionModel  string
 	brainIdentity string
 	agentStats    AgentUsageStats
+	repoRoot      string
+	agentPaneID   string
 	buildOK       *bool
 	buildErrs     int
 	buildTrend    string
@@ -96,6 +98,17 @@ type resolvedMsg struct {
 type trajectoryMsg struct{ message string }
 type patternMsg struct{ finding PatternFinding }
 type infoMsg struct{ message string }
+type steeringSentMsg struct {
+	findingID string
+	message   string
+	source    string
+	at        time.Time
+	logErr    error
+}
+type steeringSendFailedMsg struct {
+	findingID string
+	err       error
+}
 type brainStatusMsg struct {
 	thinking bool
 	lastTime time.Time
@@ -142,6 +155,8 @@ type model struct {
 	agentUsage    AgentUsageStats
 	sessionModel  string
 	brainIdentity string
+	repoRoot      string
+	agentPaneID   string
 
 	// Footer state
 	fileLine           string // current files summary
@@ -152,6 +167,12 @@ type model struct {
 	detailOpen         map[string]bool
 	toastMsg           string // transient message (e.g. "copied!")
 	toastExpiry        time.Time
+	steerModeAuto      bool
+	sentNudges         map[string]SteeringSendState
+	lastSteerAt        time.Time
+	steerInFlight      bool
+	activeSteerKey     string
+	activeSteerMessage string
 
 	// Selection
 	sel *Selection
@@ -175,6 +196,7 @@ func initialModel(project string) model {
 		agentLabel: "agent",
 		ccStatus:   "starting",
 		detailOpen: make(map[string]bool),
+		sentNudges: make(map[string]SteeringSendState),
 		sel:        NewSelection(),
 	}
 }
@@ -308,6 +330,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.syncIssueCursorToSelection()
 				}
 			}
+		case "s":
+			m.quitPending = false
+			if issue, ok := m.currentSteeringIssue(); ok && m.canSendNudge(issue, true) {
+				m.steerInFlight = true
+				return m, m.sendNudgeCmd(issue, "manual")
+			}
+		case "a":
+			m.quitPending = false
+			m.steerModeAuto = !m.steerModeAuto
+			if m.steerModeAuto {
+				m.toastMsg = "auto steer on"
+			} else {
+				m.toastMsg = "auto steer off"
+			}
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+			if m.steerModeAuto {
+				if issue, ok := m.autoSteeringIssue(); ok && m.canSendNudge(issue, false) {
+					m.steerInFlight = true
+					return m, m.sendNudgeCmd(issue, "auto")
+				}
+			}
 		case "]":
 			m.quitPending = false
 			if len(m.issueItems) > 0 && m.popupVisible() {
@@ -413,6 +456,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.brainIdentity != "" {
 			m.brainIdentity = msg.brainIdentity
 		}
+		if msg.repoRoot != "" {
+			m.repoRoot = msg.repoRoot
+		}
+		m.agentPaneID = msg.agentPaneID
 		m.agentUsage = msg.agentStats
 		if msg.elapsed != "" {
 			m.elapsed = msg.elapsed
@@ -447,8 +494,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		m.reconcileActiveSteeringIssue()
 		m.findings = msg.findings
 		m.resolved = msg.resolved
+		if m.steerModeAuto {
+			if issue, ok := m.autoSteeringIssue(); ok && m.canSendNudge(issue, false) {
+				m.steerInFlight = true
+				return m, m.sendNudgeCmd(issue, "auto")
+			}
+		}
 
 	case nudgeMsg:
 		m.findings++
@@ -517,6 +571,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Marker:  "i",
 			Summary: msg.message,
 		})
+
+	case steeringSentMsg:
+		m.steerInFlight = false
+		m.sentNudges[msg.findingID] = SteeringSendState{
+			Message: msg.message,
+			Source:  msg.source,
+			At:      msg.at,
+		}
+		m.activeSteerKey = msg.findingID
+		m.activeSteerMessage = strings.TrimSpace(msg.message)
+		m.lastSteerAt = msg.at
+		if msg.logErr != nil {
+			m.toastMsg = "⚠ nudge sent, log failed"
+			Debugf("[steer] log failed for %s: %v", msg.findingID, msg.logErr)
+		} else {
+			m.toastMsg = "✓ nudge sent"
+		}
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+		m.appendEntry(timelineEntry{
+			Kind:    "info",
+			Time:    msg.at.Format("15:04"),
+			Marker:  "i",
+			Summary: fmt.Sprintf("Sent to Codex (%s): %s", msg.source, truncate(msg.message, 120)),
+		})
+
+	case steeringSendFailedMsg:
+		m.steerInFlight = false
+		m.toastMsg = "⚠ send failed"
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+		Debugf("[steer] send failed for %s: %v", msg.findingID, msg.err)
 
 	case patternMsg:
 		m.logIssueEvent("pattern", BrainFinding{
@@ -1310,6 +1394,10 @@ func (m model) selectedInspectorAllLinesForEntry(entryIdx int, key string) []str
 		width = 20
 	}
 	lines := []string{}
+	if sent, ok := m.sentNudges[entry.ID]; ok {
+		status := fmt.Sprintf("%s at %s", sent.Source, sent.At.Format("15:04"))
+		lines = append(lines, renderDetailField("Sent", status, width-lipgloss.Width(logPrefix("", ""))-logGapWidth, sIssuePreview)...)
+	}
 	for _, block := range entry.Detail {
 		parts := strings.SplitN(block, "\n", 2)
 		if len(parts) != 2 {
@@ -1343,6 +1431,116 @@ func (m *model) syncIssueCursorToSelection() {
 	}
 }
 
+func (m model) currentSteeringIssue() (CurrentIssue, bool) {
+	if len(m.issueItems) == 0 {
+		return CurrentIssue{}, false
+	}
+	if m.popupVisible() {
+		return m.issueItems[m.issueCursor%len(m.issueItems)], true
+	}
+	if len(m.entries) == 0 {
+		return CurrentIssue{}, false
+	}
+	selectedID := strings.TrimSpace(m.entries[m.selectedEntry].ID)
+	for _, issue := range m.issueItems {
+		if issue.Key() == selectedID {
+			return issue, true
+		}
+	}
+	return CurrentIssue{}, false
+}
+
+func (m model) autoSteeringIssue() (CurrentIssue, bool) {
+	if strings.TrimSpace(m.activeSteerKey) != "" {
+		return CurrentIssue{}, false
+	}
+	for _, issue := range m.issueItems {
+		if m.canSendNudge(issue, false) {
+			return issue, true
+		}
+	}
+	return CurrentIssue{}, false
+}
+
+func (m model) canSendNudge(issue CurrentIssue, manual bool) bool {
+	if strings.TrimSpace(issue.Message()) == "" || strings.TrimSpace(m.agentPaneID) == "" {
+		return false
+	}
+	if m.steerInFlight {
+		return false
+	}
+	if !manual && !m.lastSteerAt.IsZero() && time.Since(m.lastSteerAt) < 30*time.Second {
+		return false
+	}
+	record, ok := m.sentNudges[issue.Key()]
+	if !ok {
+		return true
+	}
+	if strings.TrimSpace(record.Message) != strings.TrimSpace(issue.Message()) {
+		return true
+	}
+	if manual {
+		return time.Since(record.At) > 5*time.Second
+	}
+	return time.Since(record.At) > 30*time.Second
+}
+
+func (m model) sendNudgeCmd(issue CurrentIssue, source string) tea.Cmd {
+	repoRoot := m.repoRoot
+	paneID := m.agentPaneID
+	message := issue.Message()
+	findingID := issue.Key()
+	return func() tea.Msg {
+		err := sendSteeringMessage(paneID, message)
+		if err != nil {
+			return steeringSendFailedMsg{findingID: findingID, err: err}
+		}
+		logErr := recordSteeringEvent(repoRoot, SteeringEvent{
+			Timestamp: time.Now().Format(time.RFC3339Nano),
+			FindingID: findingID,
+			Message:   message,
+			Source:    source,
+			PaneID:    paneID,
+		})
+		return steeringSentMsg{
+			findingID: findingID,
+			message:   message,
+			source:    source,
+			at:        time.Now(),
+			logErr:    logErr,
+		}
+	}
+}
+
+func (m *model) reconcileActiveSteeringIssue() {
+	if strings.TrimSpace(m.activeSteerKey) == "" {
+		return
+	}
+	for _, issue := range m.issueItems {
+		if issue.Key() != m.activeSteerKey {
+			continue
+		}
+		if strings.TrimSpace(issue.Message()) == m.activeSteerMessage {
+			return
+		}
+		break
+	}
+	m.activeSteerKey = ""
+	m.activeSteerMessage = ""
+}
+
+func (m model) issueSentStatus(issue CurrentIssue) string {
+	sent, ok := m.sentNudges[issue.Key()]
+	if !ok {
+		return ""
+	}
+	status := fmt.Sprintf("sent %s %s", sent.Source, sent.At.Format("15:04"))
+	if issue.Key() == m.activeSteerKey && strings.TrimSpace(issue.Message()) == m.activeSteerMessage {
+		status += " active"
+	}
+	return status
+}
+
 func (m model) bodyRect() selectionRect {
 	return selectionRect{
 		X: 0,
@@ -1372,11 +1570,11 @@ func (m model) logRect() selectionRect {
 }
 
 func controlsHint() string {
-	return "move j/k  page pgup/pgdn  details o  issues p  copy drag  quit ctrl+c"
+	return "move j/k  page pgup/pgdn  details o  issues p  send s  auto a  copy drag  quit ctrl+c"
 }
 
 func issueControlsHint() string {
-	return "issues j/k  jump enter  close p"
+	return "issues j/k  jump enter  send s  auto a  close p"
 }
 
 func renderLabeledField(label, text string, width int, bodyStyle lipgloss.Style) []string {
@@ -1508,7 +1706,11 @@ func (m model) issuesPopupLines() []string {
 			marker = "›"
 			style = sIssueText.Bold(true)
 		}
-		lines = append(lines, renderContinuationLineWithMarker(marker, style.Render(wrapSingleLine(normalizeIssueText(issue.Nudge), width-4))))
+		text := normalizeIssueText(issue.Nudge)
+		if sent := m.issueSentStatus(issue); sent != "" {
+			text += " · " + sent
+		}
+		lines = append(lines, renderContinuationLineWithMarker(marker, style.Render(wrapSingleLine(text, width-4))))
 	}
 	if strings.TrimSpace(current.Why) != "" {
 		lines = append(lines, renderLabeledField("Why", strings.TrimSpace(current.Why), width, sIssueWhy)...)
@@ -2078,6 +2280,11 @@ func (m model) headerBrainParts() []string {
 		parts = append(parts, sHeaderValueText.Render(m.brainIdentity))
 	}
 	parts = append(parts, styleHeaderStatusValue(ansi.Strip(m.brainIndicator())))
+	if m.steerModeAuto {
+		parts = append(parts, sHeaderValueText.Render("steer auto"))
+	} else {
+		parts = append(parts, sDim.Render("steer manual"))
+	}
 	if m.buildState != "" {
 		parts = append(parts, styleHeaderBuildValue(ansi.Strip(m.buildState)))
 	}
