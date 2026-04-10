@@ -2,7 +2,9 @@ package bench
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +48,108 @@ func TestLoadSWEBenchTaskFromArrayManifest(t *testing.T) {
 	}
 	if task.InstanceID != "b" {
 		t.Fatalf("InstanceID = %q, want b", task.InstanceID)
+	}
+}
+
+func TestPrepareSWEBenchWorkspaceClonesAndChecksOutBaseCommit(t *testing.T) {
+	repoDir := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run(repoDir, "git", "init")
+	run(repoDir, "git", "config", "user.name", "Bench Test")
+	run(repoDir, "git", "config", "user.email", "bench@test")
+	if err := os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	run(repoDir, "git", "add", ".")
+	run(repoDir, "git", "commit", "-m", "first")
+	baseCommitRaw, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse error = %v: %s", err, string(baseCommitRaw))
+	}
+	baseCommit := strings.TrimSpace(string(baseCommitRaw))
+	if err := os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	run(repoDir, "git", "add", ".")
+	run(repoDir, "git", "commit", "-m", "second")
+
+	runner := &Runner{}
+	task := SWEBenchTask{
+		InstanceID:       "sample",
+		Repo:             repoDir,
+		BaseCommit:       baseCommit,
+		ProblemStatement: "fix it",
+	}
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := runner.PrepareSWEBenchWorkspace(task, workspace); err != nil {
+		t.Fatalf("PrepareSWEBenchWorkspace() error = %v", err)
+	}
+	gotRaw, err := exec.Command("git", "-C", workspace, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("workspace rev-parse error = %v: %s", err, string(gotRaw))
+	}
+	if got := strings.TrimSpace(string(gotRaw)); got != baseCommit {
+		t.Fatalf("workspace HEAD = %q, want %q", got, baseCommit)
+	}
+}
+
+func TestEvaluateSWEBenchTaskAppliesTestPatchAndRunsEval(t *testing.T) {
+	repoDir := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run(repoDir, "git", "init")
+	run(repoDir, "git", "config", "user.name", "Bench Test")
+	run(repoDir, "git", "config", "user.email", "bench@test")
+	if err := os.WriteFile(filepath.Join(repoDir, "go.mod"), []byte("module example.com/eval\n\ngo 1.24.2\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(go.mod) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\nfunc status() bool { return false }\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(main.go) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "main_test.go"), []byte("package main\nimport \"testing\"\nfunc TestStatus(t *testing.T) { if !status() { t.Fatal(\"want true\") } }\n"), 0644); err != nil {
+		t.Fatalf("WriteFile(main_test.go) error = %v", err)
+	}
+	run(repoDir, "git", "add", ".")
+	run(repoDir, "git", "commit", "-m", "base")
+	baseCommitRaw, err := exec.Command("git", "-C", repoDir, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rev-parse error = %v: %s", err, string(baseCommitRaw))
+	}
+	baseCommit := strings.TrimSpace(string(baseCommitRaw))
+
+	task := SWEBenchTask{
+		InstanceID:       "sample",
+		Repo:             repoDir,
+		BaseCommit:       baseCommit,
+		ProblemStatement: "Fix status",
+		TestPatch:        "diff --git a/main.go b/main.go\nindex 8f2de11..c3dcb44 100644\n--- a/main.go\n+++ b/main.go\n@@ -1,2 +1,2 @@\n package main\n-func status() bool { return false }\n+func status() bool { return true }\n",
+		EvalCommand:      "go test ./...",
+	}
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	runner := &Runner{}
+	if err := runner.PrepareSWEBenchWorkspace(task, workspace); err != nil {
+		t.Fatalf("PrepareSWEBenchWorkspace() error = %v", err)
+	}
+	out, err := runner.EvaluateSWEBenchTask(task, workspace, "")
+	if err != nil {
+		t.Fatalf("EvaluateSWEBenchTask() error = %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("expected go test success output, got %q", out)
 	}
 }

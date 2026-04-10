@@ -11,6 +11,7 @@ import (
 type SWEBenchTask struct {
 	InstanceID             string   `json:"instance_id"`
 	Repo                   string   `json:"repo"`
+	RepoURL                string   `json:"repo_url"`
 	BaseCommit             string   `json:"base_commit"`
 	EnvironmentSetupCommit string   `json:"environment_setup_commit"`
 	ProblemStatement       string   `json:"problem_statement"`
@@ -19,6 +20,7 @@ type SWEBenchTask struct {
 	TestPatch              string   `json:"test_patch"`
 	Patch                  string   `json:"patch"`
 	Version                string   `json:"version"`
+	EvalCommand            string   `json:"evaluation_command"`
 	ManifestPath           string   `json:"-"`
 }
 
@@ -59,6 +61,7 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	task.TestPatch = strings.TrimSpace(task.TestPatch)
 	task.Patch = strings.TrimSpace(task.Patch)
 	task.Version = strings.TrimSpace(task.Version)
+	task.EvalCommand = strings.TrimSpace(task.EvalCommand)
 	if task.InstanceID == "" {
 		return SWEBenchTask{}, fmt.Errorf("missing instance_id")
 	}
@@ -84,4 +87,18 @@ func (t SWEBenchTask) Slug() string {
 
 func (t SWEBenchTask) WorkspaceRoot(baseDir string) string {
 	return filepath.Join(baseDir, t.Slug())
+}
+
+func (t SWEBenchTask) CloneSource() string {
+	if strings.TrimSpace(t.RepoURL) != "" {
+		return strings.TrimSpace(t.RepoURL)
+	}
+	repo := strings.TrimSpace(t.Repo)
+	if repo == "" {
+		return ""
+	}
+	if strings.Contains(repo, "://") || strings.HasPrefix(repo, "/") || strings.HasPrefix(repo, ".") {
+		return repo
+	}
+	return "https://github.com/" + repo + ".git"
 }

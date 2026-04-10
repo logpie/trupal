@@ -42,6 +42,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "eval-swebench":
+		if err := evalSWEBench(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(1)
@@ -54,6 +59,7 @@ func prepareSWEBench(repoRoot string, args []string) error {
 	swebenchDir := fs.String("swebench-dir", filepath.Join(repoRoot, "bench", "swebench-sample"), "directory containing a SWE-bench manifest snapshot")
 	manifest := fs.String("manifest", "", "path to a local SWE-bench task manifest JSON file")
 	instance := fs.String("instance", "", "SWE-bench instance id")
+	checkout := fs.Bool("checkout", false, "clone the task repository into the prepared workspace and checkout base_commit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -72,9 +78,53 @@ func prepareSWEBench(repoRoot string, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *checkout {
+		if err := runner.PrepareSWEBenchWorkspace(task, workspace); err != nil {
+			return err
+		}
+	}
 	fmt.Printf("instance_id=%s\n", task.InstanceID)
 	fmt.Printf("repo=%s\n", task.Repo)
+	fmt.Printf("clone_source=%s\n", task.CloneSource())
+	fmt.Printf("base_commit=%s\n", task.BaseCommit)
 	fmt.Printf("workspace=%s\n", workspace)
+	return nil
+}
+
+func evalSWEBench(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("eval-swebench", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	swebenchDir := fs.String("swebench-dir", filepath.Join(repoRoot, "bench", "swebench-sample"), "directory containing a SWE-bench manifest snapshot")
+	manifest := fs.String("manifest", "", "path to a local SWE-bench task manifest JSON file")
+	instance := fs.String("instance", "", "SWE-bench instance id")
+	evalCmd := fs.String("eval-cmd", "", "evaluation command to run after applying test_patch")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		SWEBenchDir:  *swebenchDir,
+	})
+	if err != nil {
+		return err
+	}
+
+	task, workspace, err := runner.PrepareSWEBenchTask(*manifest, *instance)
+	if err != nil {
+		return err
+	}
+	if err := runner.PrepareSWEBenchWorkspace(task, workspace); err != nil {
+		return err
+	}
+	out, err := runner.EvaluateSWEBenchTask(task, workspace, *evalCmd)
+	if err != nil {
+		fmt.Print(out)
+		return err
+	}
+	fmt.Print(out)
 	return nil
 }
 
@@ -230,4 +280,5 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-paired [flags] <scenario>")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-all [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench prepare-swebench [flags]")
+	fmt.Fprintln(os.Stderr, "  trupal-bench eval-swebench [flags]")
 }

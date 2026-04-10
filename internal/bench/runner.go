@@ -138,10 +138,73 @@ func (r *Runner) PrepareSWEBenchTask(manifestPath, instanceID string) (SWEBenchT
 	if err != nil {
 		return SWEBenchTask{}, "", fmt.Errorf("create swebench workspace: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "TASK.md"), []byte(task.ProblemStatement+"\n"), 0644); err != nil {
+	if err := writeSWEBenchTaskArtifact(workspace, task); err != nil {
 		return SWEBenchTask{}, "", err
 	}
 	return task, workspace, nil
+}
+
+func (r *Runner) PrepareSWEBenchWorkspace(task SWEBenchTask, workspace string) error {
+	if strings.TrimSpace(workspace) == "" {
+		return fmt.Errorf("workspace is required")
+	}
+	source := task.CloneSource()
+	if strings.TrimSpace(source) == "" {
+		return fmt.Errorf("task %s has no clone source", task.InstanceID)
+	}
+	taskPath := filepath.Join(workspace, "TASK.md")
+	_ = os.Remove(taskPath)
+	if _, err := os.Stat(filepath.Join(workspace, ".git")); err == nil {
+		if err := writeSWEBenchTaskArtifact(workspace, task); err != nil {
+			return err
+		}
+		return nil
+	}
+	cmd := exec.Command("git", "clone", source, workspace)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone %s: %w\n%s", source, err, string(out))
+	}
+	cmd = exec.Command("git", "checkout", task.BaseCommit)
+	cmd.Dir = workspace
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git checkout %s: %w\n%s", task.BaseCommit, err, string(out))
+	}
+	return writeSWEBenchTaskArtifact(workspace, task)
+}
+
+func writeSWEBenchTaskArtifact(workspace string, task SWEBenchTask) error {
+	return os.WriteFile(filepath.Join(workspace, "TASK.md"), []byte(task.ProblemStatement+"\n"), 0644)
+}
+
+func (r *Runner) EvaluateSWEBenchTask(task SWEBenchTask, workspace, evalCommand string) (string, error) {
+	if strings.TrimSpace(evalCommand) == "" {
+		evalCommand = task.EvalCommand
+	}
+	if strings.TrimSpace(evalCommand) == "" {
+		return "", fmt.Errorf("no evaluation command provided")
+	}
+	if strings.TrimSpace(task.TestPatch) != "" {
+		patchPath := filepath.Join(workspace, ".swebench-test.patch")
+		patch := task.TestPatch
+		if !strings.HasSuffix(patch, "\n") {
+			patch += "\n"
+		}
+		if err := os.WriteFile(patchPath, []byte(patch), 0644); err != nil {
+			return "", err
+		}
+		cmd := exec.Command("git", "apply", patchPath)
+		cmd.Dir = workspace
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git apply test patch: %w\n%s", err, string(out))
+		}
+	}
+	cmd := exec.Command("sh", "-lc", evalCommand)
+	cmd.Dir = workspace
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("evaluate swebench task: %w\n%s", err, string(out))
+	}
+	return string(out), nil
 }
 
 func (r *Runner) RunAll() ([]*RunResult, error) {
