@@ -20,6 +20,7 @@ type SWEBenchTask struct {
 	TestPatch              string   `json:"test_patch"`
 	Patch                  string   `json:"patch"`
 	Version                string   `json:"version"`
+	SetupCommand           string   `json:"setup_command"`
 	EvalCommand            string   `json:"evaluation_command"`
 	ManifestPath           string   `json:"-"`
 }
@@ -61,6 +62,7 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	task.TestPatch = strings.TrimSpace(task.TestPatch)
 	task.Patch = strings.TrimSpace(task.Patch)
 	task.Version = strings.TrimSpace(task.Version)
+	task.SetupCommand = strings.TrimSpace(task.SetupCommand)
 	task.EvalCommand = strings.TrimSpace(task.EvalCommand)
 	if task.InstanceID == "" {
 		return SWEBenchTask{}, fmt.Errorf("missing instance_id")

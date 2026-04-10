@@ -158,6 +158,9 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	if err := r.PrepareSWEBenchWorkspace(task, workspace); err != nil {
 		return nil, err
 	}
+	if err := r.SetupSWEBenchWorkspace(task, workspace); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(task.TestPatch) != "" {
 		if err := r.applySWEBenchTestPatch(task.TestPatch, workspace); err != nil {
 			return nil, fmt.Errorf("apply SWE-bench test patch before agent run: %w", err)
@@ -274,6 +277,18 @@ func (r *Runner) PrepareSWEBenchWorkspace(task SWEBenchTask, workspace string) e
 	return writeSWEBenchTaskArtifact(workspace, task)
 }
 
+func (r *Runner) SetupSWEBenchWorkspace(task SWEBenchTask, workspace string) error {
+	if strings.TrimSpace(task.SetupCommand) == "" {
+		return nil
+	}
+	cmd := exec.Command("sh", "-lc", task.SetupCommand)
+	cmd.Dir = workspace
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("setup swebench workspace: %w\n%s", err, string(out))
+	}
+	return nil
+}
+
 func writeSWEBenchTaskArtifact(workspace string, task SWEBenchTask) error {
 	return os.WriteFile(filepath.Join(workspace, "TASK.md"), []byte(task.ProblemStatement+"\n"), 0644)
 }
@@ -315,7 +330,11 @@ func (r *Runner) applySWEBenchTestPatch(testPatch, workspace string) error {
 	cmd := exec.Command("git", "apply", patchPath)
 	cmd.Dir = workspace
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git apply test patch: %w\n%s", err, string(out))
+		fallback := exec.Command("sh", "-lc", "patch -p1 < .swebench-test.patch")
+		fallback.Dir = workspace
+		if patchOut, patchErr := fallback.CombinedOutput(); patchErr != nil {
+			return fmt.Errorf("git apply test patch: %w\n%s\npatch fallback: %v\n%s", err, string(out), patchErr, string(patchOut))
+		}
 	}
 	return nil
 }

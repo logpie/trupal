@@ -153,3 +153,23 @@ func TestEvaluateSWEBenchTaskAppliesTestPatchAndRunsEval(t *testing.T) {
 		t.Fatalf("expected go test success output, got %q", out)
 	}
 }
+
+func TestSetupSWEBenchWorkspaceRunsSetupCommand(t *testing.T) {
+	workspace := t.TempDir()
+	task := SWEBenchTask{
+		InstanceID:       "sample",
+		ProblemStatement: "x",
+		SetupCommand:     "printf ready > .setup-proof",
+	}
+	runner := &Runner{}
+	if err := runner.SetupSWEBenchWorkspace(task, workspace); err != nil {
+		t.Fatalf("SetupSWEBenchWorkspace() error = %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(workspace, ".setup-proof"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if strings.TrimSpace(string(raw)) != "ready" {
+		t.Fatalf("unexpected setup proof %q", string(raw))
+	}
+}

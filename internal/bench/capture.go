@@ -75,6 +75,12 @@ func CopyTree(srcDir, dstDir string) error {
 			}
 			return nil
 		}
+		if strings.HasPrefix(rel, ".venv") || strings.HasPrefix(rel, ".pytest_cache") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 
 		target := filepath.Join(dstDir, rel)
 		if d.IsDir() {
