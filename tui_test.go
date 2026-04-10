@@ -1145,10 +1145,11 @@ func TestIssuesPopupShowsSentStatus(t *testing.T) {
 	m.setPopupVisible(true)
 
 	lines := strings.Join(m.issuesPopupLines(), "\n")
-	if !containsStr(lines, "[auto") || !containsStr(lines, "[active]") {
+	plain := ansi.Strip(lines)
+	if !containsStr(plain, "auto") || !containsStr(plain, "active") {
 		t.Fatalf("expected issues popup to show sent status, got %q", lines)
 	}
-	if !containsStr(lines, "[auto 08:15] [active] First issue") {
+	if !containsStr(plain, "auto 08:15 active First issue") {
 		t.Fatalf("expected issues popup to lead with sent status, got %q", lines)
 	}
 }
@@ -1191,9 +1192,19 @@ func TestIssueTimelineShowsInlineSentStatus(t *testing.T) {
 	m.activeSteerMessage = "First issue"
 
 	lines, _, _ := m.renderedTimeline()
-	rendered := strings.Join(lines, "\n")
-	if !containsStr(rendered, "[manual 08:15]") || !containsStr(rendered, "[active]") {
+	rendered := ansi.Strip(strings.Join(lines, "\n"))
+	if !containsStr(rendered, "manual") || !containsStr(rendered, "08:15") || !containsStr(rendered, "active") {
 		t.Fatalf("expected timeline issue row to show inline sent status, got %q", rendered)
+	}
+}
+
+func TestHeaderBrainPartsShowsActiveSteerCount(t *testing.T) {
+	m := initialModel("test")
+	m.activeSteerKey = "f-1"
+
+	rendered := ansi.Strip(strings.Join(m.headerBrainParts(), " "))
+	if !containsStr(rendered, "1 active") {
+		t.Fatalf("expected header to show active steer count, got %q", rendered)
 	}
 }
 

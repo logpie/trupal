@@ -55,6 +55,10 @@ var (
 	sDockMuted      = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	sDockAccent     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
 	sDockWarn       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	sSteerChip      = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Background(lipgloss.Color("238")).Padding(0, 1)
+	sSteerManual    = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("240")).Padding(0, 1)
+	sSteerAuto      = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
+	sSteerActive    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("235")).Background(lipgloss.Color("214")).Padding(0, 1)
 	sInspectorTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("24")).Padding(0, 1)
 	sInspectorBox   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("239")).Padding(0, 1).Foreground(lipgloss.Color("252"))
 	sInspectorCode  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("238")).Background(lipgloss.Color("235")).Padding(0, 1).Foreground(lipgloss.Color("252"))
@@ -1532,11 +1536,11 @@ func (m model) issueSentStatus(issue CurrentIssue) string {
 	if !ok {
 		return ""
 	}
-	status := fmt.Sprintf("[%s %s]", sent.Source, sent.At.Format("15:04"))
+	statusParts := []string{renderSteerSourceChip(sent.Source), sSteerChip.Render(sent.At.Format("15:04"))}
 	if issue.Key() == m.activeSteerKey && strings.TrimSpace(issue.Message()) == m.activeSteerMessage {
-		status += " [active]"
+		statusParts = append(statusParts, sSteerActive.Render("active"))
 	}
-	return status
+	return strings.Join(statusParts, " ")
 }
 
 func (m model) issueSummaryWithStatus(issue CurrentIssue) string {
@@ -1563,6 +1567,17 @@ func (m model) issueSummaryByKey(key, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+func renderSteerSourceChip(source string) string {
+	switch strings.TrimSpace(source) {
+	case "auto":
+		return sSteerAuto.Render("auto")
+	case "manual":
+		return sSteerManual.Render("manual")
+	default:
+		return sSteerChip.Render(strings.TrimSpace(source))
+	}
 }
 
 func (m model) bodyRect() selectionRect {
@@ -2305,6 +2320,9 @@ func (m model) headerBrainParts() []string {
 		parts = append(parts, sHeaderValueText.Render("steer auto"))
 	} else {
 		parts = append(parts, sDim.Render("steer manual"))
+	}
+	if strings.TrimSpace(m.activeSteerKey) != "" {
+		parts = append(parts, sSteerActive.Render("1 active"))
 	}
 	if m.buildState != "" {
 		parts = append(parts, styleHeaderBuildValue(ansi.Strip(m.buildState)))
