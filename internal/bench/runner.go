@@ -787,8 +787,9 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 	}
 	deadline := result.StartedAt.Add(timeout)
 	quietWindow := 8 * time.Second
+	steeringRounds, steeringCooldown := effectiveBenchmarkSteeringPolicy(result.Scenario)
 	if result.Arm == ArmSteer {
-		quietWindow = result.Scenario.SteeringCooldown + 5*time.Second
+		quietWindow = steeringCooldown + 5*time.Second
 	}
 	autoDisabled := result.Arm != ArmSteer
 
@@ -811,9 +812,9 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 		if len(events) > 0 && events[len(events)-1].Timestamp.After(lastActivity) {
 			lastActivity = events[len(events)-1].Timestamp
 		}
-		if result.Arm == ArmSteer && !autoDisabled && len(events) >= result.Scenario.SteeringRounds {
+		if result.Arm == ArmSteer && !autoDisabled && len(events) >= steeringRounds {
 			if err := r.sendKeys(trupalPaneID, "a"); err != nil {
-				return time.Time{}, -1, false, fmt.Errorf("disable auto steer after %d rounds: %w", result.Scenario.SteeringRounds, err)
+				return time.Time{}, -1, false, fmt.Errorf("disable auto steer after %d rounds: %w", steeringRounds, err)
 			}
 			autoDisabled = true
 			lastActivity = time.Now()
@@ -829,6 +830,18 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+func effectiveBenchmarkSteeringPolicy(s Scenario) (int, time.Duration) {
+	rounds := s.SteeringRounds
+	if rounds <= 0 {
+		rounds = 1
+	}
+	cooldown := s.SteeringCooldown
+	if cooldown <= 0 {
+		cooldown = 30 * time.Second
+	}
+	return rounds, cooldown
 }
 
 func (r *Runner) sendLiteral(paneID, text string) error {

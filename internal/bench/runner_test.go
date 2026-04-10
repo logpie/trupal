@@ -3,6 +3,7 @@ package bench
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBenchmarkAgentPromptForcesNonInteractiveExecution(t *testing.T) {
@@ -39,5 +40,30 @@ trupal_config:
 	}
 	if got := scenario.EffectiveAgentModel(); got != "gpt-5.4-mini" {
 		t.Fatalf("EffectiveAgentModel() = %q, want gpt-5.4-mini", got)
+	}
+}
+
+func TestEffectiveBenchmarkSteeringPolicyDefaults(t *testing.T) {
+	rounds, cooldown := effectiveBenchmarkSteeringPolicy(Scenario{})
+
+	if rounds != 1 {
+		t.Fatalf("rounds = %d, want 1", rounds)
+	}
+	if cooldown != 30*time.Second {
+		t.Fatalf("cooldown = %s, want 30s", cooldown)
+	}
+}
+
+func TestEffectiveBenchmarkSteeringPolicyPreservesScenarioValues(t *testing.T) {
+	rounds, cooldown := effectiveBenchmarkSteeringPolicy(Scenario{
+		SteeringRounds:   3,
+		SteeringCooldown: 45 * time.Second,
+	})
+
+	if rounds != 3 {
+		t.Fatalf("rounds = %d, want 3", rounds)
+	}
+	if cooldown != 45*time.Second {
+		t.Fatalf("cooldown = %s, want 45s", cooldown)
 	}
 }
