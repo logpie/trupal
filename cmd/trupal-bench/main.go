@@ -67,6 +67,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "eval-swebench-gold-docker":
+		if err := evalSWEBenchGoldDocker(repoRoot, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(1)
@@ -204,6 +209,42 @@ func evalSWEBenchDocker(repoRoot string, args []string) error {
 		return err
 	}
 	if err := runner.SetupSWEBenchWorkspace(task, workspace); err != nil {
+		return err
+	}
+	out, err := runner.EvaluateSWEBenchTaskDocker(task, workspace)
+	fmt.Print(out)
+	return err
+}
+
+func evalSWEBenchGoldDocker(repoRoot string, args []string) error {
+	fs := flag.NewFlagSet("eval-swebench-gold-docker", flag.ExitOnError)
+	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
+	swebenchDir := fs.String("swebench-dir", filepath.Join(repoRoot, "bench", "swebench-sample"), "directory containing a SWE-bench manifest snapshot")
+	manifest := fs.String("manifest", "", "path to a local SWE-bench task manifest JSON file")
+	instance := fs.String("instance", "", "SWE-bench instance id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	runner, err := bench.NewRunner(bench.RunnerOptions{
+		RepoRoot:     repoRoot,
+		ResultsDir:   *resultsDir,
+		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
+		SWEBenchDir:  *swebenchDir,
+	})
+	if err != nil {
+		return err
+	}
+	task, workspace, err := runner.PrepareSWEBenchTask(*manifest, *instance)
+	if err != nil {
+		return err
+	}
+	if err := runner.PrepareSWEBenchWorkspace(task, workspace); err != nil {
+		return err
+	}
+	if err := runner.SetupSWEBenchWorkspace(task, workspace); err != nil {
+		return err
+	}
+	if err := runner.ApplySWEBenchGoldPatch(task, workspace); err != nil {
 		return err
 	}
 	out, err := runner.EvaluateSWEBenchTaskDocker(task, workspace)
@@ -437,6 +478,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  trupal-bench prepare-swebench [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench eval-swebench [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench eval-swebench-docker [flags]")
+	fmt.Fprintln(os.Stderr, "  trupal-bench eval-swebench-gold-docker [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-swebench [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-swebench-paired [flags]")
 }

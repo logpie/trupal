@@ -305,6 +305,13 @@ func (r *Runner) EvaluateSWEBenchTask(task SWEBenchTask, workspace, evalCommand 
 	return r.runSWEBenchEvalCommand(evalCommand, workspace)
 }
 
+func (r *Runner) ApplySWEBenchGoldPatch(task SWEBenchTask, workspace string) error {
+	if strings.TrimSpace(task.Patch) == "" {
+		return nil
+	}
+	return r.applyPatchString(task.Patch, workspace, ".swebench-gold.patch")
+}
+
 func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string) (string, error) {
 	if strings.TrimSpace(task.DockerImage) == "" {
 		return "", fmt.Errorf("no docker_image provided")
@@ -317,7 +324,7 @@ func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string)
 		"-v", workspace+":/workspace",
 		"-w", "/workspace",
 		task.DockerImage,
-		"sh", "-lc", task.DockerEvalCommand,
+		"-lc", task.DockerEvalCommand,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -340,21 +347,37 @@ func (r *Runner) runSWEBenchEvalCommand(evalCommand, workspace string) (string, 
 }
 
 func (r *Runner) applySWEBenchTestPatch(testPatch, workspace string) error {
+	return r.applyPatchString(testPatch, workspace, ".swebench-test.patch")
+}
+
+func (r *Runner) applyPatchString(testPatch, workspace, filename string) error {
 	patchPath := filepath.Join(workspace, ".swebench-test.patch")
 	patch := testPatch
 	if !strings.HasSuffix(patch, "\n") {
 		patch += "\n"
 	}
+	patchPath = filepath.Join(workspace, filename)
 	if err := os.WriteFile(patchPath, []byte(patch), 0644); err != nil {
 		return err
 	}
 	cmd := exec.Command("git", "apply", patchPath)
 	cmd.Dir = workspace
 	if out, err := cmd.CombinedOutput(); err != nil {
-		fallback := exec.Command("sh", "-lc", "patch -p1 < .swebench-test.patch")
+		reverseCheck := exec.Command("git", "apply", "--reverse", "--check", patchPath)
+		reverseCheck.Dir = workspace
+		if reverseOut, reverseErr := reverseCheck.CombinedOutput(); reverseErr == nil {
+			return nil
+		} else if strings.Contains(string(reverseOut), "applies cleanly") {
+			return nil
+		}
+		fallback := exec.Command("sh", "-lc", "patch -p1 < "+filename)
 		fallback.Dir = workspace
 		if patchOut, patchErr := fallback.CombinedOutput(); patchErr != nil {
-			return fmt.Errorf("git apply test patch: %w\n%s\npatch fallback: %v\n%s", err, string(out), patchErr, string(patchOut))
+			combined := string(patchOut)
+			if strings.Contains(combined, "Reversed (or previously applied) patch detected") {
+				return nil
+			}
+			return fmt.Errorf("git apply test patch: %w\n%s\npatch fallback: %v\n%s", err, string(out), patchErr, combined)
 		}
 	}
 	return nil
