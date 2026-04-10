@@ -1145,8 +1145,55 @@ func TestIssuesPopupShowsSentStatus(t *testing.T) {
 	m.setPopupVisible(true)
 
 	lines := strings.Join(m.issuesPopupLines(), "\n")
-	if !containsStr(lines, "sent auto") || !containsStr(lines, "active") {
+	if !containsStr(lines, "[auto") || !containsStr(lines, "[active]") {
 		t.Fatalf("expected issues popup to show sent status, got %q", lines)
+	}
+	if !containsStr(lines, "[auto 08:15] [active] First issue") {
+		t.Fatalf("expected issues popup to lead with sent status, got %q", lines)
+	}
+}
+
+func TestSteeringSendDoesNotAppendTimelineNoise(t *testing.T) {
+	m := initialModel("test")
+	m.width = 90
+	m.height = 20
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "First issue"}}
+	m.entries = []timelineEntry{{ID: "f-1", Kind: "issue", Summary: "First issue"}}
+
+	newM, _ := m.Update(steeringSentMsg{
+		findingID: "f-1",
+		message:   "First issue",
+		source:    "manual",
+		at:        time.Now(),
+	})
+	m = newM.(model)
+
+	if len(m.entries) != 1 {
+		t.Fatalf("expected steering send to avoid adding timeline entries, got %d", len(m.entries))
+	}
+	if got := m.entries[0].Summary; got != "First issue" {
+		t.Fatalf("unexpected issue summary mutation %q", got)
+	}
+}
+
+func TestIssueTimelineShowsInlineSentStatus(t *testing.T) {
+	m := initialModel("test")
+	m.width = 100
+	m.height = 20
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "First issue"}}
+	m.entries = []timelineEntry{{ID: "f-1", Kind: "issue", Time: "01:02", Summary: "First issue"}}
+	m.sentNudges["f-1"] = SteeringSendState{
+		Message: "First issue",
+		Source:  "manual",
+		At:      time.Date(2026, 4, 10, 8, 15, 0, 0, time.Local),
+	}
+	m.activeSteerKey = "f-1"
+	m.activeSteerMessage = "First issue"
+
+	lines, _, _ := m.renderedTimeline()
+	rendered := strings.Join(lines, "\n")
+	if !containsStr(rendered, "[manual 08:15]") || !containsStr(rendered, "[active]") {
+		t.Fatalf("expected timeline issue row to show inline sent status, got %q", rendered)
 	}
 }
 

@@ -589,12 +589,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toastMsg = "✓ nudge sent"
 		}
 		m.toastExpiry = time.Now().Add(3 * time.Second)
-		m.appendEntry(timelineEntry{
-			Kind:    "info",
-			Time:    msg.at.Format("15:04"),
-			Marker:  "i",
-			Summary: fmt.Sprintf("Sent to Codex (%s): %s", msg.source, truncate(msg.message, 120)),
-		})
 
 	case steeringSendFailedMsg:
 		m.steerInFlight = false
@@ -1152,7 +1146,11 @@ func (m model) renderEntry(entry timelineEntry, width int, selected bool) []stri
 		textW = 18
 	}
 
-	summaryLines := wrap(entry.Summary, textW)
+	summary := entry.Summary
+	if entry.Kind == "issue" {
+		summary = m.issueSummaryByKey(entry.ID, entry.Summary)
+	}
+	summaryLines := wrap(summary, textW)
 	if len(summaryLines) == 0 {
 		summaryLines = []string{""}
 	}
@@ -1534,11 +1532,37 @@ func (m model) issueSentStatus(issue CurrentIssue) string {
 	if !ok {
 		return ""
 	}
-	status := fmt.Sprintf("sent %s %s", sent.Source, sent.At.Format("15:04"))
+	status := fmt.Sprintf("[%s %s]", sent.Source, sent.At.Format("15:04"))
 	if issue.Key() == m.activeSteerKey && strings.TrimSpace(issue.Message()) == m.activeSteerMessage {
-		status += " active"
+		status += " [active]"
 	}
 	return status
+}
+
+func (m model) issueSummaryWithStatus(issue CurrentIssue) string {
+	text := normalizeIssueText(issue.Nudge)
+	if sent := m.issueSentStatus(issue); sent != "" {
+		text += " " + sent
+	}
+	return text
+}
+
+func (m model) issuePopupSummary(issue CurrentIssue) string {
+	text := normalizeIssueText(issue.Nudge)
+	if sent := m.issueSentStatus(issue); sent != "" {
+		return sent + " " + text
+	}
+	return text
+}
+
+func (m model) issueSummaryByKey(key, fallback string) string {
+	key = strings.TrimSpace(key)
+	for _, issue := range m.issueItems {
+		if issue.Key() == key {
+			return m.issueSummaryWithStatus(issue)
+		}
+	}
+	return fallback
 }
 
 func (m model) bodyRect() selectionRect {
@@ -1706,10 +1730,7 @@ func (m model) issuesPopupLines() []string {
 			marker = "›"
 			style = sIssueText.Bold(true)
 		}
-		text := normalizeIssueText(issue.Nudge)
-		if sent := m.issueSentStatus(issue); sent != "" {
-			text += " · " + sent
-		}
+		text := m.issuePopupSummary(issue)
 		lines = append(lines, renderContinuationLineWithMarker(marker, style.Render(wrapSingleLine(text, width-4))))
 	}
 	if strings.TrimSpace(current.Why) != "" {
