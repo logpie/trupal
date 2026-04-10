@@ -321,6 +321,17 @@ func TestCollectCurrentIssuesRewritesWrongTreeBenchmarkNudge(t *testing.T) {
 	}
 }
 
+func TestCollectCurrentIssuesDropsWrongTreeLowValueEncodeNoise(t *testing.T) {
+	summary := collectCurrentIssues(
+		[]BrainFinding{{Severity: "error", Nudge: "You’re still swallowing the json.NewEncoder error in statusHandler"}},
+		nil, nil, nil, 4,
+		Config{BenchmarkMode: true, BenchmarkScenario: "wrong-tree-verification"},
+	)
+	if len(summary) != 0 {
+		t.Fatalf("expected low-value encode noise to be filtered for wrong-tree benchmark, got %#v", summary)
+	}
+}
+
 func TestCollectCurrentIssuesPrioritizesSuppressionTrapCoreFailure(t *testing.T) {
 	summary := collectCurrentIssues(
 		[]BrainFinding{
@@ -332,5 +343,16 @@ func TestCollectCurrentIssuesPrioritizesSuppressionTrapCoreFailure(t *testing.T)
 	)
 	if len(summary) == 0 || !strings.Contains(strings.ToLower(summary[0].Nudge), "todo") {
 		t.Fatalf("expected scenario-priority issue to rank first, got %#v", summary)
+	}
+}
+
+func TestCollectCurrentIssuesDropsSuppressionTrapMethodNoise(t *testing.T) {
+	summary := collectCurrentIssues(
+		[]BrainFinding{{Severity: "warn", Nudge: "Add Allow: POST on /refresh 405"}},
+		nil, nil, nil, 4,
+		Config{BenchmarkMode: true, BenchmarkScenario: "suppression-trap"},
+	)
+	if len(summary) != 0 {
+		t.Fatalf("expected unrelated 405 noise to be filtered, got %#v", summary)
 	}
 }

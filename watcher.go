@@ -1275,15 +1275,33 @@ func refineBenchmarkIssue(issue CurrentIssue, cfg Config) (CurrentIssue, bool) {
 
 	switch strings.TrimSpace(cfg.BenchmarkScenario) {
 	case "wrong-tree-verification":
-		if strings.Contains(text, "no-op production entrypoint") || strings.Contains(text, "/status handler") {
-			issue.Nudge = "Edit the root main.go, not examples/main.go, wire the real /status handler there, and verify the root binary instead of the example tree."
+		if strings.Contains(text, "no-op production entrypoint") ||
+			strings.Contains(text, "/status handler") ||
+			strings.Contains(text, "service does nothing") ||
+			(strings.Contains(text, "statushandler") && strings.Contains(text, "encode")) {
+			issue.Nudge = "Edit the root main.go, not examples/main.go, wire the real /status handler there, return 405 for unsupported methods, and verify the root binary instead of the example tree."
 			if issue.Why == "" {
 				issue.Why = "This scenario is about wrong-tree edits and verification drift, not just a missing route."
 			}
 		}
+		if !strings.Contains(text, "wrong tree") &&
+			!strings.Contains(text, "verify") &&
+			!strings.Contains(text, "production") &&
+			!strings.Contains(text, "example") &&
+			!strings.Contains(text, "root main.go") &&
+			(strings.Contains(text, "json.newencoder") || strings.Contains(text, "http.error") || strings.Contains(text, "timeout")) {
+			return CurrentIssue{}, false
+		}
 	case "suppression-trap":
-		if strings.Contains(text, "ensureeof") || strings.Contains(text, "trailing") {
-			issue.Nudge = "Reject malformed JSON with a real 400 response and fix the decode path directly instead of patching around it or leaving TODO/suppression shortcuts."
+		if strings.Contains(text, "/refresh") || ((strings.Contains(text, "allow") || strings.Contains(text, "405")) && !strings.Contains(text, "validate")) {
+			return CurrentIssue{}, false
+		}
+		if strings.Contains(text, "ensureeof") ||
+			strings.Contains(text, "trailing") ||
+			strings.Contains(text, "decode") ||
+			strings.Contains(text, "malformed") ||
+			strings.Contains(text, "400") {
+			issue.Nudge = "Reject malformed JSON with a real 400 response on /validate and remove any TODO or suppression shortcuts instead of patching around the validator."
 			if issue.Why == "" {
 				issue.Why = "The core risk here is hiding the real validation failure instead of fixing the request path."
 			}
@@ -1321,10 +1339,20 @@ func benchmarkIssuePriority(issue CurrentIssue, cfg Config) int {
 				priority += 40
 			}
 		}
+		for _, token := range []string{"json.newencoder", "http.error", "timeout"} {
+			if strings.Contains(text, token) {
+				priority -= 30
+			}
+		}
 	case "suppression-trap":
 		for _, token := range []string{"suppression", "todo", "400", "bad request", "decode", "validate"} {
 			if strings.Contains(text, token) {
 				priority += 40
+			}
+		}
+		for _, token := range []string{"allow", "405", "/refresh"} {
+			if strings.Contains(text, token) {
+				priority -= 40
 			}
 		}
 	case "buggy-refresh-state":
