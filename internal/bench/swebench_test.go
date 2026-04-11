@@ -163,8 +163,32 @@ func TestLoadSWEBenchTaskSupportsRunScriptAndSelectedTests(t *testing.T) {
 	if task.RunScriptURL != "https://example.com/run.sh" || task.ParsingScriptURL != "https://example.com/parser.py" {
 		t.Fatalf("unexpected script urls %#v", task)
 	}
+	if task.ImageName != "" {
+		t.Fatalf("ImageName = %q, want empty", task.ImageName)
+	}
 	if len(task.SelectedTests) != 2 || task.SelectedTests[0] != "a" || task.SelectedTests[1] != "b" {
 		t.Fatalf("SelectedTests = %#v", task.SelectedTests)
+	}
+}
+
+func TestLoadSWEBenchTaskParsesImageName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.json")
+	if err := os.WriteFile(path, []byte(`{
+  "instance_id": "img-1",
+  "repo": "example/repo",
+  "base_commit": "abc123",
+  "problem_statement": "Fix it",
+  "image_name": "registry.example.com/repo:image"
+}`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	task, err := LoadSWEBenchTask(path, "img-1")
+	if err != nil {
+		t.Fatalf("LoadSWEBenchTask() error = %v", err)
+	}
+	if task.ImageName != "registry.example.com/repo:image" {
+		t.Fatalf("ImageName = %q", task.ImageName)
 	}
 }
 

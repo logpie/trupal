@@ -406,8 +406,9 @@ func (r *Runner) ApplySWEBenchGoldPatch(task SWEBenchTask, workspace string) err
 }
 
 func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string) (string, error) {
-	if strings.TrimSpace(task.DockerImage) == "" {
-		return "", fmt.Errorf("no docker_image provided")
+	imageRef, err := r.resolveSWEBenchDockerImage(task)
+	if err != nil {
+		return "", err
 	}
 	evalCommand, err := r.resolveSWEBenchDockerEvalCommand(task, workspace)
 	if err != nil {
@@ -426,7 +427,7 @@ func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string)
 		"--entrypoint", "bash",
 		"-v", workspace+":/workspace",
 		"-w", "/workspace",
-		task.DockerImage,
+		imageRef,
 		"-lc", evalCommand,
 	)
 	out, err := cmd.CombinedOutput()
@@ -434,6 +435,151 @@ func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string)
 		return string(out), fmt.Errorf("docker eval: %w\n%s", err, string(out))
 	}
 	return string(out), nil
+}
+
+func (r *Runner) resolveSWEBenchDockerImage(task SWEBenchTask) (string, error) {
+	imageRef := strings.TrimSpace(task.EffectiveDockerImage())
+	if imageRef == "" {
+		return "", fmt.Errorf("no docker image available for %s", task.InstanceID)
+	}
+	if err := dockerPullImage(imageRef); err == nil {
+		return imageRef, nil
+	}
+	if err := dockerInspectImage(imageRef); err == nil {
+		return imageRef, nil
+	}
+	localImageRef, err := r.buildLocalSWEBenchProImage(task)
+	if err != nil {
+		return "", fmt.Errorf("resolve docker image %q: %w", imageRef, err)
+	}
+	return localImageRef, nil
+}
+
+func dockerPullImage(imageRef string) error {
+	cmd := exec.Command("docker", "pull", imageRef)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker pull %s: %w\n%s", imageRef, err, string(out))
+	}
+	return nil
+}
+
+func dockerInspectImage(imageRef string) error {
+	cmd := exec.Command("docker", "image", "inspect", imageRef)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker inspect %s: %w\n%s", imageRef, err, string(out))
+	}
+	return nil
+}
+
+func (r *Runner) buildLocalSWEBenchProImage(task SWEBenchTask) (string, error) {
+	supportRoot, err := r.ensureSWEBenchProSupportRepo()
+	if err != nil {
+		return "", err
+	}
+	baseDockerfile := filepath.Join(supportRoot, "dockerfiles", "base_dockerfile", task.InstanceID, "Dockerfile")
+	instanceDockerfile := filepath.Join(supportRoot, "dockerfiles", "instance_dockerfile", task.InstanceID, "Dockerfile")
+	baseContent, err := os.ReadFile(baseDockerfile)
+	if err != nil {
+		return "", fmt.Errorf("read base dockerfile: %w", err)
+	}
+	instanceContent, err := os.ReadFile(instanceDockerfile)
+	if err != nil {
+		return "", fmt.Errorf("read instance dockerfile: %w", err)
+	}
+	baseImageRef := localSWEBenchProBaseImageRef(task)
+	finalImageRef := localSWEBenchProInstanceImageRef(task)
+	if err := dockerInspectImage(finalImageRef); err == nil {
+		return finalImageRef, nil
+	}
+	if err := dockerBuildImage(baseImageRef, baseContent, supportRoot); err != nil {
+		return "", err
+	}
+	patchedInstance, err := rewriteDockerfileForLocalBuild(string(instanceContent), baseImageRef)
+	if err != nil {
+		return "", err
+	}
+	if err := dockerBuildImage(finalImageRef, []byte(patchedInstance), supportRoot); err != nil {
+		return "", err
+	}
+	return finalImageRef, nil
+}
+
+func (r *Runner) ensureSWEBenchProSupportRepo() (string, error) {
+	dir := filepath.Join(r.opts.RepoRoot, ".omx", "cache", "swebench-pro-os")
+	if _, err := os.Stat(filepath.Join(dir, "README.md")); err == nil {
+		return dir, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0755); err != nil {
+		return "", fmt.Errorf("create swebench-pro-os cache dir: %w", err)
+	}
+	cmd := exec.Command("git", "clone", "--depth", "1", "https://github.com/scaleapi/SWE-bench_Pro-os.git", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("clone SWE-bench Pro support repo: %w\n%s", err, string(out))
+	}
+	return dir, nil
+}
+
+func localSWEBenchProBaseImageRef(task SWEBenchTask) string {
+	return "trupal-swebench-base:" + sanitizeDockerTag(task.InstanceID)
+}
+
+func localSWEBenchProInstanceImageRef(task SWEBenchTask) string {
+	return "trupal-swebench-task:" + sanitizeDockerTag(task.InstanceID)
+}
+
+func sanitizeDockerTag(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	replacer := strings.NewReplacer("/", "-", ":", "-", " ", "-", "_", "-")
+	value = replacer.Replace(value)
+	for strings.Contains(value, "--") {
+		value = strings.ReplaceAll(value, "--", "-")
+	}
+	value = strings.Trim(value, "-.")
+	if value == "" {
+		return "task"
+	}
+	return value
+}
+
+func rewriteDockerfileForLocalBuild(dockerfile, baseImageRef string) (string, error) {
+	lines := strings.Split(dockerfile, "\n")
+	insertedEnv := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToUpper(trimmed), "FROM ") {
+			lines[i] = "FROM " + baseImageRef
+			lines = append(lines[:i+1], append([]string{"ENV PIP_BREAK_SYSTEM_PACKAGES=1"}, lines[i+1:]...)...)
+			insertedEnv = true
+			break
+		}
+	}
+	if !insertedEnv {
+		return "", fmt.Errorf("dockerfile missing FROM line")
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func dockerBuildImage(imageRef string, dockerfileContent []byte, contextDir string) error {
+	tmp, err := os.CreateTemp("", "trupal-swebench-dockerfile-*.Dockerfile")
+	if err != nil {
+		return fmt.Errorf("create temp dockerfile: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(dockerfileContent); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp dockerfile: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp dockerfile: %w", err)
+	}
+	cmd := exec.Command("docker", "build", "-t", imageRef, "-f", tmp.Name(), contextDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker build %s: %w\n%s", imageRef, err, string(out))
+	}
+	return nil
 }
 
 func (r *Runner) resolveSWEBenchDockerEvalCommand(task SWEBenchTask, workspace string) (string, error) {

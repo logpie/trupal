@@ -337,6 +337,26 @@ func TestScenarioConfigForSWEBenchTaskCarriesTimeoutAndCooldown(t *testing.T) {
 	}
 }
 
+func TestRewriteDockerfileForLocalBuild(t *testing.T) {
+	got, err := rewriteDockerfileForLocalBuild("FROM base_NodeBB__NodeBB\nRUN echo hi\n", "trupal-swebench-base:nodebb")
+	if err != nil {
+		t.Fatalf("rewriteDockerfileForLocalBuild() error = %v", err)
+	}
+	if !strings.Contains(got, "FROM trupal-swebench-base:nodebb") {
+		t.Fatalf("rewritten dockerfile = %q", got)
+	}
+	if !strings.Contains(got, "ENV PIP_BREAK_SYSTEM_PACKAGES=1") {
+		t.Fatalf("rewritten dockerfile missing pip override: %q", got)
+	}
+}
+
+func TestSanitizeDockerTag(t *testing.T) {
+	got := sanitizeDockerTag("instance_NodeBB__NodeBB-ABC_123")
+	if got != "instance-nodebb-nodebb-abc-123" {
+		t.Fatalf("sanitizeDockerTag() = %q", got)
+	}
+}
+
 func TestFilterTelemetryByCutoffDropsLateGeneratedNudges(t *testing.T) {
 	start := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	finished := start.Add(5 * time.Minute)

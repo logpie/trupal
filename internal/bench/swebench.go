@@ -13,6 +13,7 @@ type SWEBenchTask struct {
 	InstanceID             string   `json:"instance_id"`
 	Repo                   string   `json:"repo"`
 	RepoURL                string   `json:"repo_url"`
+	ImageName              string   `json:"image_name"`
 	BaseCommit             string   `json:"base_commit"`
 	EnvironmentSetupCommit string   `json:"environment_setup_commit"`
 	ProblemStatement       string   `json:"problem_statement"`
@@ -75,6 +76,7 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	task.InstanceID = strings.TrimSpace(task.InstanceID)
 	task.Repo = strings.TrimSpace(task.Repo)
 	task.BaseCommit = strings.TrimSpace(task.BaseCommit)
+	task.ImageName = strings.TrimSpace(task.ImageName)
 	task.EnvironmentSetupCommit = strings.TrimSpace(task.EnvironmentSetupCommit)
 	task.ProblemStatement = strings.TrimSpace(task.ProblemStatement)
 	task.TestPatch = strings.TrimSpace(task.TestPatch)
@@ -155,6 +157,7 @@ func taskFromRawMap(raw map[string]any) (SWEBenchTask, error) {
 		InstanceID:             firstString(raw, "instance_id"),
 		Repo:                   firstString(raw, "repo"),
 		RepoURL:                firstString(raw, "repo_url"),
+		ImageName:              firstString(raw, "image_name"),
 		BaseCommit:             firstString(raw, "base_commit"),
 		EnvironmentSetupCommit: firstString(raw, "environment_setup_commit"),
 		ProblemStatement:       firstString(raw, "problem_statement"),
