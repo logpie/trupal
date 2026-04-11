@@ -985,6 +985,58 @@ func TestAutoSteerUsesTopIssueNotCurrentSelection(t *testing.T) {
 	}
 }
 
+func TestContinuousAutoSteerCanAdvancePastActiveIssue(t *testing.T) {
+	m := initialModel("test")
+	m.continuousSteering = true
+	m.agentPaneID = "%pane"
+	m.issueItems = []CurrentIssue{
+		{ID: "f-1", Nudge: "First issue"},
+		{ID: "f-2", Nudge: "Second issue"},
+	}
+	m.sentNudges["f-1"] = SteeringSendState{Message: "First issue", Source: "auto", At: time.Now().Add(-time.Minute)}
+	m.activeSteerKey = "f-1"
+	m.activeSteerMessage = "First issue"
+	m.lastSteerAt = time.Now().Add(-time.Minute)
+
+	issue, ok := m.autoSteeringIssue()
+	if !ok {
+		t.Fatal("expected a second issue to be eligible in continuous mode")
+	}
+	if issue.Key() != "f-2" {
+		t.Fatalf("autoSteeringIssue() = %q, want f-2", issue.Key())
+	}
+}
+
+func TestSingleAutoSteerBlocksWhileActiveIssueUnchanged(t *testing.T) {
+	m := initialModel("test")
+	m.agentPaneID = "%pane"
+	m.issueItems = []CurrentIssue{
+		{ID: "f-1", Nudge: "First issue"},
+		{ID: "f-2", Nudge: "Second issue"},
+	}
+	m.sentNudges["f-1"] = SteeringSendState{Message: "First issue", Source: "auto", At: time.Now().Add(-time.Minute)}
+	m.activeSteerKey = "f-1"
+	m.activeSteerMessage = "First issue"
+	m.lastSteerAt = time.Now().Add(-time.Minute)
+
+	if _, ok := m.autoSteeringIssue(); ok {
+		t.Fatal("expected single-mode steering to block while active issue is unchanged")
+	}
+}
+
+func TestContinuousAutoSteerDoesNotResendUnchangedIssue(t *testing.T) {
+	m := initialModel("test")
+	m.continuousSteering = true
+	m.agentPaneID = "%pane"
+	m.issueItems = []CurrentIssue{{ID: "f-1", Nudge: "Same issue"}}
+	m.sentNudges["f-1"] = SteeringSendState{Message: "Same issue", Source: "auto", At: time.Now().Add(-time.Hour)}
+	m.lastSteerAt = time.Now().Add(-time.Hour)
+
+	if _, ok := m.autoSteeringIssue(); ok {
+		t.Fatal("expected unchanged issue to stay suppressed in continuous mode")
+	}
+}
+
 func TestAutoSteerSkipsAlreadySentIssue(t *testing.T) {
 	m := initialModel("test")
 	m.width = 80

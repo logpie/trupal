@@ -192,6 +192,7 @@ def prepare_repo(manifest_path: Path, instance_id: str) -> Path:
                 'benchmark_mode = true',
                 f'benchmark_scenario = "{manifest["instance_id"]}"',
                 'benchmark_arm = "steer"',
+                f'benchmark_steering_mode = "{manifest.get("steering_mode", "continuous")}"',
                 "",
             ]
         )

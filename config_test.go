@@ -185,6 +185,7 @@ brain_provider = "codex"
 benchmark_mode = true
 benchmark_scenario = "wrong-tree-verification"
 benchmark_arm = "steer"
+benchmark_steering_mode = "continuous"
 `), 0644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -192,7 +193,7 @@ benchmark_arm = "steer"
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if !cfg.BenchmarkMode || cfg.BenchmarkScenario != "wrong-tree-verification" || cfg.BenchmarkArm != "steer" {
+	if !cfg.BenchmarkMode || cfg.BenchmarkScenario != "wrong-tree-verification" || cfg.BenchmarkArm != "steer" || cfg.BenchmarkSteeringMode != "continuous" {
 		t.Fatalf("unexpected benchmark config: %#v", cfg)
 	}
 }

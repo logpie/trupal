@@ -125,6 +125,7 @@ func defaultString(value, fallback string) string {
 func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cancelCh <-chan struct{}) {
 	InitDebugLog(repoRoot)
 	defer CloseDebugLog()
+	p.Send(benchmarkConfigMsg{continuousSteering: cfg.BenchmarkSteeringMode == "continuous"})
 
 	// Handle SIGINT for graceful shutdown.
 	sigCh := make(chan os.Signal, 2)
@@ -692,7 +693,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			project:  filepath.Base(repoRoot),
 			findings: activeBrainFindings + len(patternFindings),
 			resolved: resolvedBrainFindings,
-			issues:   collectCurrentIssues(findings.Active(), patternFindings, deletedTests, trajectoryFindings, 4, cfg),
+			issues:   collectCurrentIssues(findings.Active(), patternFindings, deletedTests, trajectoryFindings, issueLimitForConfig(cfg), cfg),
 		})
 		// Log trajectory signals once.
 		for _, f := range trajectoryFindings {
@@ -1257,6 +1258,13 @@ func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFindi
 		items = items[:maxItems]
 	}
 	return items
+}
+
+func issueLimitForConfig(cfg Config) int {
+	if cfg.BenchmarkMode && strings.TrimSpace(cfg.BenchmarkSteeringMode) == "continuous" {
+		return 12
+	}
+	return 4
 }
 
 func refineBenchmarkIssue(issue CurrentIssue, cfg Config) (CurrentIssue, bool) {

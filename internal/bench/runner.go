@@ -978,6 +978,9 @@ func (r *Runner) writeScenarioConfig(projectDir string, scenario Scenario, arm B
 	lines = append(lines, "benchmark_mode = true")
 	lines = append(lines, fmt.Sprintf("benchmark_scenario = %q", scenario.ID))
 	lines = append(lines, fmt.Sprintf("benchmark_arm = %q", arm))
+	if strings.TrimSpace(string(scenario.SteeringMode)) != "" {
+		lines = append(lines, fmt.Sprintf("benchmark_steering_mode = %q", scenario.SteeringMode))
+	}
 	lines = append(lines, "")
 	return os.WriteFile(filepath.Join(projectDir, ".trupal.toml"), []byte(strings.Join(lines, "\n")), 0644)
 }

@@ -11,16 +11,17 @@ import (
 
 // Config holds the parsed .trupal.toml configuration.
 type Config struct {
-	BuildCmd          string
-	BuildExtensions   []string
-	PollInterval      int
-	SessionProvider   string // watched session provider: "claude" or "codex"
-	BrainProvider     string // brain provider: "claude" or "codex"
-	BrainModel        string // claude: haiku/sonnet/opus, codex: model id or empty for default
-	BrainEffort       string // "low", "medium", "high", "max"
-	BenchmarkMode     bool
-	BenchmarkScenario string
-	BenchmarkArm      string
+	BuildCmd              string
+	BuildExtensions       []string
+	PollInterval          int
+	SessionProvider       string // watched session provider: "claude" or "codex"
+	BrainProvider         string // brain provider: "claude" or "codex"
+	BrainModel            string // claude: haiku/sonnet/opus, codex: model id or empty for default
+	BrainEffort           string // "low", "medium", "high", "max"
+	BenchmarkMode         bool
+	BenchmarkScenario     string
+	BenchmarkArm          string
+	BenchmarkSteeringMode string
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -83,6 +84,8 @@ func loadConfig(projectDir string) (Config, error) {
 			cfg.BenchmarkScenario = value
 		case "benchmark_arm":
 			cfg.BenchmarkArm = value
+		case "benchmark_steering_mode":
+			cfg.BenchmarkSteeringMode = strings.ToLower(strings.TrimSpace(value))
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -167,6 +170,9 @@ func SaveConfig(projectDir string, cfg Config) {
 	if cfg.BenchmarkArm != "" {
 		fmt.Fprintf(f, "benchmark_arm = %q\n", cfg.BenchmarkArm)
 	}
+	if cfg.BenchmarkSteeringMode != "" {
+		fmt.Fprintf(f, "benchmark_steering_mode = %q\n", cfg.BenchmarkSteeringMode)
+	}
 }
 
 // Validate normalizes and validates config values that must match runtime support.
@@ -190,8 +196,16 @@ func (cfg *Config) Validate() error {
 	}
 	cfg.BrainModel = strings.ToLower(strings.TrimSpace(cfg.BrainModel))
 	cfg.BrainEffort = strings.ToLower(strings.TrimSpace(cfg.BrainEffort))
+	cfg.BenchmarkSteeringMode = strings.ToLower(strings.TrimSpace(cfg.BenchmarkSteeringMode))
 	if cfg.BrainEffort == "" {
 		cfg.BrainEffort = "high"
+	}
+	if cfg.BenchmarkSteeringMode != "" {
+		switch cfg.BenchmarkSteeringMode {
+		case "single", "continuous":
+		default:
+			return fmt.Errorf("unsupported benchmark_steering_mode %q (supported: single, continuous)", cfg.BenchmarkSteeringMode)
+		}
 	}
 
 	switch cfg.BrainProvider {

@@ -102,6 +102,7 @@ type resolvedMsg struct {
 type trajectoryMsg struct{ message string }
 type patternMsg struct{ finding PatternFinding }
 type infoMsg struct{ message string }
+type benchmarkConfigMsg struct{ continuousSteering bool }
 type steeringSentMsg struct {
 	findingID string
 	message   string
@@ -172,6 +173,7 @@ type model struct {
 	toastMsg           string // transient message (e.g. "copied!")
 	toastExpiry        time.Time
 	steerModeAuto      bool
+	continuousSteering bool
 	sentNudges         map[string]SteeringSendState
 	lastSteerAt        time.Time
 	steerInFlight      bool
@@ -575,6 +577,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Marker:  "i",
 			Summary: msg.message,
 		})
+
+	case benchmarkConfigMsg:
+		m.continuousSteering = msg.continuousSteering
 
 	case steeringSentMsg:
 		m.steerInFlight = false
@@ -1453,10 +1458,15 @@ func (m model) currentSteeringIssue() (CurrentIssue, bool) {
 }
 
 func (m model) autoSteeringIssue() (CurrentIssue, bool) {
-	if strings.TrimSpace(m.activeSteerKey) != "" {
-		return CurrentIssue{}, false
-	}
+	activeKey := strings.TrimSpace(m.activeSteerKey)
+	activeMessage := strings.TrimSpace(m.activeSteerMessage)
 	for _, issue := range m.issueItems {
+		if activeKey != "" && issue.Key() == activeKey && strings.TrimSpace(issue.Message()) == activeMessage {
+			if !m.continuousSteering {
+				return CurrentIssue{}, false
+			}
+			continue
+		}
 		if m.canSendNudge(issue, false) {
 			return issue, true
 		}
@@ -1484,7 +1494,7 @@ func (m model) canSendNudge(issue CurrentIssue, manual bool) bool {
 	if manual {
 		return time.Since(record.At) > 5*time.Second
 	}
-	return time.Since(record.At) > 30*time.Second
+	return false
 }
 
 func (m model) sendNudgeCmd(issue CurrentIssue, source string) tea.Cmd {
