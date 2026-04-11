@@ -843,6 +843,7 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 	deadline := result.StartedAt.Add(timeout)
 	policy := effectiveBenchmarkSteeringPolicy(result.Scenario)
 	autoDisabled := result.Arm != ArmSteer
+	var graceDeadline time.Time
 
 	for {
 		if result.SessionJSONL == "" {
@@ -882,6 +883,13 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 			return now, 0, false, nil
 		}
 		if !now.Before(deadline) {
+			if graceDeadline.IsZero() && shouldEnterTimeoutGrace(policy, runtime) {
+				graceDeadline = now.Add(benchmarkTimeoutGrace(policy, now, runtime))
+			}
+			if !graceDeadline.IsZero() && now.Before(graceDeadline) {
+				time.Sleep(2 * time.Second)
+				continue
+			}
 			status.State = BenchmarkStateHardTimeout
 			status.Reason = BenchmarkStopReasonHardTimeout
 			status.UpdatedAt = now

@@ -120,6 +120,40 @@ func benchmarkSettleWindow(policy SteeringPolicy) time.Duration {
 	return window
 }
 
+func shouldEnterTimeoutGrace(policy SteeringPolicy, runtime BenchmarkRuntimeStatus) bool {
+	if policy.Mode != SteeringModeContinuous {
+		return false
+	}
+	if runtime.BrainInFlight || runtime.SendInFlight {
+		return true
+	}
+	if runtime.SendableIssueCount > 0 {
+		return true
+	}
+	if runtime.OpenIssueCount <= 0 {
+		return false
+	}
+	if runtime.LastGeneratedNudgeAt.IsZero() {
+		return false
+	}
+	return runtime.LastSentNudgeAt.IsZero() || runtime.LastGeneratedNudgeAt.After(runtime.LastSentNudgeAt)
+}
+
+func benchmarkTimeoutGrace(policy SteeringPolicy, now time.Time, runtime BenchmarkRuntimeStatus) time.Duration {
+	grace := benchmarkSettleWindow(policy)
+	if policy.Mode != SteeringModeContinuous {
+		return 0
+	}
+	if !runtime.LastSentNudgeAt.IsZero() {
+		if remainingCooldown := policy.Cooldown - now.Sub(runtime.LastSentNudgeAt); remainingCooldown > 0 {
+			if remainingCooldown+5*time.Second > grace {
+				grace = remainingCooldown + 5*time.Second
+			}
+		}
+	}
+	return grace
+}
+
 func evaluateBenchmarkStatus(now, attachedAt time.Time, hardTimeout time.Duration, policy SteeringPolicy, runtime BenchmarkRuntimeStatus, runtimeSeen bool) BenchmarkStatus {
 	idleThreshold := benchmarkIdleThreshold()
 	settleWindow := benchmarkSettleWindow(policy)
