@@ -110,14 +110,13 @@ func TestApplySteeringTelemetryCountsGeneratedAndSentNudges(t *testing.T) {
 		}},
 	}
 	debug := DebugSummary{
-		NudgeEventCount: 3,
 		Nudges: []ObservedFinding{{
 			Message:   "first",
 			FirstSeen: start.Add(5 * time.Second),
 		}},
 	}
 	result.applySteeringTelemetry(debug)
-	if result.GeneratedNudges != 3 || result.SentNudges != 1 || result.UnsentNudges != 2 {
+	if result.GeneratedNudges != 1 || result.SentNudges != 1 || result.UnsentNudges != 0 {
 		t.Fatalf("telemetry = generated:%d sent:%d unsent:%d", result.GeneratedNudges, result.SentNudges, result.UnsentNudges)
 	}
 	if result.FirstGeneratedNudge != 5*time.Second {
@@ -146,5 +145,43 @@ func TestAllowIdleCompletionDisabledForContinuousMode(t *testing.T) {
 	}
 	if allowIdleCompletion(Scenario{SteeringMode: SteeringModeContinuous}) {
 		t.Fatal("continuous mode should not stop on idle")
+	}
+}
+
+func TestFilterTelemetryByCutoffDropsLateGeneratedNudges(t *testing.T) {
+	start := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	finished := start.Add(5 * time.Minute)
+	cutoff := benchmarkTelemetryCutoff(finished)
+	debug := DebugSummary{
+		ResponseEvents: []BrainResponseEvent{
+			{Time: start.Add(time.Minute)},
+			{Time: finished.Add(7 * time.Second)},
+		},
+		Nudges: []ObservedFinding{
+			{Message: "in-window", FirstSeen: finished.Add(4 * time.Second)},
+			{Message: "late", FirstSeen: finished.Add(6 * time.Second)},
+		},
+		Observations: []ObservedFinding{
+			{Message: "info", FirstSeen: finished.Add(4 * time.Second)},
+			{Message: "late-info", FirstSeen: finished.Add(6 * time.Second)},
+		},
+		NudgeEventCount: 2,
+	}
+	events := []SteeringEvent{
+		{Timestamp: finished.Add(4 * time.Second), Message: "sent"},
+		{Timestamp: finished.Add(6 * time.Second), Message: "late-sent"},
+	}
+
+	filteredDebug := filterDebugSummaryByCutoff(debug, cutoff)
+	filteredEvents := filterSteeringEventsByCutoff(events, cutoff)
+
+	if len(filteredDebug.Nudges) != 1 || filteredDebug.Nudges[0].Message != "in-window" {
+		t.Fatalf("filtered nudges = %#v, want only in-window entry", filteredDebug.Nudges)
+	}
+	if filteredDebug.NudgeEventCount != 1 {
+		t.Fatalf("NudgeEventCount = %d, want 1", filteredDebug.NudgeEventCount)
+	}
+	if len(filteredEvents) != 1 || filteredEvents[0].Message != "sent" {
+		t.Fatalf("filtered steering events = %#v, want only sent entry", filteredEvents)
 	}
 }

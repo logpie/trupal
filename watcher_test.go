@@ -356,3 +356,12 @@ func TestCollectCurrentIssuesDropsSuppressionTrapMethodNoise(t *testing.T) {
 		t.Fatalf("expected unrelated 405 noise to be filtered, got %#v", summary)
 	}
 }
+
+func TestIssueLimitForConfigExpandsContinuousBenchmarkQueue(t *testing.T) {
+	if got := issueLimitForConfig(Config{}); got != 4 {
+		t.Fatalf("issueLimitForConfig(default) = %d, want 4", got)
+	}
+	if got := issueLimitForConfig(Config{BenchmarkMode: true, BenchmarkSteeringMode: "continuous"}); got != 12 {
+		t.Fatalf("issueLimitForConfig(continuous benchmark) = %d, want 12", got)
+	}
+}

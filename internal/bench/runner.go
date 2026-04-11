@@ -276,8 +276,11 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 		return nil, err
 	}
 	result.SteeringEvents, _ = ParseSteeringEvents(result.Artifacts.SteerLogPath)
-	result.Score.SteeringEventCount = len(result.SteeringEvents)
 	debugSummary, _ := ParseDebugLog(result.Artifacts.DebugLogPath, result.StartedAt)
+	cutoff := benchmarkTelemetryCutoff(result.FinishedAt)
+	debugSummary = filterDebugSummaryByCutoff(debugSummary, cutoff)
+	result.SteeringEvents = filterSteeringEventsByCutoff(result.SteeringEvents, cutoff)
+	result.Score.SteeringEventCount = len(result.SteeringEvents)
 	result.applySteeringTelemetry(debugSummary)
 	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
 		return nil, err
@@ -606,6 +609,9 @@ func (r *Runner) runScenarioLegacy(result *RunResult) (*RunResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse steering log: %w", err)
 	}
+	cutoff := benchmarkTelemetryCutoff(result.FinishedAt)
+	debugSummary = filterDebugSummaryByCutoff(debugSummary, cutoff)
+	result.SteeringEvents = filterSteeringEventsByCutoff(result.SteeringEvents, cutoff)
 	result.applySteeringTelemetry(debugSummary)
 	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Nudges), edits, debugSummary, result.SteeringEvents)
 
@@ -684,6 +690,9 @@ func (r *Runner) runScenarioInteractiveCodex(result *RunResult) (*RunResult, err
 	if err != nil {
 		return nil, fmt.Errorf("parse steering log: %w", err)
 	}
+	cutoff := benchmarkTelemetryCutoff(result.FinishedAt)
+	debugSummary = filterDebugSummaryByCutoff(debugSummary, cutoff)
+	result.SteeringEvents = filterSteeringEventsByCutoff(result.SteeringEvents, cutoff)
 	result.applySteeringTelemetry(debugSummary)
 	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Nudges), edits, debugSummary, result.SteeringEvents)
 
@@ -912,7 +921,7 @@ func effectiveBenchmarkSteeringPolicy(s Scenario) SteeringPolicy {
 }
 
 func (r *RunResult) applySteeringTelemetry(debugSummary DebugSummary) {
-	r.GeneratedNudges = debugSummary.NudgeEventCount
+	r.GeneratedNudges = len(debugSummary.Nudges)
 	r.SentNudges = len(r.SteeringEvents)
 	if r.GeneratedNudges > r.SentNudges {
 		r.UnsentNudges = r.GeneratedNudges - r.SentNudges
@@ -923,6 +932,58 @@ func (r *RunResult) applySteeringTelemetry(debugSummary DebugSummary) {
 	if len(r.SteeringEvents) > 0 && !r.SteeringEvents[0].Timestamp.IsZero() && !r.StartedAt.IsZero() {
 		r.FirstSentNudge = r.SteeringEvents[0].Timestamp.Sub(r.StartedAt)
 	}
+}
+
+func benchmarkTelemetryCutoff(finishedAt time.Time) time.Time {
+	if finishedAt.IsZero() {
+		return time.Time{}
+	}
+	return finishedAt.Add(5 * time.Second)
+}
+
+func filterDebugSummaryByCutoff(summary DebugSummary, cutoff time.Time) DebugSummary {
+	if cutoff.IsZero() {
+		return summary
+	}
+	summary.Nudges = filterObservedFindingsByCutoff(summary.Nudges, cutoff)
+	summary.Observations = filterObservedFindingsByCutoff(summary.Observations, cutoff)
+	summary.ResponseEvents = filterResponseEventsByCutoff(summary.ResponseEvents, cutoff)
+	summary.ResponseCount = len(summary.ResponseEvents)
+	summary.NudgeEventCount = len(summary.Nudges)
+	return summary
+}
+
+func filterObservedFindingsByCutoff(findings []ObservedFinding, cutoff time.Time) []ObservedFinding {
+	filtered := make([]ObservedFinding, 0, len(findings))
+	for _, finding := range findings {
+		if finding.FirstSeen.IsZero() || !finding.FirstSeen.After(cutoff) {
+			filtered = append(filtered, finding)
+		}
+	}
+	return filtered
+}
+
+func filterResponseEventsByCutoff(events []BrainResponseEvent, cutoff time.Time) []BrainResponseEvent {
+	filtered := make([]BrainResponseEvent, 0, len(events))
+	for _, event := range events {
+		if event.Time.IsZero() || !event.Time.After(cutoff) {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
+}
+
+func filterSteeringEventsByCutoff(events []SteeringEvent, cutoff time.Time) []SteeringEvent {
+	if cutoff.IsZero() {
+		return events
+	}
+	filtered := make([]SteeringEvent, 0, len(events))
+	for _, event := range events {
+		if event.Timestamp.IsZero() || !event.Timestamp.After(cutoff) {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
 }
 
 func (r *Runner) sendLiteral(paneID, text string) error {
