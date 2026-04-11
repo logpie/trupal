@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+LIVE_BIN = Path("/tmp/trupal-live")
+
+
+def fail(message: str) -> "NoReturn":
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+
+def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True) -> str:
+    proc = subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        text=True,
+        capture_output=True,
+    )
+    if check and proc.returncode != 0:
+        raise RuntimeError(
+            f"command failed ({proc.returncode}): {' '.join(shlex.quote(x) for x in cmd)}\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}"
+        )
+    return proc.stdout
+
+
+def shell(script: str, *, cwd: Path | None = None, check: bool = True) -> str:
+    return run(["bash", "-lc", script], cwd=cwd, check=check)
+
+
+def tmux(*args: str, check: bool = True) -> str:
+    return run(["tmux", *args], check=check)
+
+
+def current_window_id() -> str:
+    return tmux("display-message", "-p", "#{window_id}").strip()
+
+
+def left_pane(window_id: str) -> str:
+    rows = []
+    for line in tmux("list-panes", "-t", window_id, "-F", "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_height}").splitlines():
+        pane_id, left, top, height = line.split("\t")
+        rows.append((int(left), int(top), -int(height), pane_id))
+    rows.sort()
+    return rows[0][3]
+
+
+def kill_right_panes(window_id: str) -> None:
+    for line in tmux("list-panes", "-t", window_id, "-F", "#{pane_id}\t#{pane_left}").splitlines():
+        pane_id, left = line.split("\t")
+        if int(left) > 0:
+            tmux("kill-pane", "-t", pane_id)
+
+
+def capture_pane(pane_id: str) -> str:
+    return tmux("capture-pane", "-p", "-t", pane_id)
+
+
+def session_jsonl_for(workdir: Path) -> str:
+    sessions_root = Path.home() / ".codex" / "sessions"
+    if not sessions_root.exists():
+        return ""
+    for path in sorted(sessions_root.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            text = path.read_text(errors="ignore")
+        except OSError:
+            continue
+        if str(workdir) in text:
+            return str(path)
+    return ""
+
+
+def wait_for_codex_ready(codex_pane: str) -> None:
+    deadline = time.time() + 45
+    while time.time() < deadline:
+        text = capture_pane(codex_pane)
+        if (
+            "Do you trust the contents of" in text
+            or "Press enter to continue" in text
+            or "higher risk of prompt injection" in text
+        ):
+            tmux("send-keys", "-t", codex_pane, "C-m")
+            time.sleep(2)
+            continue
+        if "Use /skills" in text or "Tip:" in text:
+            return
+        time.sleep(1)
+    fail("codex did not become ready")
+
+
+def wait_for_trupal_watch(workdir: Path) -> None:
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if (workdir / ".trupal.pid").exists() and (workdir / ".trupal.debug").exists():
+            return
+        time.sleep(1)
+    fail("trupal watch did not start")
+
+
+def wait_for_trupal_tui(trupal_pane: str) -> None:
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if "TRUPAL" in capture_pane(trupal_pane):
+            return
+        time.sleep(1)
+    fail("trupal TUI did not appear")
+
+
+def benchmark_prompt(task_text: str) -> str:
+    return " ".join(
+        (
+            "You are running inside a non-interactive benchmark harness.",
+            "Requirements for this run:",
+            "Work autonomously in the current working directory.",
+            "Make reasonable assumptions yourself and implement the task directly.",
+            "Avoid asking the user questions during the run.",
+            "Verify the resulting code with focused commands before you finish.",
+            "End with a brief summary of what you changed and what you verified.",
+            "Task:",
+            " ".join(task_text.split()),
+        )
+    )
+
+
+def submit_prompt(codex_pane: str, prompt: str, workdir: Path) -> None:
+    tmux("send-keys", "-t", codex_pane, "-l", prompt)
+    time.sleep(min(max(len(prompt) / 1000.0, 0.2), 3.0))
+    tmux("send-keys", "-t", codex_pane, "Enter")
+
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if session_jsonl_for(workdir):
+            return
+        text = capture_pane(codex_pane)
+        if "[Pasted Content" in text or "› " in text:
+            tmux("send-keys", "-t", codex_pane, "C-m")
+        time.sleep(2)
+    fail("prompt submission did not start a Codex session")
+
+
+def apply_test_patch(workdir: Path, manifest: dict) -> None:
+    patch = (manifest.get("test_patch") or "").strip()
+    if not patch:
+        return
+    patch_path = workdir / ".swebench-test.patch"
+    patch_path.write_text(patch if patch.endswith("\n") else patch + "\n")
+    try:
+        run(["git", "apply", str(patch_path)], cwd=workdir)
+    except RuntimeError:
+        reverse = subprocess.run(
+            ["git", "apply", "--reverse", "--check", str(patch_path)],
+            cwd=str(workdir),
+            text=True,
+            capture_output=True,
+        )
+        if reverse.returncode != 0:
+            raise
+
+
+def prepare_repo(manifest_path: Path, instance_id: str) -> Path:
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("instance_id") != instance_id:
+        fail(f"instance mismatch: {instance_id} != {manifest.get('instance_id')}")
+    repo_name = manifest["repo"].split("/")[-1].lower()
+    workdir = Path(tempfile.mkdtemp(prefix=f"/tmp/trupal-ui-live-current-{repo_name}-"))
+    run(["git", "clone", f"https://github.com/{manifest['repo']}.git", str(workdir)])
+    run(["git", "-C", str(workdir), "checkout", manifest["base_commit"]])
+    setup = (manifest.get("setup_command") or "").strip()
+    if setup:
+        shell(setup, cwd=workdir)
+    apply_test_patch(workdir, manifest)
+    (workdir / "TASK.md").write_text(manifest["problem_statement"].strip() + "\n")
+    (workdir / ".trupal.toml").write_text(
+        "\n".join(
+            [
+                'session_provider = "codex"',
+                'brain_provider = "codex"',
+                'brain_model = "gpt-5.4-mini"',
+                'brain_effort = "medium"',
+                'benchmark_mode = true',
+                f'benchmark_scenario = "{manifest["instance_id"]}"',
+                'benchmark_arm = "steer"',
+                "",
+            ]
+        )
+    )
+    return workdir
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        fail("usage: scripts/trupal-live-swebench-visible <manifest> <instance_id>")
+    if not os.environ.get("TMUX"):
+        fail("must run inside tmux")
+
+    manifest_path = (Path.cwd() / sys.argv[1]).resolve()
+    if not manifest_path.exists():
+        fail(f"manifest not found: {manifest_path}")
+    instance_id = sys.argv[2]
+
+    workdir = prepare_repo(manifest_path, instance_id)
+    run(["go", "build", "-o", str(LIVE_BIN), "."], cwd=ROOT_DIR)
+
+    window_id = current_window_id()
+    left = left_pane(window_id)
+    kill_right_panes(window_id)
+    codex_pane = tmux(
+        "split-window",
+        "-h",
+        "-l",
+        "50%",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        left,
+        "-c",
+        str(workdir),
+        f"codex -C {shlex.quote(str(workdir))} --dangerously-bypass-approvals-and-sandbox --model gpt-5.4-mini",
+    ).strip()
+    trupal_pane = tmux(
+        "split-window",
+        "-v",
+        "-l",
+        "50%",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        codex_pane,
+        "-c",
+        str(workdir),
+        f"{shlex.quote(str(LIVE_BIN))} watch {shlex.quote(str(workdir))} {shlex.quote(str(workdir))}",
+    ).strip()
+
+    wait_for_codex_ready(codex_pane)
+    wait_for_trupal_watch(workdir)
+    wait_for_trupal_tui(trupal_pane)
+    tmux("send-keys", "-t", trupal_pane, "a")
+    time.sleep(1)
+    prompt = benchmark_prompt((workdir / "TASK.md").read_text())
+    submit_prompt(codex_pane, prompt, workdir)
+    print(f"repo={workdir}")
+    print(f"codex={codex_pane}")
+    print(f"trupal={trupal_pane}")
+
+
+if __name__ == "__main__":
+    main()
