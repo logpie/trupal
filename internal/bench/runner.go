@@ -12,12 +12,13 @@ import (
 )
 
 type RunnerOptions struct {
-	RepoRoot     string
-	ScenariosDir string
-	ResultsDir   string
-	SWEBenchDir  string
-	CodexCmd     string
-	KeepTemp     bool
+	RepoRoot             string
+	ScenariosDir         string
+	ResultsDir           string
+	SWEBenchDir          string
+	CodexCmd             string
+	SteeringModeOverride SteeringMode
+	KeepTemp             bool
 }
 
 type Runner struct {
@@ -48,10 +49,21 @@ type RunResult struct {
 	SessionJSONL        string
 	Artifacts           ArtifactSet
 	SteeringEvents      []SteeringEvent
+	GeneratedNudges     int
+	SentNudges          int
+	UnsentNudges        int
+	FirstGeneratedNudge time.Duration
+	FirstSentNudge      time.Duration
 	Score               Scorecard
 	CodexAudit          *CodexAuditResult
 	SWEBenchSolved      bool
 	SWEBenchEvalCommand string
+}
+
+type SteeringPolicy struct {
+	Mode     SteeringMode
+	Rounds   int
+	Cooldown time.Duration
 }
 
 func NewRunner(opts RunnerOptions) (*Runner, error) {
@@ -99,6 +111,7 @@ func (r *Runner) RunScenario(name string) (*RunResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	scenario = r.applyScenarioOverrides(scenario)
 	arms := scenario.EffectiveBenchmarkArms()
 	return r.runScenario(scenario, arms[0])
 }
@@ -108,6 +121,7 @@ func (r *Runner) RunScenarioArm(name string, arm BenchmarkArm) (*RunResult, erro
 	if err != nil {
 		return nil, err
 	}
+	scenario = r.applyScenarioOverrides(scenario)
 	return r.runScenario(scenario, arm)
 }
 
@@ -116,6 +130,7 @@ func (r *Runner) RunScenarioPair(name string) ([]*RunResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	scenario = r.applyScenarioOverrides(scenario)
 	arms := scenario.EffectiveBenchmarkArms()
 	results := make([]*RunResult, 0, len(arms))
 	for _, arm := range arms {
@@ -128,6 +143,13 @@ func (r *Runner) RunScenarioPair(name string) ([]*RunResult, error) {
 	return results, nil
 }
 
+func (r *Runner) applyScenarioOverrides(s Scenario) Scenario {
+	if r.opts.SteeringModeOverride != "" {
+		s.SteeringMode = r.opts.SteeringModeOverride
+	}
+	return s
+}
+
 func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkArm, evalCommand string) (*RunResult, error) {
 	task, err := LoadSWEBenchTask(manifestPath, instanceID)
 	if err != nil {
@@ -135,6 +157,21 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	}
 	if strings.TrimSpace(evalCommand) != "" {
 		task.EvalCommand = strings.TrimSpace(evalCommand)
+	}
+	if r.opts.SteeringModeOverride != "" {
+		task.SteeringMode = string(r.opts.SteeringModeOverride)
+	}
+	scenarioCfg := Scenario{
+		ID:             task.Slug(),
+		AgentModel:     "gpt-5.4-mini",
+		SteeringMode:   SteeringMode(task.SteeringMode),
+		SteeringRounds: task.SteeringRounds,
+		TrupalConfig:   TrupalConfig{SessionProvider: "codex", BrainProvider: "codex", BrainModel: "gpt-5.4-mini", BrainEffort: "medium"},
+	}
+	if strings.TrimSpace(task.SteeringCooldown) != "" {
+		if d, parseErr := time.ParseDuration(task.SteeringCooldown); parseErr == nil {
+			scenarioCfg.SteeringCooldown = d
+		}
 	}
 	started := time.Now()
 	runSlug := started.Format("20060102-150405") + "-" + task.Slug() + "-" + string(arm)
@@ -144,6 +181,7 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	}
 	result := &RunResult{
 		Arm:          arm,
+		Scenario:     scenarioCfg,
 		SWEBenchTask: &task,
 		Artifacts:    NewArtifactSet(artifactsDir),
 	}
@@ -166,11 +204,7 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 			return nil, fmt.Errorf("apply SWE-bench test patch before agent run: %w", err)
 		}
 	}
-	if err := r.writeScenarioConfig(workspace, Scenario{
-		ID:           task.Slug(),
-		AgentModel:   "gpt-5.4-mini",
-		TrupalConfig: TrupalConfig{SessionProvider: "codex", BrainProvider: "codex", BrainModel: "gpt-5.4-mini", BrainEffort: "medium"},
-	}, arm); err != nil {
+	if err := r.writeScenarioConfig(workspace, scenarioCfg, arm); err != nil {
 		return nil, err
 	}
 
@@ -243,6 +277,8 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	}
 	result.SteeringEvents, _ = ParseSteeringEvents(result.Artifacts.SteerLogPath)
 	result.Score.SteeringEventCount = len(result.SteeringEvents)
+	debugSummary, _ := ParseDebugLog(result.Artifacts.DebugLogPath, result.StartedAt)
+	result.applySteeringTelemetry(debugSummary)
 	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
 		return nil, err
 	}
@@ -454,6 +490,7 @@ func (r *Runner) RunAll() ([]*RunResult, error) {
 
 	results := make([]*RunResult, 0, len(scenarios))
 	for _, scenario := range scenarios {
+		scenario = r.applyScenarioOverrides(scenario)
 		for _, arm := range scenario.EffectiveBenchmarkArms() {
 			result, err := r.runScenario(scenario, arm)
 			if err != nil {
@@ -569,6 +606,7 @@ func (r *Runner) runScenarioLegacy(result *RunResult) (*RunResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse steering log: %w", err)
 	}
+	result.applySteeringTelemetry(debugSummary)
 	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Nudges), edits, debugSummary, result.SteeringEvents)
 
 	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
@@ -646,6 +684,7 @@ func (r *Runner) runScenarioInteractiveCodex(result *RunResult) (*RunResult, err
 	if err != nil {
 		return nil, fmt.Errorf("parse steering log: %w", err)
 	}
+	result.applySteeringTelemetry(debugSummary)
 	result.Score = ScoreFindings(scenario.Truth, MergeObservedFindings(findings, debugSummary.Nudges), edits, debugSummary, result.SteeringEvents)
 
 	if err := WriteReport(result.Artifacts.ReportPath, result); err != nil {
@@ -796,9 +835,9 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 	}
 	deadline := result.StartedAt.Add(timeout)
 	quietWindow := 8 * time.Second
-	steeringRounds, steeringCooldown := effectiveBenchmarkSteeringPolicy(result.Scenario)
+	policy := effectiveBenchmarkSteeringPolicy(result.Scenario)
 	if result.Arm == ArmSteer {
-		quietWindow = steeringCooldown + 5*time.Second
+		quietWindow = policy.Cooldown + 5*time.Second
 	}
 	autoDisabled := result.Arm != ArmSteer
 
@@ -821,9 +860,9 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 		if len(events) > 0 && events[len(events)-1].Timestamp.After(lastActivity) {
 			lastActivity = events[len(events)-1].Timestamp
 		}
-		if result.Arm == ArmSteer && !autoDisabled && len(events) >= steeringRounds {
+		if result.Arm == ArmSteer && !autoDisabled && policy.Mode == SteeringModeSingle && len(events) >= policy.Rounds {
 			if err := r.sendKeys(trupalPaneID, "a"); err != nil {
-				return time.Time{}, -1, false, fmt.Errorf("disable auto steer after %d rounds: %w", steeringRounds, err)
+				return time.Time{}, -1, false, fmt.Errorf("disable auto steer after %d rounds: %w", policy.Rounds, err)
 			}
 			autoDisabled = true
 			lastActivity = time.Now()
@@ -841,7 +880,11 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 	}
 }
 
-func effectiveBenchmarkSteeringPolicy(s Scenario) (int, time.Duration) {
+func effectiveBenchmarkSteeringPolicy(s Scenario) SteeringPolicy {
+	mode := s.SteeringMode
+	if mode == "" {
+		mode = SteeringModeSingle
+	}
 	rounds := s.SteeringRounds
 	if rounds <= 0 {
 		rounds = 1
@@ -850,7 +893,25 @@ func effectiveBenchmarkSteeringPolicy(s Scenario) (int, time.Duration) {
 	if cooldown <= 0 {
 		cooldown = 30 * time.Second
 	}
-	return rounds, cooldown
+	return SteeringPolicy{
+		Mode:     mode,
+		Rounds:   rounds,
+		Cooldown: cooldown,
+	}
+}
+
+func (r *RunResult) applySteeringTelemetry(debugSummary DebugSummary) {
+	r.GeneratedNudges = debugSummary.NudgeEventCount
+	r.SentNudges = len(r.SteeringEvents)
+	if r.GeneratedNudges > r.SentNudges {
+		r.UnsentNudges = r.GeneratedNudges - r.SentNudges
+	}
+	if len(debugSummary.Nudges) > 0 && !debugSummary.Nudges[0].FirstSeen.IsZero() && !r.StartedAt.IsZero() {
+		r.FirstGeneratedNudge = debugSummary.Nudges[0].FirstSeen.Sub(r.StartedAt)
+	}
+	if len(r.SteeringEvents) > 0 && !r.SteeringEvents[0].Timestamp.IsZero() && !r.StartedAt.IsZero() {
+		r.FirstSentNudge = r.SteeringEvents[0].Timestamp.Sub(r.StartedAt)
+	}
 }
 
 func (r *Runner) sendLiteral(paneID, text string) error {

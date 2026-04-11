@@ -14,6 +14,7 @@ category: api
 timeout: 2m
 agent_model: gpt-5.4-mini
 benchmark_arms: control, steer
+steering_mode: continuous
 steering_rounds: 2
 steering_cooldown: 45s
 trupal_config:
@@ -28,6 +29,9 @@ trupal_config:
 	}
 	if scenario.SteeringRounds != 2 {
 		t.Fatalf("SteeringRounds = %d, want 2", scenario.SteeringRounds)
+	}
+	if scenario.SteeringMode != SteeringModeContinuous {
+		t.Fatalf("SteeringMode = %q, want continuous", scenario.SteeringMode)
 	}
 	if scenario.SteeringCooldown.String() != "45s" {
 		t.Fatalf("SteeringCooldown = %s, want 45s", scenario.SteeringCooldown)
@@ -64,6 +68,9 @@ trupal_config:
 	}
 	if scenario.SteeringRounds != 1 {
 		t.Fatalf("SteeringRounds = %d, want 1", scenario.SteeringRounds)
+	}
+	if scenario.SteeringMode != SteeringModeSingle {
+		t.Fatalf("SteeringMode = %q, want single", scenario.SteeringMode)
 	}
 	if scenario.SteeringCooldown.String() != "30s" {
 		t.Fatalf("SteeringCooldown = %s, want 30s", scenario.SteeringCooldown)

@@ -44,27 +44,34 @@ trupal_config:
 }
 
 func TestEffectiveBenchmarkSteeringPolicyDefaults(t *testing.T) {
-	rounds, cooldown := effectiveBenchmarkSteeringPolicy(Scenario{})
+	policy := effectiveBenchmarkSteeringPolicy(Scenario{})
 
-	if rounds != 1 {
-		t.Fatalf("rounds = %d, want 1", rounds)
+	if policy.Mode != SteeringModeSingle {
+		t.Fatalf("mode = %q, want single", policy.Mode)
 	}
-	if cooldown != 30*time.Second {
-		t.Fatalf("cooldown = %s, want 30s", cooldown)
+	if policy.Rounds != 1 {
+		t.Fatalf("rounds = %d, want 1", policy.Rounds)
+	}
+	if policy.Cooldown != 30*time.Second {
+		t.Fatalf("cooldown = %s, want 30s", policy.Cooldown)
 	}
 }
 
 func TestEffectiveBenchmarkSteeringPolicyPreservesScenarioValues(t *testing.T) {
-	rounds, cooldown := effectiveBenchmarkSteeringPolicy(Scenario{
+	policy := effectiveBenchmarkSteeringPolicy(Scenario{
+		SteeringMode:     SteeringModeContinuous,
 		SteeringRounds:   3,
 		SteeringCooldown: 45 * time.Second,
 	})
 
-	if rounds != 3 {
-		t.Fatalf("rounds = %d, want 3", rounds)
+	if policy.Mode != SteeringModeContinuous {
+		t.Fatalf("mode = %q, want continuous", policy.Mode)
 	}
-	if cooldown != 45*time.Second {
-		t.Fatalf("cooldown = %s, want 45s", cooldown)
+	if policy.Rounds != 3 {
+		t.Fatalf("rounds = %d, want 3", policy.Rounds)
+	}
+	if policy.Cooldown != 45*time.Second {
+		t.Fatalf("cooldown = %s, want 45s", policy.Cooldown)
 	}
 }
 
@@ -91,5 +98,32 @@ func TestTrupalTUIReadyAcceptsTruncatedFooterWhenHeaderIsLive(t *testing.T) {
 `
 	if !trupalTUIReady(text) {
 		t.Fatalf("trupalTUIReady() = false, want true for live TUI header")
+	}
+}
+
+func TestApplySteeringTelemetryCountsGeneratedAndSentNudges(t *testing.T) {
+	start := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	result := &RunResult{
+		StartedAt: start,
+		SteeringEvents: []SteeringEvent{{
+			Timestamp: start.Add(7 * time.Second),
+		}},
+	}
+	debug := DebugSummary{
+		NudgeEventCount: 3,
+		Nudges: []ObservedFinding{{
+			Message:   "first",
+			FirstSeen: start.Add(5 * time.Second),
+		}},
+	}
+	result.applySteeringTelemetry(debug)
+	if result.GeneratedNudges != 3 || result.SentNudges != 1 || result.UnsentNudges != 2 {
+		t.Fatalf("telemetry = generated:%d sent:%d unsent:%d", result.GeneratedNudges, result.SentNudges, result.UnsentNudges)
+	}
+	if result.FirstGeneratedNudge != 5*time.Second {
+		t.Fatalf("FirstGeneratedNudge = %s, want 5s", result.FirstGeneratedNudge)
+	}
+	if result.FirstSentNudge != 7*time.Second {
+		t.Fatalf("FirstSentNudge = %s, want 7s", result.FirstSentNudge)
 	}
 }

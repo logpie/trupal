@@ -18,6 +18,7 @@ type Scenario struct {
 	ClaudeModel      string
 	AgentModel       string
 	BenchmarkArms    []BenchmarkArm
+	SteeringMode     SteeringMode
 	SteeringRounds   int
 	SteeringCooldown time.Duration
 	TrupalConfig     TrupalConfig
@@ -41,10 +42,14 @@ type TrupalConfig struct {
 }
 
 type BenchmarkArm string
+type SteeringMode string
 
 const (
 	ArmControl BenchmarkArm = "control"
 	ArmSteer   BenchmarkArm = "steer"
+
+	SteeringModeSingle     SteeringMode = "single"
+	SteeringModeContinuous SteeringMode = "continuous"
 )
 
 type GroundTruth struct {
@@ -196,6 +201,14 @@ func loadScenarioDir(dir string) (Scenario, error) {
 	if scenario.SteeringCooldown <= 0 {
 		scenario.SteeringCooldown = 30 * time.Second
 	}
+	if scenario.SteeringMode == "" {
+		scenario.SteeringMode = SteeringModeSingle
+	}
+	switch scenario.SteeringMode {
+	case SteeringModeSingle, SteeringModeContinuous:
+	default:
+		return Scenario{}, fmt.Errorf("scenario %s has unsupported steering mode %q", scenario.ID, scenario.SteeringMode)
+	}
 
 	return scenario, nil
 }
@@ -257,6 +270,8 @@ func parseScenarioYAML(raw []byte) (Scenario, error) {
 					return Scenario{}, fmt.Errorf("parse steering_rounds %q: %w", value, err)
 				}
 				scenario.SteeringRounds = rounds
+			case "steering_mode":
+				scenario.SteeringMode = SteeringMode(strings.ToLower(strings.TrimSpace(value)))
 			case "steering_cooldown":
 				d, err := time.ParseDuration(value)
 				if err != nil {

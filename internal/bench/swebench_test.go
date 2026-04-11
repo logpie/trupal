@@ -62,7 +62,10 @@ func TestLoadSWEBenchTaskSupportsLowercaseProFields(t *testing.T) {
   "fail_to_pass": "[\"tests::a\"]",
   "pass_to_pass": ["tests::b"],
   "before_repo_set_cmd": "echo setup",
-  "dockerhub_tag": "python:3.12-slim"
+  "dockerhub_tag": "python:3.12-slim",
+  "steering_mode": "continuous",
+  "steering_rounds": 3,
+  "steering_cooldown": "45s"
 }`), 0644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -78,6 +81,26 @@ func TestLoadSWEBenchTaskSupportsLowercaseProFields(t *testing.T) {
 	}
 	if task.SetupCommand != "echo setup" || task.DockerImage != "python:3.12-slim" {
 		t.Fatalf("unexpected pro fields %#v", task)
+	}
+	if task.SteeringMode != "continuous" || task.SteeringRounds != 3 || task.SteeringCooldown != "45s" {
+		t.Fatalf("unexpected steering fields %#v", task)
+	}
+}
+
+func TestLoadSWEBenchTaskRejectsInvalidSteeringMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.json")
+	if err := os.WriteFile(path, []byte(`{
+  "instance_id": "bad-mode",
+  "repo": "example/pro",
+  "base_commit": "abc123",
+  "problem_statement": "Fix it",
+  "steering_mode": "bogus"
+}`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := LoadSWEBenchTask(path, "bad-mode"); err == nil {
+		t.Fatal("expected invalid steering_mode to fail")
 	}
 }
 

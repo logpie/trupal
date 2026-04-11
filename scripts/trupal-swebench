@@ -18,6 +18,7 @@ Commands:
   lite           Run the local lite benchmark suite
   pro-small-smoke  Prepare every manifest in swe-bench-pro-small
   pro-small      Run paired benchmarks for every manifest in swe-bench-pro-small
+  pro-small-continuous  Run paired benchmarks for every manifest in swe-bench-pro-small with continuous steering
 
 Examples:
   scripts/trupal-swebench prepare \
@@ -31,6 +32,8 @@ Examples:
   scripts/trupal-swebench pro-small-smoke
 
   scripts/trupal-swebench pro-small
+
+  scripts/trupal-swebench pro-small-continuous
 EOF
 }
 
@@ -98,7 +101,30 @@ print(data["instance_id"])
 PY
 )"
       echo "=== RUN-PAIRED $manifest_name ==="
-      go run "$ROOT_DIR/cmd/trupal-bench" run-swebench-paired --manifest "$manifest_path" --instance "$instance_id"
+      go run "$ROOT_DIR/cmd/trupal-bench" run-swebench-paired --manifest "$manifest_path" --instance "$instance_id" "$@"
+      echo
+    done < "$manifest_list"
+    ;;
+  pro-small-continuous)
+    slice_dir="$ROOT_DIR/bench/swebench-pro-small"
+    manifest_list="$slice_dir/manifest-list.txt"
+    if [[ ! -f "$manifest_list" ]]; then
+      echo "missing manifest list: $manifest_list" >&2
+      exit 1
+    fi
+    while IFS= read -r manifest_name; do
+      [[ -z "$manifest_name" ]] && continue
+      manifest_path="$slice_dir/$manifest_name"
+      instance_id="$(python3 - <<PY
+import json
+from pathlib import Path
+path = Path(${manifest_path@Q})
+data = json.loads(path.read_text())
+print(data["instance_id"])
+PY
+)"
+      echo "=== RUN-PAIRED-CONTINUOUS $manifest_name ==="
+      go run "$ROOT_DIR/cmd/trupal-bench" run-swebench-paired --manifest "$manifest_path" --instance "$instance_id" --steering-mode continuous "$@"
       echo
     done < "$manifest_list"
     ;;

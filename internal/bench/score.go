@@ -35,6 +35,7 @@ type DebugSummary struct {
 	ResponseEvents    []BrainResponseEvent
 	Observations      []ObservedFinding
 	Nudges            []ObservedFinding
+	NudgeEventCount   int
 	InputTokens       int
 	OutputTokens      int
 	CacheReadTokens   int
@@ -185,6 +186,7 @@ func ParseDebugLog(path string, baseDate time.Time) (DebugSummary, error) {
 					FirstSeen: firstSeen,
 				})
 			default:
+				summary.NudgeEventCount++
 				if idx, ok := seenNudges[message]; ok {
 					if summary.Nudges[idx].FirstSeen.IsZero() || (!firstSeen.IsZero() && firstSeen.Before(summary.Nudges[idx].FirstSeen)) {
 						summary.Nudges[idx].FirstSeen = firstSeen

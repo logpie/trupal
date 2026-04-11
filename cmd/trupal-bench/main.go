@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/yuxuan/trupal/internal/bench"
 )
@@ -259,18 +260,24 @@ func runSWEBench(repoRoot string, args []string) error {
 	manifest := fs.String("manifest", "", "path to a local SWE-bench task manifest JSON file")
 	instance := fs.String("instance", "", "SWE-bench instance id")
 	arm := fs.String("arm", "control", "benchmark arm to run (control or steer)")
+	steeringMode := fs.String("steering-mode", "", "optional steering mode override (single or continuous)")
 	evalCmd := fs.String("eval-cmd", "", "evaluation command to run after applying test_patch")
 	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	mode, err := parseSteeringModeFlag(*steeringMode)
+	if err != nil {
+		return err
+	}
 
 	runner, err := bench.NewRunner(bench.RunnerOptions{
-		RepoRoot:     repoRoot,
-		ResultsDir:   *resultsDir,
-		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
-		SWEBenchDir:  *swebenchDir,
-		KeepTemp:     *keepTemp,
+		RepoRoot:             repoRoot,
+		ResultsDir:           *resultsDir,
+		ScenariosDir:         filepath.Join(repoRoot, "bench", "scenarios"),
+		SWEBenchDir:          *swebenchDir,
+		SteeringModeOverride: mode,
+		KeepTemp:             *keepTemp,
 	})
 	if err != nil {
 		return err
@@ -289,37 +296,66 @@ func runSWEBenchPaired(repoRoot string, args []string) error {
 	swebenchDir := fs.String("swebench-dir", filepath.Join(repoRoot, "bench", "swebench-sample"), "directory containing a SWE-bench manifest snapshot")
 	manifest := fs.String("manifest", "", "path to a local SWE-bench task manifest JSON file")
 	instance := fs.String("instance", "", "SWE-bench instance id")
+	steeringMode := fs.String("steering-mode", "", "optional steering mode override (single or continuous)")
+	repeats := fs.Int("repeats", 1, "number of repeated control/steer runs")
 	evalCmd := fs.String("eval-cmd", "", "evaluation command to run after applying test_patch")
 	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	mode, err := parseSteeringModeFlag(*steeringMode)
+	if err != nil {
+		return err
+	}
 
 	runner, err := bench.NewRunner(bench.RunnerOptions{
-		RepoRoot:     repoRoot,
-		ResultsDir:   *resultsDir,
-		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
-		SWEBenchDir:  *swebenchDir,
-		KeepTemp:     *keepTemp,
+		RepoRoot:             repoRoot,
+		ResultsDir:           *resultsDir,
+		ScenariosDir:         filepath.Join(repoRoot, "bench", "scenarios"),
+		SWEBenchDir:          *swebenchDir,
+		SteeringModeOverride: mode,
+		KeepTemp:             *keepTemp,
 	})
 	if err != nil {
 		return err
 	}
-	control, err := runner.RunSWEBenchTask(*manifest, *instance, bench.ArmControl, *evalCmd)
-	if err != nil {
+	if *repeats <= 1 {
+		control, err := runner.RunSWEBenchTask(*manifest, *instance, bench.ArmControl, *evalCmd)
+		if err != nil {
+			return err
+		}
+		steer, err := runner.RunSWEBenchTask(*manifest, *instance, bench.ArmSteer, *evalCmd)
+		if err != nil {
+			return err
+		}
+		comparisonPath := filepath.Join(*resultsDir, fmt.Sprintf("%s-vs-control-steer.md", control.SWEBenchTask.Slug()))
+		if err := bench.WriteSWEBenchComparisonReport(comparisonPath, control, steer); err != nil {
+			return err
+		}
+		fmt.Println(comparisonPath)
+		fmt.Println(control.Artifacts.ReportPath)
+		fmt.Println(steer.Artifacts.ReportPath)
+		return nil
+	}
+	var controls []*bench.RunResult
+	var steers []*bench.RunResult
+	for i := 0; i < *repeats; i++ {
+		control, err := runner.RunSWEBenchTask(*manifest, *instance, bench.ArmControl, *evalCmd)
+		if err != nil {
+			return err
+		}
+		controls = append(controls, control)
+		steer, err := runner.RunSWEBenchTask(*manifest, *instance, bench.ArmSteer, *evalCmd)
+		if err != nil {
+			return err
+		}
+		steers = append(steers, steer)
+	}
+	summaryPath := filepath.Join(*resultsDir, fmt.Sprintf("%s-repeat-summary-control-steer.md", controls[0].SWEBenchTask.Slug()))
+	if err := bench.WriteSWEBenchRepeatSummaryReport(summaryPath, controls, steers); err != nil {
 		return err
 	}
-	steer, err := runner.RunSWEBenchTask(*manifest, *instance, bench.ArmSteer, *evalCmd)
-	if err != nil {
-		return err
-	}
-	comparisonPath := filepath.Join(*resultsDir, fmt.Sprintf("%s-vs-control-steer.md", control.SWEBenchTask.Slug()))
-	if err := bench.WriteSWEBenchComparisonReport(comparisonPath, control, steer); err != nil {
-		return err
-	}
-	fmt.Println(comparisonPath)
-	fmt.Println(control.Artifacts.ReportPath)
-	fmt.Println(steer.Artifacts.ReportPath)
+	fmt.Println(summaryPath)
 	return nil
 }
 
@@ -364,8 +400,13 @@ func runPaired(repoRoot string, args []string) error {
 	fs := flag.NewFlagSet("run-paired", flag.ExitOnError)
 	resultsDir := fs.String("results-dir", filepath.Join(repoRoot, "bench", "results"), "directory for benchmark artifacts")
 	codexCmd := fs.String("codex-cmd", "", "optional shell command for Codex baseline audit")
+	steeringMode := fs.String("steering-mode", "", "optional steering mode override (single or continuous)")
 	keepTemp := fs.Bool("keep-temp", false, "keep the temp project directory after the run")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	mode, err := parseSteeringModeFlag(*steeringMode)
+	if err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
@@ -373,11 +414,12 @@ func runPaired(repoRoot string, args []string) error {
 	}
 
 	runner, err := bench.NewRunner(bench.RunnerOptions{
-		RepoRoot:     repoRoot,
-		ResultsDir:   *resultsDir,
-		ScenariosDir: filepath.Join(repoRoot, "bench", "scenarios"),
-		CodexCmd:     *codexCmd,
-		KeepTemp:     *keepTemp,
+		RepoRoot:             repoRoot,
+		ResultsDir:           *resultsDir,
+		ScenariosDir:         filepath.Join(repoRoot, "bench", "scenarios"),
+		CodexCmd:             *codexCmd,
+		SteeringModeOverride: mode,
+		KeepTemp:             *keepTemp,
 	})
 	if err != nil {
 		return err
@@ -481,4 +523,17 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  trupal-bench eval-swebench-gold-docker [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-swebench [flags]")
 	fmt.Fprintln(os.Stderr, "  trupal-bench run-swebench-paired [flags]")
+}
+
+func parseSteeringModeFlag(raw string) (bench.SteeringMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return "", nil
+	case string(bench.SteeringModeSingle):
+		return bench.SteeringModeSingle, nil
+	case string(bench.SteeringModeContinuous):
+		return bench.SteeringModeContinuous, nil
+	default:
+		return "", fmt.Errorf("unsupported steering mode %q (supported: single, continuous)", raw)
+	}
 }

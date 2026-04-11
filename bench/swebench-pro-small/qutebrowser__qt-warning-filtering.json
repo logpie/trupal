@@ -19,5 +19,7 @@
   "issue_specificity": "[\"code_quality_enh\",\"refactoring_enh\"]",
   "docker_evaluation_command": "export DISPLAY=:99; Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset & XVFB_PID=$!; sleep 3; QT_QPA_PLATFORM=offscreen PYTEST_QT_API=pyqt5 QUTE_QT_WRAPPER=PyQt5 dbus-run-session -- python -bb -m pytest -v --tb=short --disable-warnings --benchmark-disable tests/unit/utils/test_qtlog.py::TestHideQtWarning::test_unfiltered tests/unit/utils/test_qtlog.py::TestHideQtWarning::test_filtered[Hello]; code=$?; kill $XVFB_PID 2>/dev/null || true; exit $code",
   "post_patch_setup_command": "git checkout f91ace96223cac8161c16dd061907e138fe85111 -- tests/unit/utils/test_log.py tests/unit/utils/test_qtlog.py",
-  "evaluation_command": ""
+  "evaluation_command": "",
+  "steering_mode": "continuous",
+  "steering_cooldown": "30s"
 }

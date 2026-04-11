@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type SWEBenchTask struct {
@@ -25,6 +26,9 @@ type SWEBenchTask struct {
 	EvalCommand            string   `json:"evaluation_command"`
 	DockerImage            string   `json:"docker_image"`
 	DockerEvalCommand      string   `json:"docker_evaluation_command"`
+	SteeringMode           string   `json:"steering_mode"`
+	SteeringRounds         int      `json:"steering_rounds"`
+	SteeringCooldown       string   `json:"steering_cooldown"`
 	ManifestPath           string   `json:"-"`
 }
 
@@ -77,6 +81,8 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	task.EvalCommand = strings.TrimSpace(task.EvalCommand)
 	task.DockerImage = strings.TrimSpace(task.DockerImage)
 	task.DockerEvalCommand = strings.TrimSpace(task.DockerEvalCommand)
+	task.SteeringMode = strings.TrimSpace(strings.ToLower(task.SteeringMode))
+	task.SteeringCooldown = strings.TrimSpace(task.SteeringCooldown)
 	if task.InstanceID == "" {
 		return SWEBenchTask{}, fmt.Errorf("missing instance_id")
 	}
@@ -88,6 +94,20 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	}
 	if task.ProblemStatement == "" {
 		return SWEBenchTask{}, fmt.Errorf("task %s missing problem_statement", task.InstanceID)
+	}
+	if task.SteeringMode == "" {
+		task.SteeringMode = string(SteeringModeSingle)
+	}
+	switch SteeringMode(task.SteeringMode) {
+	case SteeringModeSingle, SteeringModeContinuous:
+	default:
+		return SWEBenchTask{}, fmt.Errorf("task %s has unsupported steering_mode %q", task.InstanceID, task.SteeringMode)
+	}
+	if task.SteeringCooldown == "" {
+		task.SteeringCooldown = "30s"
+	}
+	if _, err := time.ParseDuration(task.SteeringCooldown); err != nil {
+		return SWEBenchTask{}, fmt.Errorf("task %s has invalid steering_cooldown %q: %w", task.InstanceID, task.SteeringCooldown, err)
 	}
 	return task, nil
 }
@@ -136,8 +156,32 @@ func taskFromRawMap(raw map[string]any) (SWEBenchTask, error) {
 		EvalCommand:            firstString(raw, "evaluation_command"),
 		DockerImage:            firstString(raw, "docker_image", "dockerhub_tag"),
 		DockerEvalCommand:      firstString(raw, "docker_evaluation_command"),
+		SteeringMode:           firstString(raw, "steering_mode"),
+		SteeringRounds:         firstInt(raw, "steering_rounds"),
+		SteeringCooldown:       firstString(raw, "steering_cooldown"),
 	}
 	return task, nil
+}
+
+func firstInt(raw map[string]any, keys ...string) int {
+	for _, key := range keys {
+		v, ok := raw[key]
+		if !ok {
+			continue
+		}
+		switch vv := v.(type) {
+		case float64:
+			return int(vv)
+		case int:
+			return vv
+		case string:
+			var out int
+			if _, err := fmt.Sscanf(strings.TrimSpace(vv), "%d", &out); err == nil {
+				return out
+			}
+		}
+	}
+	return 0
 }
 
 func firstString(raw map[string]any, keys ...string) string {
