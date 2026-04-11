@@ -19,5 +19,6 @@
   "issue_categories": "[\"devops_knowledge\",\"infrastructure_knowledge\"]",
   "issue_specificity": "[\"technical_debt_enh\",\"refactoring_enh\",\"compatibility_bug\"]",
   "steering_mode": "continuous",
+  "timeout": "10m",
   "steering_cooldown": "30s"
 }

@@ -103,6 +103,26 @@ func TestTrupalTUIReadyAcceptsTruncatedFooterWhenHeaderIsLive(t *testing.T) {
 	}
 }
 
+func TestCodexReadyPromptActionDetectsUpdatePrompt(t *testing.T) {
+	text := `
+  ✨ Update available! 0.118.0 -> 0.120.0
+
+› 1. Update now (runs npm install -g @openai/codex)
+  2. Skip
+  3. Skip until next version
+`
+	if got := codexReadyPromptAction(text); got != "skip_update" {
+		t.Fatalf("codexReadyPromptAction() = %q, want skip_update", got)
+	}
+}
+
+func TestCodexReadyPromptActionDetectsTrustPrompt(t *testing.T) {
+	text := "Do you trust the contents of this directory?"
+	if got := codexReadyPromptAction(text); got != "trust" {
+		t.Fatalf("codexReadyPromptAction() = %q, want trust", got)
+	}
+}
+
 func TestApplySteeringTelemetryCountsGeneratedAndSentNudges(t *testing.T) {
 	start := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	result := &RunResult{
@@ -253,6 +273,28 @@ func TestShouldNotEnterTimeoutGraceForControlArm(t *testing.T) {
 	}
 	if shouldEnterTimeoutGrace(policy, ArmControl, runtime) {
 		t.Fatal("shouldEnterTimeoutGrace() = true, want false for control arm")
+	}
+}
+
+func TestScenarioConfigForSWEBenchTaskCarriesTimeoutAndCooldown(t *testing.T) {
+	cfg := scenarioConfigForSWEBenchTask(SWEBenchTask{
+		InstanceID:       "demo",
+		Timeout:          "10m",
+		SteeringMode:     "continuous",
+		SteeringRounds:   2,
+		SteeringCooldown: "45s",
+	})
+	if cfg.Timeout != 10*time.Minute {
+		t.Fatalf("Timeout = %s, want 10m", cfg.Timeout)
+	}
+	if cfg.SteeringMode != SteeringModeContinuous {
+		t.Fatalf("SteeringMode = %q, want continuous", cfg.SteeringMode)
+	}
+	if cfg.SteeringRounds != 2 {
+		t.Fatalf("SteeringRounds = %d, want 2", cfg.SteeringRounds)
+	}
+	if cfg.SteeringCooldown != 45*time.Second {
+		t.Fatalf("SteeringCooldown = %s, want 45s", cfg.SteeringCooldown)
 	}
 }
 

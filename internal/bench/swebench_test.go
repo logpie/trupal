@@ -63,6 +63,7 @@ func TestLoadSWEBenchTaskSupportsLowercaseProFields(t *testing.T) {
   "pass_to_pass": ["tests::b"],
   "before_repo_set_cmd": "echo setup",
   "dockerhub_tag": "python:3.12-slim",
+  "timeout": "10m",
   "steering_mode": "continuous",
   "steering_rounds": 3,
   "steering_cooldown": "45s"
@@ -82,7 +83,7 @@ func TestLoadSWEBenchTaskSupportsLowercaseProFields(t *testing.T) {
 	if task.SetupCommand != "echo setup" || task.DockerImage != "python:3.12-slim" {
 		t.Fatalf("unexpected pro fields %#v", task)
 	}
-	if task.SteeringMode != "continuous" || task.SteeringRounds != 3 || task.SteeringCooldown != "45s" {
+	if task.Timeout != "10m" || task.SteeringMode != "continuous" || task.SteeringRounds != 3 || task.SteeringCooldown != "45s" {
 		t.Fatalf("unexpected steering fields %#v", task)
 	}
 }
@@ -101,6 +102,33 @@ func TestLoadSWEBenchTaskRejectsInvalidSteeringMode(t *testing.T) {
 	}
 	if _, err := LoadSWEBenchTask(path, "bad-mode"); err == nil {
 		t.Fatal("expected invalid steering_mode to fail")
+	}
+}
+
+func TestLoadSWEBenchTaskRejectsInvalidTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.json")
+	if err := os.WriteFile(path, []byte(`{
+  "instance_id": "bad-timeout",
+  "repo": "example/pro",
+  "base_commit": "abc123",
+  "problem_statement": "Fix it",
+  "timeout": "later"
+}`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := LoadSWEBenchTask(path, "bad-timeout"); err == nil {
+		t.Fatal("expected invalid timeout to fail")
+	}
+}
+
+func TestLoadActualProSmallManifestCarriesTimeout(t *testing.T) {
+	task, err := LoadSWEBenchTask(filepath.Join("..", "..", "bench", "swebench-pro-small", "qutebrowser__qt-warning-filtering.json"), "instance_qutebrowser__qutebrowser-f91ace96223cac8161c16dd061907e138fe85111-v059c6fdc75567943479b23ebca7c07b5e9a7f34c")
+	if err != nil {
+		t.Fatalf("LoadSWEBenchTask() error = %v", err)
+	}
+	if task.Timeout != "10m" {
+		t.Fatalf("Timeout = %q, want 10m", task.Timeout)
 	}
 }
 

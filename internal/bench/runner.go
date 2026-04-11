@@ -162,18 +162,7 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	if r.opts.SteeringModeOverride != "" {
 		task.SteeringMode = string(r.opts.SteeringModeOverride)
 	}
-	scenarioCfg := Scenario{
-		ID:             task.Slug(),
-		AgentModel:     "gpt-5.4-mini",
-		SteeringMode:   SteeringMode(task.SteeringMode),
-		SteeringRounds: task.SteeringRounds,
-		TrupalConfig:   TrupalConfig{SessionProvider: "codex", BrainProvider: "codex", BrainModel: "gpt-5.4-mini", BrainEffort: "medium"},
-	}
-	if strings.TrimSpace(task.SteeringCooldown) != "" {
-		if d, parseErr := time.ParseDuration(task.SteeringCooldown); parseErr == nil {
-			scenarioCfg.SteeringCooldown = d
-		}
-	}
+	scenarioCfg := scenarioConfigForSWEBenchTask(task)
 	started := time.Now()
 	runSlug := started.Format("20060102-150405") + "-" + task.Slug() + "-" + string(arm)
 	artifactsDir := filepath.Join(r.opts.ResultsDir, runSlug)
@@ -814,18 +803,27 @@ func (r *Runner) waitForCodexReady(codexPaneID string) error {
 	for time.Now().Before(deadline) {
 		capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
 		text := string(capture)
-		switch {
-		case strings.Contains(text, "Do you trust the contents of this directory?"):
+		switch codexReadyPromptAction(text) {
+		case "trust":
 			sawTrustPrompt = true
 			if err := r.sendKeys(codexPaneID, "C-m"); err != nil {
 				return err
 			}
 			time.Sleep(2 * time.Second)
-		case strings.Contains(text, "Use /skills") || strings.Contains(text, "Tip:"):
+		case "skip_update":
+			if err := r.sendKeys(codexPaneID, "Down"); err != nil {
+				return err
+			}
+			time.Sleep(200 * time.Millisecond)
+			if err := r.sendKeys(codexPaneID, "C-m"); err != nil {
+				return err
+			}
+			time.Sleep(2 * time.Second)
+		case "ready":
 			if !sawTrustPrompt {
 				time.Sleep(1500 * time.Millisecond)
 				verify, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
-				if strings.Contains(string(verify), "Do you trust the contents of this directory?") {
+				if codexReadyPromptAction(string(verify)) == "trust" {
 					continue
 				}
 			}
@@ -836,6 +834,19 @@ func (r *Runner) waitForCodexReady(codexPaneID string) error {
 	}
 	capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
 	return fmt.Errorf("codex did not become ready:\n%s", string(capture))
+}
+
+func codexReadyPromptAction(text string) string {
+	switch {
+	case strings.Contains(text, "Do you trust the contents of this directory?"):
+		return "trust"
+	case strings.Contains(text, "Update available!") && strings.Contains(text, "Skip until next version"):
+		return "skip_update"
+	case strings.Contains(text, "Use /skills") || strings.Contains(text, "Tip:"):
+		return "ready"
+	default:
+		return ""
+	}
 }
 
 func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalPaneID string) (time.Time, int, bool, error) {
@@ -932,6 +943,27 @@ func effectiveBenchmarkSteeringPolicy(s Scenario) SteeringPolicy {
 		Rounds:   rounds,
 		Cooldown: cooldown,
 	}
+}
+
+func scenarioConfigForSWEBenchTask(task SWEBenchTask) Scenario {
+	scenarioCfg := Scenario{
+		ID:             task.Slug(),
+		AgentModel:     "gpt-5.4-mini",
+		SteeringMode:   SteeringMode(task.SteeringMode),
+		SteeringRounds: task.SteeringRounds,
+		TrupalConfig:   TrupalConfig{SessionProvider: "codex", BrainProvider: "codex", BrainModel: "gpt-5.4-mini", BrainEffort: "medium"},
+	}
+	if strings.TrimSpace(task.Timeout) != "" {
+		if d, parseErr := time.ParseDuration(task.Timeout); parseErr == nil {
+			scenarioCfg.Timeout = d
+		}
+	}
+	if strings.TrimSpace(task.SteeringCooldown) != "" {
+		if d, parseErr := time.ParseDuration(task.SteeringCooldown); parseErr == nil {
+			scenarioCfg.SteeringCooldown = d
+		}
+	}
+	return scenarioCfg
 }
 
 func (r *RunResult) applySteeringTelemetry(debugSummary DebugSummary) {

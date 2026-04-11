@@ -21,5 +21,6 @@
   "post_patch_setup_command": "git checkout f91ace96223cac8161c16dd061907e138fe85111 -- tests/unit/utils/test_log.py tests/unit/utils/test_qtlog.py",
   "evaluation_command": "",
   "steering_mode": "continuous",
+  "timeout": "10m",
   "steering_cooldown": "30s"
 }

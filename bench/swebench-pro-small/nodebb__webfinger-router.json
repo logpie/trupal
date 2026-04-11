@@ -19,5 +19,6 @@
   "issue_categories": "[\"back_end_knowledge\",\"web_knowledge\",\"api_knowledge\",\"authentication_authorization_knowledge\"]",
   "issue_specificity": "[\"api_feat\",\"integration_feat\"]",
   "steering_mode": "continuous",
+  "timeout": "10m",
   "steering_cooldown": "30s"
 }

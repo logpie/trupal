@@ -86,11 +86,13 @@ def wait_for_codex_ready(codex_pane: str) -> None:
     deadline = time.time() + 45
     while time.time() < deadline:
         text = capture_pane(codex_pane)
-        if (
-            "Do you trust the contents of" in text
-            or "Press enter to continue" in text
-            or "higher risk of prompt injection" in text
-        ):
+        if "Do you trust the contents of" in text or "higher risk of prompt injection" in text:
+            tmux("send-keys", "-t", codex_pane, "C-m")
+            time.sleep(2)
+            continue
+        if "Update available!" in text and "Skip until next version" in text:
+            tmux("send-keys", "-t", codex_pane, "Down")
+            time.sleep(0.2)
             tmux("send-keys", "-t", codex_pane, "C-m")
             time.sleep(2)
             continue

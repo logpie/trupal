@@ -26,6 +26,7 @@ type SWEBenchTask struct {
 	EvalCommand            string   `json:"evaluation_command"`
 	DockerImage            string   `json:"docker_image"`
 	DockerEvalCommand      string   `json:"docker_evaluation_command"`
+	Timeout                string   `json:"timeout"`
 	SteeringMode           string   `json:"steering_mode"`
 	SteeringRounds         int      `json:"steering_rounds"`
 	SteeringCooldown       string   `json:"steering_cooldown"`
@@ -81,6 +82,7 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	task.EvalCommand = strings.TrimSpace(task.EvalCommand)
 	task.DockerImage = strings.TrimSpace(task.DockerImage)
 	task.DockerEvalCommand = strings.TrimSpace(task.DockerEvalCommand)
+	task.Timeout = strings.TrimSpace(task.Timeout)
 	task.SteeringMode = strings.TrimSpace(strings.ToLower(task.SteeringMode))
 	task.SteeringCooldown = strings.TrimSpace(task.SteeringCooldown)
 	if task.InstanceID == "" {
@@ -105,6 +107,11 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	}
 	if task.SteeringCooldown == "" {
 		task.SteeringCooldown = "30s"
+	}
+	if task.Timeout != "" {
+		if _, err := time.ParseDuration(task.Timeout); err != nil {
+			return SWEBenchTask{}, fmt.Errorf("task %s has invalid timeout %q: %w", task.InstanceID, task.Timeout, err)
+		}
 	}
 	if _, err := time.ParseDuration(task.SteeringCooldown); err != nil {
 		return SWEBenchTask{}, fmt.Errorf("task %s has invalid steering_cooldown %q: %w", task.InstanceID, task.SteeringCooldown, err)
@@ -156,6 +163,7 @@ func taskFromRawMap(raw map[string]any) (SWEBenchTask, error) {
 		EvalCommand:            firstString(raw, "evaluation_command"),
 		DockerImage:            firstString(raw, "docker_image", "dockerhub_tag"),
 		DockerEvalCommand:      firstString(raw, "docker_evaluation_command"),
+		Timeout:                firstString(raw, "timeout"),
 		SteeringMode:           firstString(raw, "steering_mode"),
 		SteeringRounds:         firstInt(raw, "steering_rounds"),
 		SteeringCooldown:       firstString(raw, "steering_cooldown"),
