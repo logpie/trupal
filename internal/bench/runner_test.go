@@ -188,6 +188,27 @@ func TestApplySteeringTelemetryCountsGeneratedAndSentNudges(t *testing.T) {
 	}
 }
 
+func TestApplySteeringTelemetryCountsSentOnlyPatternNudgesAsGeneratedCandidates(t *testing.T) {
+	start := time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC)
+	result := &RunResult{
+		StartedAt: start,
+		SteeringEvents: []SteeringEvent{
+			{Timestamp: start.Add(7 * time.Second), Message: "Stop using configfiles.VersionChange here until the implementation exists"},
+			{Timestamp: start.Add(10 * time.Second), Message: "Remove the new lint/type suppression and fix the underlying issue instead."},
+		},
+	}
+	debug := DebugSummary{
+		Nudges: []ObservedFinding{{
+			Message:   "You need to stop using `configfiles.VersionChange` here until the implementation exists.",
+			FirstSeen: start.Add(5 * time.Second),
+		}},
+	}
+	result.applySteeringTelemetry(debug)
+	if result.GeneratedNudges != 2 || result.SentNudges != 2 || result.UnsentNudges != 0 {
+		t.Fatalf("telemetry = generated:%d sent:%d unsent:%d", result.GeneratedNudges, result.SentNudges, result.UnsentNudges)
+	}
+}
+
 func TestEffectiveInteractiveTimeoutDefaultsByMode(t *testing.T) {
 	if got := effectiveInteractiveTimeout(Scenario{}); got != 2*time.Minute {
 		t.Fatalf("single/default timeout = %s, want 2m", got)

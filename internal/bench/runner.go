@@ -1186,7 +1186,7 @@ func scenarioConfigForSWEBenchTask(task SWEBenchTask) Scenario {
 }
 
 func (r *RunResult) applySteeringTelemetry(debugSummary DebugSummary) {
-	r.GeneratedNudges = len(debugSummary.Nudges)
+	r.GeneratedNudges = countGeneratedNudgeCandidates(debugSummary.Nudges, r.SteeringEvents)
 	r.SentNudges = len(r.SteeringEvents)
 	if r.GeneratedNudges > r.SentNudges {
 		r.UnsentNudges = r.GeneratedNudges - r.SentNudges
@@ -1197,6 +1197,46 @@ func (r *RunResult) applySteeringTelemetry(debugSummary DebugSummary) {
 	if len(r.SteeringEvents) > 0 && !r.SteeringEvents[0].Timestamp.IsZero() && !r.StartedAt.IsZero() {
 		r.FirstSentNudge = r.SteeringEvents[0].Timestamp.Sub(r.StartedAt)
 	}
+}
+
+func countGeneratedNudgeCandidates(nudges []ObservedFinding, steeringEvents []SteeringEvent) int {
+	seen := make([]string, 0, len(nudges)+len(steeringEvents))
+	for _, nudge := range nudges {
+		key := canonicalNudgeMessage(nudge.Message)
+		if key != "" && !containsEquivalentNudge(seen, key) {
+			seen = append(seen, key)
+		}
+	}
+	for _, event := range steeringEvents {
+		key := canonicalNudgeMessage(event.Message)
+		if key != "" && !containsEquivalentNudge(seen, key) {
+			seen = append(seen, key)
+		}
+	}
+	return len(seen)
+}
+
+func canonicalNudgeMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("`", "", "\"", "", "'", "")
+	message = replacer.Replace(message)
+	message = strings.ToLower(strings.Join(strings.Fields(message), " "))
+	for _, prefix := range []string{"you need to ", "you said you were ", "you said you're ", "please ", "hey, "} {
+		message = strings.TrimPrefix(message, prefix)
+	}
+	return message
+}
+
+func containsEquivalentNudge(seen []string, candidate string) bool {
+	for _, existing := range seen {
+		if existing == candidate || strings.Contains(existing, candidate) || strings.Contains(candidate, existing) {
+			return true
+		}
+	}
+	return false
 }
 
 func benchmarkTelemetryCutoff(finishedAt time.Time) time.Time {
