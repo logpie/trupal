@@ -23,6 +23,9 @@ func WriteReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- Agent provider: `%s`\n", result.Scenario.SessionProvider())
 	fmt.Fprintf(&b, "- Agent model: `%s`\n", result.Scenario.EffectiveAgentModel())
 	fmt.Fprintf(&b, "- Agent exit code: `%d`\n", result.AgentExitCode)
+	if result.StopReason != "" {
+		fmt.Fprintf(&b, "- Stop reason: `%s`\n", result.StopReason)
+	}
 	if result.TimedOut {
 		fmt.Fprintf(&b, "- Timed out: `yes`\n")
 	}
@@ -120,6 +123,7 @@ func WriteReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- Agent stdout: `%s`\n", result.Artifacts.AgentStdoutPath)
 	fmt.Fprintf(&b, "- Agent stderr: `%s`\n", result.Artifacts.AgentStderrPath)
 	fmt.Fprintf(&b, "- Session JSONL: `%s`\n", result.Artifacts.SessionJSONLPath)
+	fmt.Fprintf(&b, "- Benchmark status: `%s`\n", result.Artifacts.BenchmarkStatusPath)
 	fmt.Fprintf(&b, "- Final project copy: `%s`\n", result.Artifacts.ProjectCopyDir)
 
 	return os.WriteFile(path, []byte(b.String()), 0644)
@@ -136,6 +140,9 @@ func writeSWEBenchReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- Started: `%s`\n", result.StartedAt.Format("2006-01-02 15:04:05 MST"))
 	fmt.Fprintf(&b, "- Duration: `%s`\n", result.Duration)
 	fmt.Fprintf(&b, "- Agent exit code: `%d`\n", result.AgentExitCode)
+	if result.StopReason != "" {
+		fmt.Fprintf(&b, "- Stop reason: `%s`\n", result.StopReason)
+	}
 	if result.TimedOut {
 		fmt.Fprintf(&b, "- Timed out: `yes`\n")
 	}
@@ -165,6 +172,7 @@ func writeSWEBenchReport(path string, result *RunResult) error {
 	fmt.Fprintf(&b, "- TruPal log: `%s`\n", result.Artifacts.TrupalLogPath)
 	fmt.Fprintf(&b, "- Steer log: `%s`\n", result.Artifacts.SteerLogPath)
 	fmt.Fprintf(&b, "- Session JSONL: `%s`\n", result.Artifacts.SessionJSONLPath)
+	fmt.Fprintf(&b, "- Benchmark status: `%s`\n", result.Artifacts.BenchmarkStatusPath)
 	fmt.Fprintf(&b, "- Final project copy: `%s`\n", result.Artifacts.ProjectCopyDir)
 	return os.WriteFile(path, []byte(b.String()), 0644)
 }
@@ -196,6 +204,9 @@ func WriteComparisonReport(path string, control, steer *RunResult) error {
 	fmt.Fprintf(&b, "| False positives | %d | %d |\n", control.Score.FalsePositiveCount, steer.Score.FalsePositiveCount)
 	fmt.Fprintf(&b, "| Trap hits | %d | %d |\n", control.Score.TrapHits, steer.Score.TrapHits)
 	fmt.Fprintf(&b, "| Cost (USD) | %.4f | %.4f |\n", control.Score.TotalCostUSD, steer.Score.TotalCostUSD)
+	if control.StopReason != "" || steer.StopReason != "" {
+		fmt.Fprintf(&b, "| Stop reason | %s | %s |\n", control.StopReason, steer.StopReason)
+	}
 	fmt.Fprintf(&b, "| Generated nudges | %d | %d |\n", control.GeneratedNudges, steer.GeneratedNudges)
 	fmt.Fprintf(&b, "| Sent nudges | %d | %d |\n", control.SentNudges, steer.SentNudges)
 	fmt.Fprintf(&b, "| Unsent nudges | %d | %d |\n", control.UnsentNudges, steer.UnsentNudges)
@@ -220,6 +231,9 @@ func WriteSWEBenchComparisonReport(path string, control, steer *RunResult) error
 	fmt.Fprintf(&b, "| --- | ---: | ---: |\n")
 	fmt.Fprintf(&b, "| Solved | %t | %t |\n", control.SWEBenchSolved, steer.SWEBenchSolved)
 	fmt.Fprintf(&b, "| Agent exit code | %d | %d |\n", control.AgentExitCode, steer.AgentExitCode)
+	if control.StopReason != "" || steer.StopReason != "" {
+		fmt.Fprintf(&b, "| Stop reason | %s | %s |\n", control.StopReason, steer.StopReason)
+	}
 	fmt.Fprintf(&b, "| Duration | %s | %s |\n", control.Duration, steer.Duration)
 	fmt.Fprintf(&b, "| Generated nudges | %d | %d |\n", control.GeneratedNudges, steer.GeneratedNudges)
 	fmt.Fprintf(&b, "| Sent nudges | %d | %d |\n", control.SentNudges, steer.SentNudges)

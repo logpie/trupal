@@ -1,6 +1,8 @@
 package bench
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -139,12 +141,73 @@ func TestEffectiveInteractiveTimeoutDefaultsByMode(t *testing.T) {
 	}
 }
 
-func TestAllowIdleCompletionDisabledForContinuousMode(t *testing.T) {
-	if !allowIdleCompletion(Scenario{}) {
-		t.Fatal("default/single mode should allow idle completion")
+func TestEvaluateBenchmarkStatusConvergesWhenQuietAndNoSendableIssues(t *testing.T) {
+	now := time.Date(2026, 4, 10, 12, 5, 0, 0, time.UTC)
+	status := evaluateBenchmarkStatus(
+		now,
+		now.Add(-5*time.Minute),
+		5*time.Minute,
+		effectiveBenchmarkSteeringPolicy(Scenario{SteeringMode: SteeringModeContinuous}),
+		BenchmarkRuntimeStatus{
+			AgentStatus:          "idle",
+			LastSessionEventAt:   now.Add(-70 * time.Second),
+			LastWorkChangeAt:     now.Add(-70 * time.Second),
+			LastGeneratedNudgeAt: now.Add(-70 * time.Second),
+			LastSentNudgeAt:      now.Add(-70 * time.Second),
+			LastBrainActivityAt:  now.Add(-70 * time.Second),
+			SendableIssueCount:   0,
+		},
+		true,
+	)
+	if status.State != BenchmarkStateComplete || status.Reason != BenchmarkStopReasonConverged {
+		t.Fatalf("status = %#v, want complete/converged", status)
 	}
-	if allowIdleCompletion(Scenario{SteeringMode: SteeringModeContinuous}) {
-		t.Fatal("continuous mode should not stop on idle")
+}
+
+func TestEvaluateBenchmarkStatusQuiescesBeforeSettleWindow(t *testing.T) {
+	now := time.Date(2026, 4, 10, 12, 5, 0, 0, time.UTC)
+	status := evaluateBenchmarkStatus(
+		now,
+		now.Add(-5*time.Minute),
+		5*time.Minute,
+		effectiveBenchmarkSteeringPolicy(Scenario{SteeringMode: SteeringModeContinuous}),
+		BenchmarkRuntimeStatus{
+			AgentStatus:        "idle",
+			LastSessionEventAt: now.Add(-20 * time.Second),
+		},
+		true,
+	)
+	if status.State != BenchmarkStateQuiescing {
+		t.Fatalf("state = %q, want quiescing", status.State)
+	}
+	if status.Reason != BenchmarkStopReasonNone {
+		t.Fatalf("reason = %q, want empty", status.Reason)
+	}
+}
+
+func TestWriteBenchmarkStatusArtifact(t *testing.T) {
+	dir := t.TempDir()
+	status := BenchmarkStatus{
+		State:         BenchmarkStateQuiescing,
+		Reason:        BenchmarkStopReasonNone,
+		AgentStatus:   "idle",
+		IdleThreshold: "15s",
+		SettleWindow:  "1m0s",
+		HardTimeout:   "5m0s",
+		UpdatedAt:     time.Date(2026, 4, 10, 12, 5, 0, 0, time.UTC),
+	}
+	if err := writeBenchmarkStatus(dir, status); err != nil {
+		t.Fatalf("writeBenchmarkStatus() error = %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ".trupal.bench.status.json"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(raw)
+	for _, want := range []string{`"state": "quiescing"`, `"agent_status": "idle"`, `"settle_window": "1m0s"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status artifact missing %q in:\n%s", want, text)
+		}
 	}
 }
 

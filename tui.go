@@ -74,22 +74,24 @@ const (
 // --- Messages ---
 
 type statusMsg struct {
-	agentLabel    string
-	ccStatus      string
-	sessionModel  string
-	brainIdentity string
-	agentStats    AgentUsageStats
-	repoRoot      string
-	agentPaneID   string
-	buildOK       *bool
-	buildErrs     int
-	buildTrend    string
-	files         []string
-	elapsed       string
-	project       string
-	findings      int
-	resolved      int
-	issues        []CurrentIssue
+	agentLabel         string
+	ccStatus           string
+	sessionModel       string
+	brainIdentity      string
+	agentStats         AgentUsageStats
+	repoRoot           string
+	agentPaneID        string
+	lastSessionEventAt time.Time
+	lastWorkChangeAt   time.Time
+	buildOK            *bool
+	buildErrs          int
+	buildTrend         string
+	files              []string
+	elapsed            string
+	project            string
+	findings           int
+	resolved           int
+	issues             []CurrentIssue
 }
 type nudgeMsg struct {
 	finding BrainFinding
@@ -102,7 +104,10 @@ type resolvedMsg struct {
 type trajectoryMsg struct{ message string }
 type patternMsg struct{ finding PatternFinding }
 type infoMsg struct{ message string }
-type benchmarkConfigMsg struct{ continuousSteering bool }
+type benchmarkConfigMsg struct {
+	enabled            bool
+	continuousSteering bool
+}
 type steeringSentMsg struct {
 	findingID string
 	message   string
@@ -164,21 +169,26 @@ type model struct {
 	agentPaneID   string
 
 	// Footer state
-	fileLine           string // current files summary
-	issueItems         []CurrentIssue
-	issueCursor        int
-	issuesPopupVisible bool
-	issuePanelVisible  bool // compatibility alias for existing tests while popup work lands
-	detailOpen         map[string]bool
-	toastMsg           string // transient message (e.g. "copied!")
-	toastExpiry        time.Time
-	steerModeAuto      bool
-	continuousSteering bool
-	sentNudges         map[string]SteeringSendState
-	lastSteerAt        time.Time
-	steerInFlight      bool
-	activeSteerKey     string
-	activeSteerMessage string
+	fileLine             string // current files summary
+	issueItems           []CurrentIssue
+	issueCursor          int
+	issuesPopupVisible   bool
+	issuePanelVisible    bool // compatibility alias for existing tests while popup work lands
+	detailOpen           map[string]bool
+	toastMsg             string // transient message (e.g. "copied!")
+	toastExpiry          time.Time
+	steerModeAuto        bool
+	benchmarkMode        bool
+	continuousSteering   bool
+	sentNudges           map[string]SteeringSendState
+	lastSteerAt          time.Time
+	steerInFlight        bool
+	activeSteerKey       string
+	activeSteerMessage   string
+	lastSessionEventAt   time.Time
+	lastWorkChangeAt     time.Time
+	lastGeneratedNudgeAt time.Time
+	lastSentNudgeAt      time.Time
 
 	// Selection
 	sel *Selection
@@ -444,6 +454,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.brain.thinking {
 			m.brain.tick++
 		}
+		m.persistBenchmarkRuntimeStatus(time.Time(msg))
 		return m, tickEvery()
 
 	// Spinner animation happens via tickEvery (3s ticks)
@@ -472,6 +483,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.project != "" {
 			m.project = msg.project
+		}
+		if !msg.lastSessionEventAt.IsZero() {
+			m.lastSessionEventAt = msg.lastSessionEventAt
+		}
+		if !msg.lastWorkChangeAt.IsZero() {
+			m.lastWorkChangeAt = msg.lastWorkChangeAt
 		}
 		if msg.buildOK == nil {
 			m.buildState = ""
@@ -506,13 +523,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.steerModeAuto {
 			if issue, ok := m.autoSteeringIssue(); ok && m.canSendNudge(issue, false) {
 				m.steerInFlight = true
+				m.persistBenchmarkRuntimeStatus(time.Now())
 				return m, m.sendNudgeCmd(issue, "auto")
 			}
 		}
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case nudgeMsg:
 		m.findings++
+		m.lastGeneratedNudgeAt = time.Now()
 		m.logIssueEvent("nudge", msg.finding, msg.detail)
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case resolvedMsg:
 		m.findings--
@@ -561,6 +582,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 		}
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case trajectoryMsg:
 		m.appendEntry(timelineEntry{
@@ -577,9 +599,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Marker:  "i",
 			Summary: msg.message,
 		})
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case benchmarkConfigMsg:
+		m.benchmarkMode = msg.enabled
 		m.continuousSteering = msg.continuousSteering
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case steeringSentMsg:
 		m.steerInFlight = false
@@ -591,6 +616,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeSteerKey = msg.findingID
 		m.activeSteerMessage = strings.TrimSpace(msg.message)
 		m.lastSteerAt = msg.at
+		m.lastSentNudgeAt = msg.at
 		if msg.logErr != nil {
 			m.toastMsg = "⚠ nudge sent, log failed"
 			Debugf("[steer] log failed for %s: %v", msg.findingID, msg.logErr)
@@ -598,12 +624,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toastMsg = "✓ nudge sent"
 		}
 		m.toastExpiry = time.Now().Add(3 * time.Second)
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case steeringSendFailedMsg:
 		m.steerInFlight = false
 		m.toastMsg = "⚠ send failed"
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 		Debugf("[steer] send failed for %s: %v", msg.findingID, msg.err)
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case patternMsg:
 		m.logIssueEvent("pattern", BrainFinding{
@@ -612,6 +640,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Nudge:    steerablePatternNudge(msg.finding),
 			Why:      shortIssueWhy(msg.finding),
 		}, nil)
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case brainStatusMsg:
 		if msg.thinking {
@@ -623,6 +652,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.brain.lastTime = msg.lastTime
 			}
 		}
+		m.persistBenchmarkRuntimeStatus(time.Now())
 
 	case brainStatsMsg:
 		m.brain.stats = msg.stats

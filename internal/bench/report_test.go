@@ -19,8 +19,9 @@ func TestWriteComparisonReportIncludesPrimaryMetrics(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "comparison.md")
 	control := &RunResult{
-		Scenario: Scenario{ID: "buggy-crud", Name: "CRUD API"},
-		Arm:      ArmControl,
+		Scenario:   Scenario{ID: "buggy-crud", Name: "CRUD API"},
+		Arm:        ArmControl,
+		StopReason: BenchmarkStopReasonConverged,
 		Artifacts: ArtifactSet{
 			ReportPath: filepath.Join(dir, "control.md"),
 		},
@@ -38,8 +39,9 @@ func TestWriteComparisonReportIncludesPrimaryMetrics(t *testing.T) {
 		UnsentNudges:    2,
 	}
 	steer := &RunResult{
-		Scenario: control.Scenario,
-		Arm:      ArmSteer,
+		Scenario:   control.Scenario,
+		Arm:        ArmSteer,
+		StopReason: BenchmarkStopReasonHardTimeout,
 		Artifacts: ArtifactSet{
 			ReportPath: filepath.Join(dir, "steer.md"),
 		},
@@ -68,6 +70,7 @@ func TestWriteComparisonReportIncludesPrimaryMetrics(t *testing.T) {
 	for _, want := range []string{
 		"Primary metric: steering uplift `+1`",
 		"| Matched truths | 2 | 3 |",
+		"| Stop reason | converged | hard_timeout |",
 		"| Generated nudges | 2 | 5 |",
 		"| Sent nudges | 0 | 2 |",
 		"| Steering events | 0 | 2 |",
@@ -107,6 +110,40 @@ func TestWriteSWEBenchRepeatSummaryReport(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("repeat summary missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestWriteSWEBenchReportIncludesStopReasonAndStatusArtifact(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.md")
+	result := &RunResult{
+		SWEBenchTask:   &SWEBenchTask{InstanceID: "x", Repo: "example/repo"},
+		Arm:            ArmSteer,
+		StartedAt:      time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		Duration:       2 * time.Minute,
+		AgentExitCode:  0,
+		StopReason:     BenchmarkStopReasonConverged,
+		SWEBenchSolved: true,
+		Artifacts: ArtifactSet{
+			BenchmarkStatusPath: filepath.Join(dir, "bench.status.json"),
+			SessionJSONLPath:    filepath.Join(dir, "session.jsonl"),
+		},
+	}
+	if err := WriteReport(path, result); err != nil {
+		t.Fatalf("WriteReport() error = %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"- Stop reason: `converged`",
+		"- Benchmark status: `" + filepath.Join(dir, "bench.status.json") + "`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q in:\n%s", want, text)
 		}
 	}
 }

@@ -43,6 +43,7 @@ type RunResult struct {
 	Duration            time.Duration
 	ProjectDir          string
 	TimedOut            bool
+	StopReason          BenchmarkStopReason
 	AgentDuration       time.Duration
 	AgentExitCode       int
 	AgentError          string
@@ -840,11 +841,7 @@ func (r *Runner) waitForCodexReady(codexPaneID string) error {
 func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalPaneID string) (time.Time, int, bool, error) {
 	timeout := effectiveInteractiveTimeout(result.Scenario)
 	deadline := result.StartedAt.Add(timeout)
-	quietWindow := 8 * time.Second
 	policy := effectiveBenchmarkSteeringPolicy(result.Scenario)
-	if result.Arm == ArmSteer {
-		quietWindow = policy.Cooldown + 5*time.Second
-	}
 	autoDisabled := result.Arm != ArmSteer
 
 	for {
@@ -852,33 +849,46 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 			result.SessionJSONL, _ = FindLatestSessionJSONL(result.ProjectDir, result.Scenario.SessionProvider())
 		}
 
-		var lastActivity time.Time
-		if result.SessionJSONL != "" {
-			if info, err := os.Stat(result.SessionJSONL); err == nil {
-				lastActivity = info.ModTime()
-			}
-		}
-
 		events, err := ParseSteeringEvents(filepath.Join(result.ProjectDir, ".trupal.steer.jsonl"))
 		if err != nil {
 			return time.Time{}, -1, false, err
-		}
-		if len(events) > 0 && events[len(events)-1].Timestamp.After(lastActivity) {
-			lastActivity = events[len(events)-1].Timestamp
 		}
 		if result.Arm == ArmSteer && !autoDisabled && policy.Mode == SteeringModeSingle && len(events) >= policy.Rounds {
 			if err := r.sendKeys(trupalPaneID, "a"); err != nil {
 				return time.Time{}, -1, false, fmt.Errorf("disable auto steer after %d rounds: %w", policy.Rounds, err)
 			}
 			autoDisabled = true
-			lastActivity = time.Now()
 		}
 
 		now := time.Now()
-		if allowIdleCompletion(result.Scenario) && result.SessionJSONL != "" && detectBenchAgentStatus(result.SessionJSONL) == "idle" && lastActivity.After(result.StartedAt) && now.Sub(lastActivity) >= quietWindow {
+		runtime, runtimeSeen, err := readBenchmarkRuntimeStatus(result.ProjectDir)
+		if err != nil {
+			return time.Time{}, -1, false, err
+		}
+		if result.SessionJSONL != "" {
+			if info, statErr := os.Stat(result.SessionJSONL); statErr == nil && info.ModTime().After(runtime.LastSessionEventAt) {
+				runtime.LastSessionEventAt = info.ModTime()
+			}
+			if runtime.AgentStatus == "" {
+				runtime.AgentStatus = detectBenchAgentStatus(result.SessionJSONL)
+			}
+		}
+		status := evaluateBenchmarkStatus(now, result.StartedAt, timeout, policy, runtime, runtimeSeen)
+		if err := writeBenchmarkStatus(result.ProjectDir, status); err != nil {
+			return time.Time{}, -1, false, err
+		}
+		if status.Reason == BenchmarkStopReasonConverged {
+			result.StopReason = BenchmarkStopReasonConverged
 			return now, 0, false, nil
 		}
 		if !now.Before(deadline) {
+			status.State = BenchmarkStateHardTimeout
+			status.Reason = BenchmarkStopReasonHardTimeout
+			status.UpdatedAt = now
+			if err := writeBenchmarkStatus(result.ProjectDir, status); err != nil {
+				return time.Time{}, -1, false, err
+			}
+			result.StopReason = BenchmarkStopReasonHardTimeout
 			_ = r.sendKeys(codexPaneID, "C-c")
 			return now, 124, true, nil
 		}
@@ -894,10 +904,6 @@ func effectiveInteractiveTimeout(s Scenario) time.Duration {
 		return 5 * time.Minute
 	}
 	return 2 * time.Minute
-}
-
-func allowIdleCompletion(s Scenario) bool {
-	return s.SteeringMode != SteeringModeContinuous
 }
 
 func effectiveBenchmarkSteeringPolicy(s Scenario) SteeringPolicy {

@@ -125,7 +125,10 @@ func defaultString(value, fallback string) string {
 func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cancelCh <-chan struct{}) {
 	InitDebugLog(repoRoot)
 	defer CloseDebugLog()
-	p.Send(benchmarkConfigMsg{continuousSteering: cfg.BenchmarkSteeringMode == "continuous"})
+	p.Send(benchmarkConfigMsg{
+		enabled:            cfg.BenchmarkMode,
+		continuousSteering: cfg.BenchmarkSteeringMode == "continuous",
+	})
 
 	// Handle SIGINT for graceful shutdown.
 	sigCh := make(chan os.Signal, 2)
@@ -668,14 +671,16 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			buildOK = &v
 		}
 		p.Send(statusMsg{
-			agentLabel:    agentLabel,
-			ccStatus:      ccStatus,
-			sessionModel:  sessionModel,
-			brainIdentity: state.BrainIdentity,
-			agentStats:    agentUsage,
-			repoRoot:      repoRoot,
-			agentPaneID:   agentPaneID,
-			buildOK:       buildOK,
+			agentLabel:         agentLabel,
+			ccStatus:           ccStatus,
+			sessionModel:       sessionModel,
+			brainIdentity:      state.BrainIdentity,
+			agentStats:         agentUsage,
+			repoRoot:           repoRoot,
+			agentPaneID:        agentPaneID,
+			lastSessionEventAt: lastJSONLActivity,
+			lastWorkChangeAt:   lastWorkChange,
+			buildOK:            buildOK,
 			buildErrs: func() int {
 				if state.Build != nil {
 					return state.Build.ErrorCount

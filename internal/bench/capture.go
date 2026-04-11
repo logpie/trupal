@@ -14,44 +14,46 @@ import (
 )
 
 type ArtifactSet struct {
-	RootDir          string
-	PaneCapturePath  string
-	DebugLogPath     string
-	TrupalLogPath    string
-	SteerLogPath     string
-	SessionJSONLPath string
-	ProjectCopyDir   string
-	AgentStdoutPath  string
-	AgentStderrPath  string
-	ScenarioYAMLPath string
-	TaskPath         string
-	TruthPath        string
-	ReportPath       string
-	CodexPromptPath  string
-	CodexStdoutPath  string
-	CodexStderrPath  string
-	EvalOutputPath   string
+	RootDir             string
+	PaneCapturePath     string
+	DebugLogPath        string
+	TrupalLogPath       string
+	SteerLogPath        string
+	SessionJSONLPath    string
+	ProjectCopyDir      string
+	AgentStdoutPath     string
+	AgentStderrPath     string
+	ScenarioYAMLPath    string
+	TaskPath            string
+	TruthPath           string
+	ReportPath          string
+	CodexPromptPath     string
+	CodexStdoutPath     string
+	CodexStderrPath     string
+	EvalOutputPath      string
+	BenchmarkStatusPath string
 }
 
 func NewArtifactSet(rootDir string) ArtifactSet {
 	return ArtifactSet{
-		RootDir:          rootDir,
-		PaneCapturePath:  filepath.Join(rootDir, "pane.txt"),
-		DebugLogPath:     filepath.Join(rootDir, "trupal.debug"),
-		TrupalLogPath:    filepath.Join(rootDir, "trupal.log"),
-		SteerLogPath:     filepath.Join(rootDir, "trupal.steer.jsonl"),
-		SessionJSONLPath: filepath.Join(rootDir, "session.jsonl"),
-		ProjectCopyDir:   filepath.Join(rootDir, "_project"),
-		AgentStdoutPath:  filepath.Join(rootDir, "agent.stdout.log"),
-		AgentStderrPath:  filepath.Join(rootDir, "agent.stderr.log"),
-		ScenarioYAMLPath: filepath.Join(rootDir, "scenario.yaml"),
-		TaskPath:         filepath.Join(rootDir, "task.md"),
-		TruthPath:        filepath.Join(rootDir, "truth.json"),
-		ReportPath:       filepath.Join(rootDir, "report.md"),
-		CodexPromptPath:  filepath.Join(rootDir, "codex-audit-prompt.txt"),
-		CodexStdoutPath:  filepath.Join(rootDir, "codex.stdout.log"),
-		CodexStderrPath:  filepath.Join(rootDir, "codex.stderr.log"),
-		EvalOutputPath:   filepath.Join(rootDir, "eval.log"),
+		RootDir:             rootDir,
+		PaneCapturePath:     filepath.Join(rootDir, "pane.txt"),
+		DebugLogPath:        filepath.Join(rootDir, "trupal.debug"),
+		TrupalLogPath:       filepath.Join(rootDir, "trupal.log"),
+		SteerLogPath:        filepath.Join(rootDir, "trupal.steer.jsonl"),
+		SessionJSONLPath:    filepath.Join(rootDir, "session.jsonl"),
+		ProjectCopyDir:      filepath.Join(rootDir, "_project"),
+		AgentStdoutPath:     filepath.Join(rootDir, "agent.stdout.log"),
+		AgentStderrPath:     filepath.Join(rootDir, "agent.stderr.log"),
+		ScenarioYAMLPath:    filepath.Join(rootDir, "scenario.yaml"),
+		TaskPath:            filepath.Join(rootDir, "task.md"),
+		TruthPath:           filepath.Join(rootDir, "truth.json"),
+		ReportPath:          filepath.Join(rootDir, "report.md"),
+		CodexPromptPath:     filepath.Join(rootDir, "codex-audit-prompt.txt"),
+		CodexStdoutPath:     filepath.Join(rootDir, "codex.stdout.log"),
+		CodexStderrPath:     filepath.Join(rootDir, "codex.stderr.log"),
+		EvalOutputPath:      filepath.Join(rootDir, "eval.log"),
+		BenchmarkStatusPath: filepath.Join(rootDir, "bench.status.json"),
 	}
 }
 
@@ -113,6 +115,9 @@ func CollectArtifacts(projectDir string, artifacts ArtifactSet, sessionJSONL, pa
 		return err
 	}
 	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.steer.jsonl"), artifacts.SteerLogPath); err != nil {
+		return err
+	}
+	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.bench.status.json"), artifacts.BenchmarkStatusPath); err != nil {
 		return err
 	}
 	if sessionJSONL != "" {
