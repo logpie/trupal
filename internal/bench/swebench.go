@@ -26,6 +26,9 @@ type SWEBenchTask struct {
 	EvalCommand            string   `json:"evaluation_command"`
 	DockerImage            string   `json:"docker_image"`
 	DockerEvalCommand      string   `json:"docker_evaluation_command"`
+	RunScriptURL           string   `json:"run_script"`
+	ParsingScriptURL       string   `json:"parsing_script"`
+	SelectedTests          []string `json:"selected_test_files_to_run"`
 	Timeout                string   `json:"timeout"`
 	SteeringMode           string   `json:"steering_mode"`
 	SteeringRounds         int      `json:"steering_rounds"`
@@ -82,6 +85,8 @@ func validateSWEBenchTask(task SWEBenchTask) (SWEBenchTask, error) {
 	task.EvalCommand = strings.TrimSpace(task.EvalCommand)
 	task.DockerImage = strings.TrimSpace(task.DockerImage)
 	task.DockerEvalCommand = strings.TrimSpace(task.DockerEvalCommand)
+	task.RunScriptURL = strings.TrimSpace(task.RunScriptURL)
+	task.ParsingScriptURL = strings.TrimSpace(task.ParsingScriptURL)
 	task.Timeout = strings.TrimSpace(task.Timeout)
 	task.SteeringMode = strings.TrimSpace(strings.ToLower(task.SteeringMode))
 	task.SteeringCooldown = strings.TrimSpace(task.SteeringCooldown)
@@ -163,12 +168,40 @@ func taskFromRawMap(raw map[string]any) (SWEBenchTask, error) {
 		EvalCommand:            firstString(raw, "evaluation_command"),
 		DockerImage:            firstString(raw, "docker_image", "dockerhub_tag"),
 		DockerEvalCommand:      firstString(raw, "docker_evaluation_command"),
+		RunScriptURL:           firstString(raw, "run_script"),
+		ParsingScriptURL:       firstString(raw, "parsing_script"),
+		SelectedTests:          firstStringSlice(raw, "selected_test_files_to_run"),
 		Timeout:                firstString(raw, "timeout"),
 		SteeringMode:           firstString(raw, "steering_mode"),
 		SteeringRounds:         firstInt(raw, "steering_rounds"),
 		SteeringCooldown:       firstString(raw, "steering_cooldown"),
 	}
 	return task, nil
+}
+
+func (t SWEBenchTask) EffectiveDockerImage() string {
+	image := strings.TrimSpace(t.DockerImage)
+	switch {
+	case image == "":
+		tag := createSWEBenchDockerHubTag(t.InstanceID, t.Repo)
+		if tag == "" {
+			return ""
+		}
+		return "jefzda/sweap-images:" + tag
+	case strings.Contains(image, "/"):
+		return image
+	default:
+		return "jefzda/sweap-images:" + image
+	}
+}
+
+func createSWEBenchDockerHubTag(instanceID, repo string) string {
+	instanceID = strings.TrimSpace(instanceID)
+	repo = strings.TrimSpace(strings.ToLower(repo))
+	if instanceID == "" || repo == "" || !strings.Contains(repo, "/") {
+		return ""
+	}
+	return strings.ReplaceAll(repo, "/", ".") + "-" + strings.TrimPrefix(instanceID, "instance_")
 }
 
 func firstInt(raw map[string]any, keys ...string) int {

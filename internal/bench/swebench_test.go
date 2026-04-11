@@ -132,6 +132,42 @@ func TestLoadActualProSmallManifestCarriesTimeout(t *testing.T) {
 	}
 }
 
+func TestEffectiveDockerImageDerivesDockerHubTag(t *testing.T) {
+	task := SWEBenchTask{
+		InstanceID: "instance_NodeBB__NodeBB-abc123-vxyz",
+		Repo:       "NodeBB/NodeBB",
+	}
+	if got := task.EffectiveDockerImage(); got != "jefzda/sweap-images:nodebb.nodebb-NodeBB__NodeBB-abc123-vxyz" {
+		t.Fatalf("EffectiveDockerImage() = %q", got)
+	}
+}
+
+func TestLoadSWEBenchTaskSupportsRunScriptAndSelectedTests(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.json")
+	if err := os.WriteFile(path, []byte(`{
+  "instance_id": "pro-run",
+  "repo": "example/repo",
+  "base_commit": "abc123",
+  "problem_statement": "Fix it",
+  "run_script": "https://example.com/run.sh",
+  "parsing_script": "https://example.com/parser.py",
+  "selected_test_files_to_run": "[\"a\",\"b\"]"
+}`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	task, err := LoadSWEBenchTask(path, "pro-run")
+	if err != nil {
+		t.Fatalf("LoadSWEBenchTask() error = %v", err)
+	}
+	if task.RunScriptURL != "https://example.com/run.sh" || task.ParsingScriptURL != "https://example.com/parser.py" {
+		t.Fatalf("unexpected script urls %#v", task)
+	}
+	if len(task.SelectedTests) != 2 || task.SelectedTests[0] != "a" || task.SelectedTests[1] != "b" {
+		t.Fatalf("SelectedTests = %#v", task.SelectedTests)
+	}
+}
+
 func TestPrepareSWEBenchWorkspaceClonesAndChecksOutBaseCommit(t *testing.T) {
 	repoDir := t.TempDir()
 	run := func(dir string, args ...string) {

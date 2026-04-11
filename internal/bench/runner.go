@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -159,6 +161,7 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	if strings.TrimSpace(evalCommand) != "" {
 		task.EvalCommand = strings.TrimSpace(evalCommand)
 	}
+	task.DockerImage = task.EffectiveDockerImage()
 	if r.opts.SteeringModeOverride != "" {
 		task.SteeringMode = string(r.opts.SteeringModeOverride)
 	}
@@ -248,6 +251,9 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	if strings.TrimSpace(task.DockerImage) != "" && strings.TrimSpace(task.DockerEvalCommand) != "" {
 		evalOutput, evalErr = r.EvaluateSWEBenchTaskDocker(task, workspace)
 		result.SWEBenchEvalCommand = task.DockerEvalCommand
+	} else if strings.TrimSpace(task.DockerImage) != "" && strings.TrimSpace(task.RunScriptURL) != "" {
+		evalOutput, evalErr = r.EvaluateSWEBenchTaskDocker(task, workspace)
+		result.SWEBenchEvalCommand = task.RunScriptURL
 	} else {
 		evalOutput, evalErr = r.runSWEBenchEvalCommand(task.EvalCommand, workspace)
 		result.SWEBenchEvalCommand = task.EvalCommand
@@ -399,8 +405,9 @@ func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string)
 	if strings.TrimSpace(task.DockerImage) == "" {
 		return "", fmt.Errorf("no docker_image provided")
 	}
-	if strings.TrimSpace(task.DockerEvalCommand) == "" {
-		return "", fmt.Errorf("no docker_evaluation_command provided")
+	evalCommand, err := r.resolveSWEBenchDockerEvalCommand(task, workspace)
+	if err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(task.TestPatch) != "" {
 		if err := r.applySWEBenchTestPatch(task.TestPatch, workspace); err != nil {
@@ -416,13 +423,56 @@ func (r *Runner) EvaluateSWEBenchTaskDocker(task SWEBenchTask, workspace string)
 		"-v", workspace+":/workspace",
 		"-w", "/workspace",
 		task.DockerImage,
-		"-lc", task.DockerEvalCommand,
+		"-lc", evalCommand,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("docker eval: %w\n%s", err, string(out))
 	}
 	return string(out), nil
+}
+
+func (r *Runner) resolveSWEBenchDockerEvalCommand(task SWEBenchTask, workspace string) (string, error) {
+	if strings.TrimSpace(task.DockerEvalCommand) != "" {
+		return task.DockerEvalCommand, nil
+	}
+	if strings.TrimSpace(task.RunScriptURL) == "" {
+		return "", fmt.Errorf("no docker_evaluation_command or run_script provided")
+	}
+	scriptPath := filepath.Join(workspace, ".swebench-run_script.sh")
+	if err := downloadFile(task.RunScriptURL, scriptPath); err != nil {
+		return "", fmt.Errorf("download run_script: %w", err)
+	}
+	if err := os.Chmod(scriptPath, 0755); err != nil {
+		return "", fmt.Errorf("chmod run_script: %w", err)
+	}
+	var selected string
+	if len(task.SelectedTests) > 0 {
+		selected = shellQuote(strings.Join(task.SelectedTests, ","))
+	}
+	cmd := "cp -a /workspace/. /app/ && cd /app && bash /workspace/.swebench-run_script.sh"
+	if selected != "" {
+		cmd += " " + selected
+	}
+	return cmd, nil
+}
+
+func downloadFile(url, dest string) error {
+	resp, err := http.Get(url) //nolint:gosec // benchmark harness downloads public scripts intentionally
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status %s", resp.Status)
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
 }
 
 func (r *Runner) runSWEBenchEvalCommand(evalCommand, workspace string) (string, error) {
