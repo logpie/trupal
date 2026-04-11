@@ -100,10 +100,6 @@ def wait_for_codex_ready(codex_pane: str) -> None:
             tmux("send-keys", "-t", codex_pane, "C-m")
             time.sleep(2)
             continue
-        if "Update available!" in text and "OpenAI Codex" in text:
-            tmux("send-keys", "-t", codex_pane, "C-m")
-            time.sleep(2)
-            continue
         if "Use /skills" in text or "Tip:" in text:
             return
         time.sleep(1)

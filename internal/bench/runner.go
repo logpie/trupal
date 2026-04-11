@@ -286,17 +286,21 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 
 func (r *Runner) waitForBenchmarkSessionJSONL(projectDir, provider string, timeout time.Duration, codexPaneID string) (string, error) {
 	deadline := time.Now().Add(timeout)
-	retriedSubmit := false
+	retryCount := 0
 	for time.Now().Before(deadline) {
 		if path, _ := FindLatestSessionJSONL(projectDir, provider); strings.TrimSpace(path) != "" {
 			return path, nil
 		}
-		if !retriedSubmit && time.Until(deadline) < timeout/2 {
+		if retryCount < 3 && time.Until(deadline) < timeout/2 {
 			capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
 			text := string(capture)
 			if strings.Contains(text, "[Pasted Content") || strings.Contains(text, "› ") {
 				_ = r.sendKeys(codexPaneID, "C-m")
-				retriedSubmit = true
+				if strings.Contains(text, "Update available!") {
+					time.Sleep(500 * time.Millisecond)
+					_ = r.sendKeys(codexPaneID, "C-m")
+				}
+				retryCount++
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -908,8 +912,6 @@ func codexReadyPromptAction(text string) string {
 	case strings.Contains(text, "Update available!") && strings.Contains(text, "Skip until next version"):
 		return "skip_update"
 	case strings.Contains(text, "Press enter to continue") && strings.Contains(text, "Update available!"):
-		return "dismiss_update"
-	case strings.Contains(text, "Update available!") && strings.Contains(text, "OpenAI Codex"):
 		return "dismiss_update"
 	case strings.Contains(text, "__CODEX_EXIT__:"):
 		return "exited"

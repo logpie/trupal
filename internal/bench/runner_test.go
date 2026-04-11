@@ -116,7 +116,7 @@ func TestCodexReadyPromptActionDetectsUpdatePrompt(t *testing.T) {
 	}
 }
 
-func TestCodexReadyPromptActionDetectsDismissableUpdateBanner(t *testing.T) {
+func TestCodexReadyPromptActionTreatsPassiveUpdateBannerAsReady(t *testing.T) {
 	text := `
 ╭─────────────────────────────────────────────────╮
 │ ✨ Update available! 0.118.0 -> 0.120.0         │
@@ -126,9 +126,10 @@ func TestCodexReadyPromptActionDetectsDismissableUpdateBanner(t *testing.T) {
 ╭──────────────────────────────────────────────────────────╮
 │ >_ OpenAI Codex (v0.118.0)                               │
 ╰──────────────────────────────────────────────────────────╯
+Tip: New 2x rate limits until April 2nd.
 `
-	if got := codexReadyPromptAction(text); got != "dismiss_update" {
-		t.Fatalf("codexReadyPromptAction() = %q, want dismiss_update", got)
+	if got := codexReadyPromptAction(text); got != "ready" {
+		t.Fatalf("codexReadyPromptAction() = %q, want ready", got)
 	}
 }
 
