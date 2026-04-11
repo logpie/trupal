@@ -31,6 +31,26 @@ var runTmuxCommand = func(args ...string) ([]byte, error) {
 }
 var steeringSubmitDelay = 150 * time.Millisecond
 
+func tmuxPaneInMode(paneID string) bool {
+	out, err := runTmuxCommand("display-message", "-p", "-t", paneID, "#{pane_in_mode}")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "1"
+}
+
+func exitTmuxPaneMode(paneID string) error {
+	out, err := runTmuxCommand("send-keys", "-X", "-t", paneID, "cancel")
+	if err != nil {
+		text := strings.TrimSpace(string(out))
+		if strings.Contains(text, "not in a mode") {
+			return nil
+		}
+		return fmt.Errorf("exit pane mode: %w: %s", err, text)
+	}
+	return nil
+}
+
 func sendAgentMessageToPane(paneID, message string) error {
 	paneID = strings.TrimSpace(paneID)
 	message = strings.TrimSpace(message)
@@ -40,12 +60,40 @@ func sendAgentMessageToPane(paneID, message string) error {
 	if message == "" {
 		return fmt.Errorf("empty message")
 	}
+	if tmuxPaneInMode(paneID) {
+		if err := exitTmuxPaneMode(paneID); err != nil {
+			return err
+		}
+	}
 	if out, err := runTmuxCommand("send-keys", "-t", paneID, "-l", message); err != nil {
-		return fmt.Errorf("send message: %w: %s", err, strings.TrimSpace(string(out)))
+		text := strings.TrimSpace(string(out))
+		if strings.Contains(text, "not in a mode") {
+			if exitErr := exitTmuxPaneMode(paneID); exitErr != nil {
+				return exitErr
+			}
+			if retryOut, retryErr := runTmuxCommand("send-keys", "-t", paneID, "-l", message); retryErr == nil {
+				out = retryOut
+			} else {
+				return fmt.Errorf("send message: %w: %s", retryErr, strings.TrimSpace(string(retryOut)))
+			}
+		} else {
+			return fmt.Errorf("send message: %w: %s", err, text)
+		}
 	}
 	time.Sleep(steeringSubmitDelay)
 	if out, err := runTmuxCommand("send-keys", "-t", paneID, "Enter"); err != nil {
-		return fmt.Errorf("submit message: %w: %s", err, strings.TrimSpace(string(out)))
+		text := strings.TrimSpace(string(out))
+		if strings.Contains(text, "not in a mode") {
+			if exitErr := exitTmuxPaneMode(paneID); exitErr != nil {
+				return exitErr
+			}
+			if retryOut, retryErr := runTmuxCommand("send-keys", "-t", paneID, "Enter"); retryErr == nil {
+				return nil
+			} else {
+				return fmt.Errorf("submit message: %w: %s", retryErr, strings.TrimSpace(string(retryOut)))
+			}
+		}
+		return fmt.Errorf("submit message: %w: %s", err, text)
 	}
 	return nil
 }
