@@ -364,12 +364,6 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			}
 		}
 
-		// Check for idle (60s since last JSONL activity).
-		if jsonlWatcher != nil && !idleNotified && time.Since(lastJSONLActivity) > 60*time.Second {
-			queueTrigger(fmt.Sprintf("%s has been idle for 60s — good time for a session review", agentName))
-			idleNotified = true
-		}
-
 		// Git poll cycle.
 		changedFiles := gitDiffNameOnly(repoRoot)
 		rawDiff := gitDiff(repoRoot)
@@ -429,6 +423,14 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 				queueTrigger("trajectory signal: " + key)
 				queuedTrajectory[key] = true
 			}
+		}
+
+		currentIssues := collectCurrentIssues(findings.Active(), patternFindings, deletedTests, trajectoryFindings, issueLimitForConfig(cfg), cfg)
+
+		// Check for idle (60s since last JSONL activity) after issue synthesis.
+		if shouldQueueIdleReview(cfg, currentIssues, idleNotified, lastJSONLActivity, time.Now()) {
+			queueTrigger(fmt.Sprintf("%s has been idle for 60s — good time for a session review", agentName))
+			idleNotified = true
 		}
 
 		// Watched agent status.
@@ -698,7 +700,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			project:  filepath.Base(repoRoot),
 			findings: activeBrainFindings + len(patternFindings),
 			resolved: resolvedBrainFindings,
-			issues:   collectCurrentIssues(findings.Active(), patternFindings, deletedTests, trajectoryFindings, issueLimitForConfig(cfg), cfg),
+			issues:   currentIssues,
 		})
 		// Log trajectory signals once.
 		for _, f := range trajectoryFindings {
@@ -1270,6 +1272,16 @@ func issueLimitForConfig(cfg Config) int {
 		return 12
 	}
 	return 4
+}
+
+func shouldQueueIdleReview(cfg Config, currentIssues []CurrentIssue, idleNotified bool, lastJSONLActivity, now time.Time) bool {
+	if idleNotified || lastJSONLActivity.IsZero() || now.Sub(lastJSONLActivity) <= 60*time.Second {
+		return false
+	}
+	if !cfg.BenchmarkMode {
+		return true
+	}
+	return len(currentIssues) > 0
 }
 
 func refineBenchmarkIssue(issue CurrentIssue, cfg Config) (CurrentIssue, bool) {

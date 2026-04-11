@@ -365,3 +365,25 @@ func TestIssueLimitForConfigExpandsContinuousBenchmarkQueue(t *testing.T) {
 		t.Fatalf("issueLimitForConfig(continuous benchmark) = %d, want 12", got)
 	}
 }
+
+func TestShouldQueueIdleReviewAllowsNonBenchmarkIdleReview(t *testing.T) {
+	now := time.Now()
+	if !shouldQueueIdleReview(Config{}, nil, false, now.Add(-61*time.Second), now) {
+		t.Fatal("expected non-benchmark idle review to queue")
+	}
+}
+
+func TestShouldQueueIdleReviewSuppressesBenchmarkIdleReviewWithoutIssues(t *testing.T) {
+	now := time.Now()
+	if shouldQueueIdleReview(Config{BenchmarkMode: true}, nil, false, now.Add(-61*time.Second), now) {
+		t.Fatal("expected benchmark idle review to stay quiet when no issues remain")
+	}
+}
+
+func TestShouldQueueIdleReviewAllowsBenchmarkIdleReviewWithIssues(t *testing.T) {
+	now := time.Now()
+	issues := []CurrentIssue{{ID: "f-1", Nudge: "fix it"}}
+	if !shouldQueueIdleReview(Config{BenchmarkMode: true}, issues, false, now.Add(-61*time.Second), now) {
+		t.Fatal("expected benchmark idle review when issues remain")
+	}
+}
