@@ -772,7 +772,11 @@ func (r *Runner) startInteractiveCodexSession(projectDir, scenarioID, model stri
 	if strings.TrimSpace(model) != "" {
 		codexCmd += " --model " + shellQuote(strings.TrimSpace(model))
 	}
-	out, err := exec.Command("tmux", "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", sessionName, "-c", projectDir, codexCmd).CombinedOutput()
+	out, err := exec.Command(
+		"tmux", "new-session", "-d", "-P", "-F", "#{pane_id}",
+		"-s", sessionName, "-c", projectDir,
+		"bash", "-lc", wrapInteractiveCommandForTmux(codexCmd),
+	).CombinedOutput()
 	if err != nil {
 		return "", "", "", fmt.Errorf("start codex tmux session: %w\n%s", err, string(out))
 	}
@@ -790,6 +794,10 @@ func (r *Runner) startInteractiveCodexSession(projectDir, scenarioID, model stri
 		return "", "", "", fmt.Errorf("start trupal watch pane: missing pane id")
 	}
 	return sessionName, codexPaneID, trupalPaneID, nil
+}
+
+func wrapInteractiveCommandForTmux(command string) string {
+	return command + `; status=$?; printf '\n__CODEX_EXIT__:%s\n' "$status"; exec bash`
 }
 
 func (r *Runner) waitForTrupalWatch(projectDir, trupalPaneID string) error {
@@ -869,6 +877,11 @@ func (r *Runner) waitForCodexReady(codexPaneID string) error {
 				return err
 			}
 			time.Sleep(2 * time.Second)
+		case "dismiss_update":
+			if err := r.sendKeys(codexPaneID, "C-m"); err != nil {
+				return err
+			}
+			time.Sleep(2 * time.Second)
 		case "ready":
 			if !sawTrustPrompt {
 				time.Sleep(1500 * time.Millisecond)
@@ -878,6 +891,8 @@ func (r *Runner) waitForCodexReady(codexPaneID string) error {
 				}
 			}
 			return nil
+		case "exited":
+			return fmt.Errorf("codex exited before becoming ready:\n%s", text)
 		default:
 			time.Sleep(500 * time.Millisecond)
 		}
@@ -892,6 +907,12 @@ func codexReadyPromptAction(text string) string {
 		return "trust"
 	case strings.Contains(text, "Update available!") && strings.Contains(text, "Skip until next version"):
 		return "skip_update"
+	case strings.Contains(text, "Press enter to continue") && strings.Contains(text, "Update available!"):
+		return "dismiss_update"
+	case strings.Contains(text, "Update available!") && strings.Contains(text, "OpenAI Codex"):
+		return "dismiss_update"
+	case strings.Contains(text, "__CODEX_EXIT__:"):
+		return "exited"
 	case strings.Contains(text, "Use /skills") || strings.Contains(text, "Tip:"):
 		return "ready"
 	default:

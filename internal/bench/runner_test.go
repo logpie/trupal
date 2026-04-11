@@ -116,10 +116,48 @@ func TestCodexReadyPromptActionDetectsUpdatePrompt(t *testing.T) {
 	}
 }
 
+func TestCodexReadyPromptActionDetectsDismissableUpdateBanner(t *testing.T) {
+	text := `
+╭─────────────────────────────────────────────────╮
+│ ✨ Update available! 0.118.0 -> 0.120.0         │
+│ Run npm install -g @openai/codex to update.     │
+╰─────────────────────────────────────────────────╯
+
+╭──────────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.118.0)                               │
+╰──────────────────────────────────────────────────────────╯
+`
+	if got := codexReadyPromptAction(text); got != "dismiss_update" {
+		t.Fatalf("codexReadyPromptAction() = %q, want dismiss_update", got)
+	}
+}
+
+func TestCodexReadyPromptActionDetectsPressEnterUpdateBanner(t *testing.T) {
+	text := `
+  ✨ Update available! 0.118.0 -> 0.120.0
+
+› 1. Update now
+  2. Skip
+  3. Skip until next version
+
+  Press enter to continue
+`
+	if got := codexReadyPromptAction(text); got != "skip_update" {
+		t.Fatalf("codexReadyPromptAction() = %q, want skip_update", got)
+	}
+}
+
 func TestCodexReadyPromptActionDetectsTrustPrompt(t *testing.T) {
 	text := "Do you trust the contents of this directory?"
 	if got := codexReadyPromptAction(text); got != "trust" {
 		t.Fatalf("codexReadyPromptAction() = %q, want trust", got)
+	}
+}
+
+func TestCodexReadyPromptActionDetectsEarlyExitSentinel(t *testing.T) {
+	text := "__CODEX_EXIT__:1"
+	if got := codexReadyPromptAction(text); got != "exited" {
+		t.Fatalf("codexReadyPromptAction() = %q, want exited", got)
 	}
 }
 
