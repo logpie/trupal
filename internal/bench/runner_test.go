@@ -127,3 +127,24 @@ func TestApplySteeringTelemetryCountsGeneratedAndSentNudges(t *testing.T) {
 		t.Fatalf("FirstSentNudge = %s, want 7s", result.FirstSentNudge)
 	}
 }
+
+func TestEffectiveInteractiveTimeoutDefaultsByMode(t *testing.T) {
+	if got := effectiveInteractiveTimeout(Scenario{}); got != 2*time.Minute {
+		t.Fatalf("single/default timeout = %s, want 2m", got)
+	}
+	if got := effectiveInteractiveTimeout(Scenario{SteeringMode: SteeringModeContinuous}); got != 5*time.Minute {
+		t.Fatalf("continuous timeout = %s, want 5m", got)
+	}
+	if got := effectiveInteractiveTimeout(Scenario{Timeout: 90 * time.Second, SteeringMode: SteeringModeContinuous}); got != 90*time.Second {
+		t.Fatalf("explicit timeout = %s, want 90s", got)
+	}
+}
+
+func TestAllowIdleCompletionDisabledForContinuousMode(t *testing.T) {
+	if !allowIdleCompletion(Scenario{}) {
+		t.Fatal("default/single mode should allow idle completion")
+	}
+	if allowIdleCompletion(Scenario{SteeringMode: SteeringModeContinuous}) {
+		t.Fatal("continuous mode should not stop on idle")
+	}
+}

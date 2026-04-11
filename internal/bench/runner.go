@@ -829,10 +829,7 @@ func (r *Runner) waitForCodexReady(codexPaneID string) error {
 }
 
 func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalPaneID string) (time.Time, int, bool, error) {
-	timeout := result.Scenario.Timeout
-	if timeout <= 0 {
-		timeout = 2 * time.Minute
-	}
+	timeout := effectiveInteractiveTimeout(result.Scenario)
 	deadline := result.StartedAt.Add(timeout)
 	quietWindow := 8 * time.Second
 	policy := effectiveBenchmarkSteeringPolicy(result.Scenario)
@@ -869,7 +866,7 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 		}
 
 		now := time.Now()
-		if result.SessionJSONL != "" && detectBenchAgentStatus(result.SessionJSONL) == "idle" && lastActivity.After(result.StartedAt) && now.Sub(lastActivity) >= quietWindow {
+		if allowIdleCompletion(result.Scenario) && result.SessionJSONL != "" && detectBenchAgentStatus(result.SessionJSONL) == "idle" && lastActivity.After(result.StartedAt) && now.Sub(lastActivity) >= quietWindow {
 			return now, 0, false, nil
 		}
 		if !now.Before(deadline) {
@@ -878,6 +875,20 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+func effectiveInteractiveTimeout(s Scenario) time.Duration {
+	if s.Timeout > 0 {
+		return s.Timeout
+	}
+	if s.SteeringMode == SteeringModeContinuous {
+		return 5 * time.Minute
+	}
+	return 2 * time.Minute
+}
+
+func allowIdleCompletion(s Scenario) bool {
+	return s.SteeringMode != SteeringModeContinuous
 }
 
 func effectiveBenchmarkSteeringPolicy(s Scenario) SteeringPolicy {

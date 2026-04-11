@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RESULTS_DIR="$ROOT_DIR/bench/results"
+APPLY=0
+if [[ "${1:-}" == "--apply" ]]; then
+  APPLY=1
+fi
+
+find "$RESULTS_DIR" -type d \( -name project -o -name _project \) | while IFS= read -r dir; do
+  if [[ $APPLY -eq 1 ]]; then
+    rm -rf "$dir"
+    echo "removed $dir"
+  else
+    echo "$dir"
+  fi
+done
