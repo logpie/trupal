@@ -220,7 +220,7 @@ func TestShouldEnterTimeoutGraceForLateGeneratedContinuousWork(t *testing.T) {
 		LastSentNudgeAt:      now.Add(-23 * time.Second),
 		LastGeneratedNudgeAt: now.Add(-6 * time.Second),
 	}
-	if !shouldEnterTimeoutGrace(policy, runtime) {
+	if !shouldEnterTimeoutGrace(policy, ArmSteer, runtime) {
 		t.Fatal("shouldEnterTimeoutGrace() = false, want true for late generated unsent nudge")
 	}
 	if got := benchmarkTimeoutGrace(policy, now, runtime); got < 12*time.Second {
@@ -238,8 +238,21 @@ func TestShouldNotEnterTimeoutGraceWithoutPendingContinuousWork(t *testing.T) {
 		LastSentNudgeAt:      now.Add(-2 * time.Minute),
 		LastGeneratedNudgeAt: now.Add(-3 * time.Minute),
 	}
-	if shouldEnterTimeoutGrace(policy, runtime) {
+	if shouldEnterTimeoutGrace(policy, ArmSteer, runtime) {
 		t.Fatal("shouldEnterTimeoutGrace() = true, want false when no pending work remains")
+	}
+}
+
+func TestShouldNotEnterTimeoutGraceForControlArm(t *testing.T) {
+	now := time.Date(2026, 4, 10, 23, 20, 34, 0, time.UTC)
+	policy := effectiveBenchmarkSteeringPolicy(Scenario{SteeringMode: SteeringModeContinuous})
+	runtime := BenchmarkRuntimeStatus{
+		OpenIssueCount:       4,
+		SendableIssueCount:   4,
+		LastGeneratedNudgeAt: now.Add(-6 * time.Second),
+	}
+	if shouldEnterTimeoutGrace(policy, ArmControl, runtime) {
+		t.Fatal("shouldEnterTimeoutGrace() = true, want false for control arm")
 	}
 }
 

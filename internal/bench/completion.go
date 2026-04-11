@@ -120,7 +120,10 @@ func benchmarkSettleWindow(policy SteeringPolicy) time.Duration {
 	return window
 }
 
-func shouldEnterTimeoutGrace(policy SteeringPolicy, runtime BenchmarkRuntimeStatus) bool {
+func shouldEnterTimeoutGrace(policy SteeringPolicy, arm BenchmarkArm, runtime BenchmarkRuntimeStatus) bool {
+	if arm != ArmSteer {
+		return false
+	}
 	if policy.Mode != SteeringModeContinuous {
 		return false
 	}

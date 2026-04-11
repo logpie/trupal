@@ -883,7 +883,7 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 			return now, 0, false, nil
 		}
 		if !now.Before(deadline) {
-			if graceDeadline.IsZero() && shouldEnterTimeoutGrace(policy, runtime) {
+			if graceDeadline.IsZero() && shouldEnterTimeoutGrace(policy, result.Arm, runtime) {
 				graceDeadline = now.Add(benchmarkTimeoutGrace(policy, now, runtime))
 			}
 			if !graceDeadline.IsZero() && now.Before(graceDeadline) {
