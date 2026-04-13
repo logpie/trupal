@@ -157,6 +157,32 @@ func benchmarkTimeoutGrace(policy SteeringPolicy, now time.Time, runtime Benchma
 	return grace
 }
 
+func benchmarkRecentActivityGrace(policy SteeringPolicy, arm BenchmarkArm, now time.Time, runtime BenchmarkRuntimeStatus) time.Duration {
+	if arm != ArmSteer || policy.Mode != SteeringModeContinuous {
+		return 0
+	}
+	lastMeaningful := maxTime(
+		runtime.LastSessionEventAt,
+		runtime.LastWorkChangeAt,
+		runtime.LastGeneratedNudgeAt,
+		runtime.LastSentNudgeAt,
+		runtime.LastBrainActivityAt,
+	)
+	if lastMeaningful.IsZero() || now.Before(lastMeaningful) {
+		return 0
+	}
+	quietFor := now.Sub(lastMeaningful)
+	settleWindow := benchmarkSettleWindow(policy)
+	if quietFor >= settleWindow {
+		return 0
+	}
+	grace := settleWindow - quietFor + policy.Cooldown
+	if grace < 15*time.Second {
+		grace = 15 * time.Second
+	}
+	return grace
+}
+
 func evaluateBenchmarkStatus(now, attachedAt time.Time, hardTimeout time.Duration, policy SteeringPolicy, runtime BenchmarkRuntimeStatus, runtimeSeen bool) BenchmarkStatus {
 	idleThreshold := benchmarkIdleThreshold()
 	settleWindow := benchmarkSettleWindow(policy)

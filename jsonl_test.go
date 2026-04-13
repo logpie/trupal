@@ -169,6 +169,36 @@ func TestFindSessionJSONLForProviderIgnoresParentCodexSession(t *testing.T) {
 	}
 }
 
+func TestFindSessionJSONLForProviderRespectsCODEXHOME(t *testing.T) {
+	homeDir := t.TempDir()
+	codexHome := filepath.Join(homeDir, "isolated-codex")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	repoRoot := filepath.Join(homeDir, "work", "project")
+	sessionDir := filepath.Join(repoRoot, "src")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(src) error = %v", err)
+	}
+
+	codexDir := filepath.Join(codexHome, "sessions", "2026", "04", "11")
+	if err := os.MkdirAll(codexDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(codexDir) error = %v", err)
+	}
+	match := filepath.Join(codexDir, "match.jsonl")
+	matchData := `{"timestamp":"2026-04-11T00:00:00Z","type":"session_meta","payload":{"cwd":"` + sessionDir + `"}}` + "\n"
+	if err := os.WriteFile(match, []byte(matchData), 0644); err != nil {
+		t.Fatalf("WriteFile(match) error = %v", err)
+	}
+
+	if got := FindSessionJSONLForProvider(repoRoot, ProviderCodex); got != match {
+		t.Fatalf("FindSessionJSONLForProvider() with CODEX_HOME = %q, want %q", got, match)
+	}
+}
+
 func TestParseCodexFunctionCallsAndMessages(t *testing.T) {
 	toolLine := []byte(`{"timestamp":"2026-04-08T00:00:01Z","type":"response_item","payload":{"type":"function_call","name":"multi_tool_use.parallel","arguments":"{\"tool_uses\":[{\"recipient_name\":\"functions.exec_command\",\"parameters\":{\"cmd\":\"rg hello\"}},{\"recipient_name\":\"functions.apply_patch\",\"parameters\":\"*** Begin Patch\\n*** Update File: foo.go\\n*** End Patch\\n\"}]}"}}`)
 	toolEntry, ok := parseJSONLEntryForProvider(ProviderCodex, toolLine)

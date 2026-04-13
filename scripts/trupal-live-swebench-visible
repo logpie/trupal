@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -69,7 +70,8 @@ def capture_pane(pane_id: str) -> str:
 
 
 def session_jsonl_for(workdir: Path) -> str:
-    sessions_root = Path.home() / ".codex" / "sessions"
+    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+    sessions_root = codex_home / "sessions"
     if not sessions_root.exists():
         return ""
     for path in sorted(sessions_root.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
@@ -80,6 +82,28 @@ def session_jsonl_for(workdir: Path) -> str:
         if str(workdir) in text:
             return str(path)
     return ""
+
+
+def session_jsonl_state_for(workdir: Path) -> tuple[str, int]:
+    path = session_jsonl_for(workdir)
+    if not path:
+        return "", 0
+    try:
+        return path, Path(path).stat().st_size
+    except OSError:
+        return path, 0
+
+
+def prompt_submission_started(previous: tuple[str, int], current: tuple[str, int]) -> bool:
+    prev_path, prev_size = previous
+    curr_path, curr_size = current
+    if not curr_path:
+        return False
+    if not prev_path:
+        return curr_size > 0
+    if curr_path != prev_path:
+        return True
+    return curr_size > prev_size
 
 
 def wait_for_codex_ready(codex_pane: str) -> None:
@@ -140,14 +164,38 @@ def benchmark_prompt(task_text: str) -> str:
     )
 
 
+def benchmark_prompt_for_manifest(manifest: dict) -> str:
+    prompt = benchmark_prompt(manifest["problem_statement"].strip())
+    selected = manifest.get("selected_test_files_to_run") or []
+    if isinstance(selected, str):
+        try:
+            selected = json.loads(selected)
+        except json.JSONDecodeError:
+            selected = [selected]
+    selected = [str(item).strip() for item in selected if str(item).strip()]
+    if not selected:
+        return prompt
+    return " ".join(
+        (
+            prompt,
+            "Official task-selected tests/files for verification:",
+            " ; ".join(selected),
+            "Prefer a minimal patch that satisfies those official selected tests first.",
+            "Do not add, modify, or inspect unrelated test modules unless one of the official selected tests directly depends on them.",
+            "Keep verification focused on the official selected tests/files before broadening into adjacent coverage.",
+        )
+    )
+
+
 def submit_prompt(codex_pane: str, prompt: str, workdir: Path) -> None:
+    before = session_jsonl_state_for(workdir)
     tmux("send-keys", "-t", codex_pane, "-l", prompt)
     time.sleep(min(max(len(prompt) / 1000.0, 0.2), 3.0))
     tmux("send-keys", "-t", codex_pane, "Enter")
 
     deadline = time.time() + 30
     while time.time() < deadline:
-        if session_jsonl_for(workdir):
+        if prompt_submission_started(before, session_jsonl_state_for(workdir)):
             return
         text = capture_pane(codex_pane)
         if "[Pasted Content" in text or "› " in text:
@@ -180,7 +228,14 @@ def prepare_repo(manifest_path: Path, instance_id: str) -> Path:
     if manifest.get("instance_id") != instance_id:
         fail(f"instance mismatch: {instance_id} != {manifest.get('instance_id')}")
     repo_name = manifest["repo"].split("/")[-1].lower()
-    workdir = Path(tempfile.mkdtemp(prefix=f"/tmp/trupal-ui-live-current-{repo_name}-"))
+    fixed_workdir = os.environ.get("TRUPAL_FIXED_WORKDIR", "").strip()
+    if fixed_workdir:
+        workdir = Path(fixed_workdir)
+        if workdir.exists():
+            shutil.rmtree(workdir)
+        workdir.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        workdir = Path(tempfile.mkdtemp(prefix=f"/tmp/trupal-ui-live-current-{repo_name}-"))
     run(["git", "clone", f"https://github.com/{manifest['repo']}.git", str(workdir)])
     run(["git", "-C", str(workdir), "checkout", manifest["base_commit"]])
     setup = (manifest.get("setup_command") or "").strip()
@@ -206,6 +261,18 @@ def prepare_repo(manifest_path: Path, instance_id: str) -> Path:
     return workdir
 
 
+def prepare_isolated_codex_home(workdir: Path) -> Path:
+    src = Path.home() / ".codex"
+    dst = workdir / ".codex-bench-home"
+    dst.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src / "auth.json", dst / "auth.json")
+    config = (src / "config.toml").read_text().replace("codex_hooks = true", "codex_hooks = false")
+    (dst / "config.toml").write_text(config)
+    (dst / "hooks.json").write_text('{"hooks":{}}\n')
+    (dst / "sessions").mkdir(parents=True, exist_ok=True)
+    return dst
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         fail("usage: scripts/trupal-live-swebench-visible <manifest> <instance_id>")
@@ -218,6 +285,11 @@ def main() -> None:
     instance_id = sys.argv[2]
 
     workdir = prepare_repo(manifest_path, instance_id)
+    codex_home = prepare_isolated_codex_home(workdir)
+    os.environ["CODEX_HOME"] = str(codex_home)
+    replay_env = ""
+    if os.environ.get("TRUPAL_BRAIN_REPLAY_PATH"):
+        replay_env = f" TRUPAL_BRAIN_REPLAY_PATH={shlex.quote(os.environ['TRUPAL_BRAIN_REPLAY_PATH'])}"
     run(["go", "build", "-o", str(LIVE_BIN), "."], cwd=ROOT_DIR)
 
     window_id = current_window_id()
@@ -235,7 +307,7 @@ def main() -> None:
         left,
         "-c",
         str(workdir),
-        f"codex -C {shlex.quote(str(workdir))} --dangerously-bypass-approvals-and-sandbox --model gpt-5.4-mini",
+        f"CODEX_HOME={shlex.quote(str(codex_home))}{replay_env} codex -C {shlex.quote(str(workdir))} --dangerously-bypass-approvals-and-sandbox --model gpt-5.4-mini",
     ).strip()
     trupal_pane = tmux(
         "split-window",
@@ -249,7 +321,7 @@ def main() -> None:
         codex_pane,
         "-c",
         str(workdir),
-        f"{shlex.quote(str(LIVE_BIN))} watch {shlex.quote(str(workdir))} {shlex.quote(str(workdir))}",
+        f"CODEX_HOME={shlex.quote(str(codex_home))}{replay_env} {shlex.quote(str(LIVE_BIN))} watch {shlex.quote(str(workdir))} {shlex.quote(str(workdir))}",
     ).strip()
 
     wait_for_codex_ready(codex_pane)
@@ -257,7 +329,8 @@ def main() -> None:
     wait_for_trupal_tui(trupal_pane)
     tmux("send-keys", "-t", trupal_pane, "a")
     time.sleep(1)
-    prompt = benchmark_prompt((workdir / "TASK.md").read_text())
+    manifest = json.loads(manifest_path.read_text())
+    prompt = benchmark_prompt_for_manifest(manifest)
     submit_prompt(codex_pane, prompt, workdir)
     print(f"repo={workdir}")
     print(f"codex={codex_pane}")

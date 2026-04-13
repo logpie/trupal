@@ -178,9 +178,25 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 		SWEBenchTask: &task,
 		Artifacts:    NewArtifactSet(artifactsDir),
 	}
-	workspace, err := os.MkdirTemp("", "trupal-swebench-run-"+task.Slug()+"-")
-	if err != nil {
-		return nil, err
+	fixedWorkspace := strings.TrimSpace(os.Getenv("TRUPAL_FIXED_WORKDIR"))
+	var workspace string
+	if fixedWorkspace != "" {
+		workspace = fixedWorkspace
+		if err := os.RemoveAll(workspace); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(workspace), 0755); err != nil {
+			return nil, err
+		}
+	} else {
+		repoBase := strings.ToLower(filepath.Base(strings.TrimSpace(task.Repo)))
+		if repoBase == "" || repoBase == "." || repoBase == string(filepath.Separator) {
+			repoBase = "repo"
+		}
+		workspace, err = os.MkdirTemp("", "trupal-ui-live-current-"+repoBase+"-")
+		if err != nil {
+			return nil, err
+		}
 	}
 	result.ProjectDir = workspace
 	if !r.opts.KeepTemp {
@@ -225,10 +241,11 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 		}
 	}
 	result.StartedAt = time.Now()
-	if err := r.submitLiteral(codexPaneID, singleLinePrompt(benchmarkAgentPrompt(task.ProblemStatement))); err != nil {
+	sessionStateBefore := latestSessionJSONLState(workspace, "codex")
+	if err := r.submitLiteral(codexPaneID, singleLinePrompt(benchmarkPromptForSWEBenchTask(*result.SWEBenchTask))); err != nil {
 		return nil, err
 	}
-	sessionJSONL, err := r.waitForBenchmarkSessionJSONL(workspace, "codex", 20*time.Second, codexPaneID)
+	sessionJSONL, err := r.waitForBenchmarkSessionJSONL(workspace, "codex", 45*time.Second, codexPaneID, sessionStateBefore)
 	if err != nil {
 		return nil, err
 	}
@@ -284,12 +301,43 @@ func (r *Runner) RunSWEBenchTask(manifestPath, instanceID string, arm BenchmarkA
 	return result, nil
 }
 
-func (r *Runner) waitForBenchmarkSessionJSONL(projectDir, provider string, timeout time.Duration, codexPaneID string) (string, error) {
+type sessionJSONLState struct {
+	path string
+	size int64
+}
+
+func latestSessionJSONLState(projectDir, provider string) sessionJSONLState {
+	path, _ := FindLatestSessionJSONL(projectDir, provider)
+	if strings.TrimSpace(path) == "" {
+		return sessionJSONLState{}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return sessionJSONLState{path: path}
+	}
+	return sessionJSONLState{path: path, size: info.Size()}
+}
+
+func promptSubmissionStarted(previous, current sessionJSONLState) bool {
+	if strings.TrimSpace(current.path) == "" {
+		return false
+	}
+	if strings.TrimSpace(previous.path) == "" {
+		return current.size > 0
+	}
+	if current.path != previous.path {
+		return true
+	}
+	return current.size > previous.size
+}
+
+func (r *Runner) waitForBenchmarkSessionJSONL(projectDir, provider string, timeout time.Duration, codexPaneID string, previous sessionJSONLState) (string, error) {
 	deadline := time.Now().Add(timeout)
 	retryCount := 0
 	for time.Now().Before(deadline) {
-		if path, _ := FindLatestSessionJSONL(projectDir, provider); strings.TrimSpace(path) != "" {
-			return path, nil
+		state := latestSessionJSONLState(projectDir, provider)
+		if promptSubmissionStarted(previous, state) {
+			return state.path, nil
 		}
 		if retryCount < 3 && time.Until(deadline) < timeout/2 {
 			capture, _ := exec.Command("tmux", "capture-pane", "-p", "-t", codexPaneID).CombinedOutput()
@@ -364,7 +412,7 @@ func (r *Runner) SetupSWEBenchWorkspace(task SWEBenchTask, workspace string) err
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("setup swebench workspace: %w\n%s", err, string(out))
 	}
-	return nil
+	return writeSWEBenchTaskArtifact(workspace, task)
 }
 
 func (r *Runner) SetupSWEBenchPostPatch(task SWEBenchTask, workspace string) error {
@@ -917,6 +965,14 @@ func (r *Runner) buildTrupalBinary() error {
 func (r *Runner) startInteractiveCodexSession(projectDir, scenarioID, model string) (string, string, string, error) {
 	sessionName := tmuxSessionName(scenarioID + "-interactive")
 	r.stopTmuxSession(sessionName)
+	codexHome, err := r.prepareIsolatedCodexHome(projectDir)
+	if err != nil {
+		return "", "", "", err
+	}
+	if err := os.Setenv("CODEX_HOME", codexHome); err != nil {
+		return "", "", "", fmt.Errorf("set CODEX_HOME: %w", err)
+	}
+	envPrefix := benchPaneEnvPrefix(codexHome)
 
 	codexCmd := fmt.Sprintf("codex -C %s --dangerously-bypass-approvals-and-sandbox", shellQuote(projectDir))
 	if strings.TrimSpace(model) != "" {
@@ -925,7 +981,7 @@ func (r *Runner) startInteractiveCodexSession(projectDir, scenarioID, model stri
 	out, err := exec.Command(
 		"tmux", "new-session", "-d", "-P", "-F", "#{pane_id}",
 		"-s", sessionName, "-c", projectDir,
-		"bash", "-lc", wrapInteractiveCommandForTmux(codexCmd),
+		"bash", "-lc", wrapInteractiveCommandForTmux(envPrefix+codexCmd),
 	).CombinedOutput()
 	if err != nil {
 		return "", "", "", fmt.Errorf("start codex tmux session: %w\n%s", err, string(out))
@@ -935,7 +991,8 @@ func (r *Runner) startInteractiveCodexSession(projectDir, scenarioID, model stri
 		return "", "", "", fmt.Errorf("start codex tmux session: missing pane id")
 	}
 
-	out, err = exec.Command("tmux", "split-window", "-P", "-F", "#{pane_id}", "-v", "-t", codexPaneID, "-c", projectDir, fmt.Sprintf("%s watch %s %s", shellQuote(r.trupalBin), shellQuote(projectDir), shellQuote(projectDir))).CombinedOutput()
+	watchCmd := envPrefix + fmt.Sprintf("%s watch %s %s", shellQuote(r.trupalBin), shellQuote(projectDir), shellQuote(projectDir))
+	out, err = exec.Command("tmux", "split-window", "-P", "-F", "#{pane_id}", "-v", "-t", codexPaneID, "-c", projectDir, "bash", "-lc", watchCmd).CombinedOutput()
 	if err != nil {
 		return "", "", "", fmt.Errorf("start trupal watch pane: %w\n%s", err, string(out))
 	}
@@ -944,6 +1001,46 @@ func (r *Runner) startInteractiveCodexSession(projectDir, scenarioID, model stri
 		return "", "", "", fmt.Errorf("start trupal watch pane: missing pane id")
 	}
 	return sessionName, codexPaneID, trupalPaneID, nil
+}
+
+func benchPaneEnvPrefix(codexHome string) string {
+	var exports []string
+	exports = append(exports, fmt.Sprintf("export CODEX_HOME=%s", shellQuote(codexHome)))
+	if replayPath := strings.TrimSpace(os.Getenv("TRUPAL_BRAIN_REPLAY_PATH")); replayPath != "" {
+		exports = append(exports, fmt.Sprintf("export TRUPAL_BRAIN_REPLAY_PATH=%s", shellQuote(replayPath)))
+	}
+	return strings.Join(exports, "; ") + "; "
+}
+
+func (r *Runner) prepareIsolatedCodexHome(projectDir string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	srcCodexHome := filepath.Join(homeDir, ".codex")
+	dstCodexHome := filepath.Join(projectDir, ".codex-bench-home")
+	if err := os.MkdirAll(dstCodexHome, 0755); err != nil {
+		return "", fmt.Errorf("create isolated CODEX_HOME: %w", err)
+	}
+	if err := copyFile(filepath.Join(srcCodexHome, "auth.json"), filepath.Join(dstCodexHome, "auth.json"), 0600); err != nil {
+		return "", fmt.Errorf("copy codex auth: %w", err)
+	}
+	configPath := filepath.Join(srcCodexHome, "config.toml")
+	configRaw, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", fmt.Errorf("read codex config: %w", err)
+	}
+	config := strings.ReplaceAll(string(configRaw), "codex_hooks = true", "codex_hooks = false")
+	if err := os.WriteFile(filepath.Join(dstCodexHome, "config.toml"), []byte(config), 0600); err != nil {
+		return "", fmt.Errorf("write isolated codex config: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dstCodexHome, "hooks.json"), []byte("{\"hooks\":{}}\n"), 0644); err != nil {
+		return "", fmt.Errorf("write isolated hooks config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dstCodexHome, "sessions"), 0755); err != nil {
+		return "", fmt.Errorf("create isolated sessions dir: %w", err)
+	}
+	return dstCodexHome, nil
 }
 
 func wrapInteractiveCommandForTmux(command string) string {
@@ -1113,8 +1210,17 @@ func (r *Runner) waitForInteractiveCodex(result *RunResult, codexPaneID, trupalP
 			return now, 0, false, nil
 		}
 		if !now.Before(deadline) {
-			if graceDeadline.IsZero() && shouldEnterTimeoutGrace(policy, result.Arm, runtime) {
-				graceDeadline = now.Add(benchmarkTimeoutGrace(policy, now, runtime))
+			if graceDeadline.IsZero() {
+				grace := time.Duration(0)
+				if shouldEnterTimeoutGrace(policy, result.Arm, runtime) {
+					grace = benchmarkTimeoutGrace(policy, now, runtime)
+				}
+				if recent := benchmarkRecentActivityGrace(policy, result.Arm, now, runtime); recent > grace {
+					grace = recent
+				}
+				if grace > 0 {
+					graceDeadline = now.Add(grace)
+				}
 			}
 			if !graceDeadline.IsZero() && now.Before(graceDeadline) {
 				time.Sleep(2 * time.Second)
@@ -1544,19 +1650,27 @@ func benchmarkAgentArgs(provider, model, task, projectDir string) []string {
 }
 
 func benchmarkAgentPrompt(task string) string {
-	task = strings.TrimSpace(task)
-	return strings.TrimSpace(`
-You are running inside a non-interactive benchmark harness.
+	return strings.Join([]string{
+		"You are running inside a non-interactive benchmark harness.",
+		"Requirements for this run:",
+		"Work autonomously in the current working directory.",
+		"Make reasonable assumptions yourself and implement the task directly.",
+		"Avoid asking the user questions during the run.",
+		"Verify the resulting code with focused commands before you finish.",
+		"End with a brief summary of what you changed and what you verified.",
+		"Task:",
+		strings.Join(strings.Fields(strings.TrimSpace(task)), " "),
+	}, " ")
+}
 
-Requirements for this run:
-- Work autonomously in the current working directory.
-- Make reasonable assumptions yourself and implement the task directly.
-- Avoid asking the user questions during the run.
-- Verify the resulting code with focused commands before you finish.
-- End with a brief summary of what you changed and what you verified.
-
-Task:
-` + "\n" + task)
+func benchmarkPromptForSWEBenchTask(task SWEBenchTask) string {
+	base := benchmarkAgentPrompt(task.ProblemStatement)
+	if len(task.SelectedTests) == 0 {
+		return base
+	}
+	return strings.TrimSpace(base + "\n\nOfficial task-selected tests/files for verification:\n- " +
+		strings.Join(task.SelectedTests, "\n- ") +
+		"\n\nPrefer a minimal patch that satisfies the official selected tests first. Do not add, modify, or inspect unrelated test modules unless one of the official selected tests directly depends on them. Keep verification focused on the official selected tests/files before broadening into adjacent coverage.")
 }
 
 func singleLinePrompt(prompt string) string {

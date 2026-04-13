@@ -177,8 +177,15 @@ type Brain struct {
 	codexWorkDir   string
 	codexThreadID  string
 	accessibleDirs []string
+	replayTurns    []BrainReplayTurn
+	replayIndex    int
 	statsMu        sync.Mutex
 	stats          BrainStats
+}
+
+type BrainReplayTurn struct {
+	Match    string        `json:"match,omitempty"`
+	Response BrainResponse `json:"response"`
 }
 
 // brainSystemPrompt returns the static system prompt for the brain.
@@ -302,6 +309,20 @@ func brainNotifyMessage(reason, findingsJSON string) string {
 // the brain can access (from CC's tool calls to files outside projectDir).
 func StartBrain(cfg Config, projectDir, jsonlPath string, initialStats BrainStats, extraDirs ...string) (*Brain, error) {
 	accessibleDirs := brainAccessibleDirs(projectDir, extraDirs...)
+	if normalizeProvider(cfg.BrainProvider, ProviderClaude) == ProviderReplay {
+		replayTurns, err := loadBrainReplayTurns(projectDir, cfg.BrainReplayPath)
+		if err != nil {
+			return nil, err
+		}
+		return &Brain{
+			cfg:            cfg,
+			projectDir:     projectDir,
+			jsonlPath:      jsonlPath,
+			accessibleDirs: accessibleDirs,
+			replayTurns:    replayTurns,
+			stats:          initialStats,
+		}, nil
+	}
 	if normalizeProvider(cfg.BrainProvider, ProviderClaude) == ProviderCodex {
 		if _, err := brainCommand(cfg.BrainProvider); err != nil {
 			return nil, err
@@ -421,6 +442,9 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	if b.stopped.Load() {
 		return nil, fmt.Errorf("brain stopped")
 	}
+	if normalizeProvider(b.cfg.BrainProvider, ProviderClaude) == ProviderReplay {
+		return b.notifyReplay(reason, findingsJSON)
+	}
 	if normalizeProvider(b.cfg.BrainProvider, ProviderClaude) == ProviderCodex {
 		return b.notifyCodex(reason, findingsJSON)
 	}
@@ -519,6 +543,90 @@ func (b *Brain) Notify(reason, findingsJSON string) (*BrainResponse, error) {
 	)
 	Debugf("[brain] %d nudges, %d resolved, reasoning: %s", len(resp.Nudges), len(resp.ResolvedFindings), truncate(resp.Reasoning, 100))
 	return resp, nil
+}
+
+func (b *Brain) notifyReplay(reason, findingsJSON string) (*BrainResponse, error) {
+	message := brainNotifyMessage(reason, findingsJSON)
+	start := time.Now()
+	turn, err := b.nextReplayTurn(message)
+	if err != nil {
+		return nil, err
+	}
+	elapsed := time.Since(start)
+	resp := cloneBrainResponse(turn.Response)
+	resp.Usage = BrainUsage{}
+	resp.TotalCostUSD = 0
+
+	b.statsMu.Lock()
+	b.stats.Provider = ProviderReplay
+	b.stats.CostKnown = false
+	b.stats.noteTurn(elapsed, "replay")
+	b.stats.addTurn(BrainUsage{}, 0)
+	b.statsMu.Unlock()
+	return &resp, nil
+}
+
+func (b *Brain) nextReplayTurn(message string) (BrainReplayTurn, error) {
+	if b.replayIndex >= len(b.replayTurns) {
+		if len(b.replayTurns) > 0 && strings.TrimSpace(b.replayTurns[len(b.replayTurns)-1].Match) == "" {
+			return b.replayTurns[len(b.replayTurns)-1], nil
+		}
+		return BrainReplayTurn{}, fmt.Errorf("replay brain exhausted after %d turns", b.replayIndex)
+	}
+	for i := b.replayIndex; i < len(b.replayTurns); i++ {
+		turn := b.replayTurns[i]
+		match := strings.TrimSpace(turn.Match)
+		if match == "" {
+			continue
+		}
+		if !strings.Contains(message, match) {
+			continue
+		}
+		b.replayIndex = i + 1
+		return turn, nil
+	}
+	if len(b.replayTurns) > 0 && strings.TrimSpace(b.replayTurns[len(b.replayTurns)-1].Match) == "" {
+		return b.replayTurns[len(b.replayTurns)-1], nil
+	}
+	return BrainReplayTurn{}, fmt.Errorf("replay brain found no scripted response for notification %q", truncate(strings.ReplaceAll(message, "\n", " "), 160))
+}
+
+func cloneBrainResponse(resp BrainResponse) BrainResponse {
+	cloned := resp
+	cloned.Info = append([]string(nil), resp.Info...)
+	cloned.Observations = append([]string(nil), resp.Observations...)
+	cloned.Nudges = append([]BrainNudge(nil), resp.Nudges...)
+	cloned.ResolvedFindings = append([]string(nil), resp.ResolvedFindings...)
+	return cloned
+}
+
+func loadBrainReplayTurns(projectDir, replayPath string) ([]BrainReplayTurn, error) {
+	replayPath = strings.TrimSpace(replayPath)
+	if replayPath == "" {
+		return nil, fmt.Errorf("replay brain requires brain_replay_path")
+	}
+	if !filepath.IsAbs(replayPath) {
+		replayPath = filepath.Join(projectDir, replayPath)
+	}
+	raw, err := os.ReadFile(replayPath)
+	if err != nil {
+		return nil, fmt.Errorf("read replay brain script: %w", err)
+	}
+
+	var turns []BrainReplayTurn
+	if err := json.Unmarshal(raw, &turns); err == nil && len(turns) > 0 {
+		return turns, nil
+	}
+	var wrapped struct {
+		Turns []BrainReplayTurn `json:"turns"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("parse replay brain script: %w", err)
+	}
+	if len(wrapped.Turns) == 0 {
+		return nil, fmt.Errorf("replay brain script %s contains no turns", replayPath)
+	}
+	return wrapped.Turns, nil
 }
 
 func (b *Brain) stderrSuffix() string {

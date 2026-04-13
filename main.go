@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -32,9 +33,14 @@ func main() {
 			os.Exit(1)
 		}
 		cmdWatch(os.Args[2], os.Args[3])
+	case "replay-notifications":
+		if err := cmdReplayNotifications(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
-		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop|log> [project-dir]")
+		fmt.Fprintln(os.Stderr, "usage: trupal <start|stop|log|replay-notifications> [project-dir]")
 		os.Exit(1)
 	}
 }
@@ -214,6 +220,49 @@ func cmdLog() {
 		os.Exit(1)
 	}
 	fmt.Print(string(data))
+}
+
+func cmdReplayNotifications(args []string) error {
+	fs := flag.NewFlagSet("replay-notifications", flag.ExitOnError)
+	projectDir := fs.String("project-dir", "", "project directory whose config should be used")
+	jsonlPath := fs.String("jsonl", "", "optional session JSONL path for prompt context")
+	outputPath := fs.String("output", "", "output JSONL path for replayed brain responses")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: trupal replay-notifications [--project-dir DIR] [--jsonl PATH] [--output PATH] <notifications.jsonl>")
+	}
+
+	notificationsPath, err := filepath.Abs(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	targetDir := *projectDir
+	if strings.TrimSpace(targetDir) == "" {
+		targetDir = filepath.Dir(notificationsPath)
+	}
+	targetDir, err = filepath.Abs(targetDir)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := loadConfig(targetDir)
+	if err != nil {
+		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
+	result, err := ReplayBrainNotifications(cfg, targetDir, *jsonlPath, notificationsPath, *outputPath)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("notifications=%d\n", result.Notifications)
+	fmt.Printf("generated_nudges=%d\n", result.GeneratedNudges)
+	fmt.Printf("output=%s\n", result.OutputPath)
+	return nil
 }
 
 // resolveStartTarget returns the user's requested start dir plus the enclosing git root.

@@ -102,12 +102,7 @@ func findClaudeSessionJSONL(projectDir string) string {
 }
 
 func findCodexSessionJSONL(projectDir string) string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-
-	sessionsRoot := filepath.Join(homeDir, ".codex", "sessions")
+	sessionsRoot := filepath.Join(codexHomeDir(), "sessions")
 	var bestFile string
 	var bestTime time.Time
 	targetDirs := sessionSearchDirs(projectDir)
@@ -137,6 +132,17 @@ func findCodexSessionJSONL(projectDir string) string {
 	})
 
 	return bestFile
+}
+
+func codexHomeDir() string {
+	if override := strings.TrimSpace(os.Getenv("CODEX_HOME")); override != "" {
+		return override
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(homeDir, ".codex")
 }
 
 func codexSessionMatchesTargets(cwd string, targets []string) bool {

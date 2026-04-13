@@ -19,6 +19,7 @@ type ArtifactSet struct {
 	DebugLogPath        string
 	TrupalLogPath       string
 	SteerLogPath        string
+	NotificationLogPath string
 	SessionJSONLPath    string
 	ProjectCopyDir      string
 	AgentStdoutPath     string
@@ -41,6 +42,7 @@ func NewArtifactSet(rootDir string) ArtifactSet {
 		DebugLogPath:        filepath.Join(rootDir, "trupal.debug"),
 		TrupalLogPath:       filepath.Join(rootDir, "trupal.log"),
 		SteerLogPath:        filepath.Join(rootDir, "trupal.steer.jsonl"),
+		NotificationLogPath: filepath.Join(rootDir, "trupal.notifications.jsonl"),
 		SessionJSONLPath:    filepath.Join(rootDir, "session.jsonl"),
 		ProjectCopyDir:      filepath.Join(rootDir, "_project"),
 		AgentStdoutPath:     filepath.Join(rootDir, "agent.stdout.log"),
@@ -117,6 +119,9 @@ func CollectArtifacts(projectDir string, artifacts ArtifactSet, sessionJSONL, pa
 	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.steer.jsonl"), artifacts.SteerLogPath); err != nil {
 		return err
 	}
+	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.notifications.jsonl"), artifacts.NotificationLogPath); err != nil {
+		return err
+	}
 	if err := copyFileIfExists(filepath.Join(projectDir, ".trupal.bench.status.json"), artifacts.BenchmarkStatusPath); err != nil {
 		return err
 	}
@@ -188,11 +193,10 @@ func FindLatestSessionJSONL(projectDir, provider string) (string, error) {
 }
 
 func findLatestCodexSessionJSONL(projectDir string) (string, error) {
-	homeDir, err := os.UserHomeDir()
+	sessionsRoot, err := benchCodexSessionsRoot()
 	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
+		return "", err
 	}
-	sessionsRoot := filepath.Join(homeDir, ".codex", "sessions")
 	targets := sessionSearchDirs(projectDir)
 	var bestPath string
 	var bestTime time.Time
@@ -215,6 +219,17 @@ func findLatestCodexSessionJSONL(projectDir string) (string, error) {
 		return nil
 	})
 	return bestPath, nil
+}
+
+func benchCodexSessionsRoot() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("CODEX_HOME")); override != "" {
+		return filepath.Join(override, "sessions"), nil
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(homeDir, ".codex", "sessions"), nil
 }
 
 func sessionSearchDirs(projectDir string) []string {

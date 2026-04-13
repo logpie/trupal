@@ -164,6 +164,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 	extraDirs := make(map[string]bool) // directories the watched agent works in (from session tool calls)
 	loggedTrajectory := make(map[string]bool)
 	loggedPatterns := make(map[string]PatternFinding)
+	patternSeenCounts := make(map[string]int)
 	loggedDeletedTests := make(map[string]bool)
 	queuedTrajectory := make(map[string]bool)
 
@@ -183,6 +184,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 		loggedTrajectory = make(map[string]bool)
 		queuedTrajectory = make(map[string]bool)
 		loggedPatterns = make(map[string]PatternFinding)
+		patternSeenCounts = make(map[string]int)
 		loggedDeletedTests = make(map[string]bool)
 		lastLogHash = 0
 	}
@@ -405,6 +407,7 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 
 		deletedTests := ScanDeletedTests(nameStatus)
 		patternFindings := ScanDiffPatterns(rawDiff)
+		patternSeenCounts = updatePatternSeenCounts(patternSeenCounts, patternFindings)
 		trajectoryFindings := session.EvalTrajectory()
 		currentWorkHash := reviewableWorkHash(rawDiff, untrackedFiles, buildDisplay)
 		if currentWorkHash != lastSeenWorkHash {
@@ -425,7 +428,15 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			}
 		}
 
-		currentIssues := collectCurrentIssues(findings.Active(), patternFindings, deletedTests, trajectoryFindings, issueLimitForConfig(cfg), cfg)
+		activeFindings := queueableActiveFindings(findings.Active(), changedFiles, cfg)
+		currentIssues := collectCurrentIssues(
+			activeFindings,
+			queueablePatternFindings(patternFindings, patternSeenCounts, changedFiles, len(activeFindings), cfg),
+			deletedTests,
+			trajectoryFindings,
+			issueLimitForConfig(cfg),
+			cfg,
+		)
 
 		// Check for idle (60s since last JSONL activity) after issue synthesis.
 		if shouldQueueIdleReview(cfg, currentIssues, idleNotified, lastJSONLActivity, time.Now()) {
@@ -634,6 +645,17 @@ func runWatchLoop(sessionDir, repoRoot string, cfg Config, p *tea.Program, cance
 			p.Send(brainStatsMsg{stats: brainStats})
 			activeBrain := brain
 			findingsJSON := findings.ActiveJSON()
+			if err := appendBrainNotificationRecord(repoRoot, BrainNotificationRecord{
+				Timestamp:          time.Now(),
+				BrainProvider:      cfg.BrainProvider,
+				TriggerSummary:     truncate(triggerReason, 200),
+				Notification:       notification,
+				ActiveFindingsJSON: findingsJSON,
+				CurrentIssues:      append([]CurrentIssue(nil), currentIssues...),
+				WorkHash:           currentWorkHash,
+			}); err != nil {
+				Debugf("[watcher] notification log write failed: %v", err)
+			}
 
 			go func(brain *Brain, notification, findingsJSON string) {
 				resp, err := brain.Notify(notification, findingsJSON)
@@ -1058,6 +1080,22 @@ func buildBrainNotification(projectDir, reason string, recentEntries []JSONLEntr
 
 	sb.WriteString("\nGIT DIFF SUMMARY:\n")
 	sb.WriteString(summarizeGitDiff(nameStatus, rawDiff, untrackedFiles))
+	if hints := buildDependencyAuditHints(rawDiff); len(hints) > 0 {
+		sb.WriteString("\n\nDEPENDENCY AUDIT HINTS:\n")
+		for _, hint := range hints {
+			sb.WriteString("- ")
+			sb.WriteString(hint)
+			sb.WriteByte('\n')
+		}
+	}
+	if auditFiles := buildDependencyAuditFiles(projectDir, rawDiff); len(auditFiles) > 0 {
+		sb.WriteString("\nDEPENDENCY FILES TO AUDIT:\n")
+		for _, path := range auditFiles {
+			sb.WriteString("- ")
+			sb.WriteString(path)
+			sb.WriteByte('\n')
+		}
+	}
 	sb.WriteString("\n\nBUILD STATUS:\n")
 	sb.WriteString("- ")
 	sb.WriteString(formatBuildStatus(build))
@@ -1070,6 +1108,104 @@ func buildBrainNotification(projectDir, reason string, recentEntries []JSONLEntr
 		}
 	}
 	return sb.String()
+}
+
+func buildDependencyAuditHints(rawDiff string) []string {
+	changedFiles := splitDiffByFile(rawDiff)
+	if len(changedFiles) == 0 {
+		return nil
+	}
+	var hints []string
+	if changedFilesOnlyTests(changedFiles) {
+		hints = append(hints, "Test-only API change detected — verify that every newly referenced production symbol and runtime call site actually exists before trusting the new assertions.")
+	}
+	if configSchemaChanged(changedFiles) {
+		hints = append(hints, "Config/schema surface changed — inspect runtime loaders/setters, legacy value compatibility or migrations, and generated docs for the same setting even if those files were not edited yet.")
+		if configVersionAuditTriggered(changedFiles) {
+			hints = append(hints, "For version-change/config-upgrade work, explicitly audit four cases after the first implementation pass: missing legacy state keys, unparsable stored versions, old boolean config values, and checked-in help/docs for the same setting.")
+			hints = append(hints, "Also audit the full enum/filter contract (`equal`, `downgrade`, `unknown`) plus command/config entry points such as `:set`, `:config-cycle`, config-command handlers, and config loader allowlists before declaring the migration complete.")
+			hints = append(hints, "For bool-to-enum setting migrations, verify every input surface before you stop: config core normalization, string parsing from `:set`, no-arg `:config-cycle` toggle behavior, and the matching config command tests.")
+			hints = append(hints, "If the setting is `changelog_after_upgrade`, do not declare success until you have checked missing `general.version`, unparsable stored versions, legacy bool `config.py`/`autoconfig.yml` values, and command-path compatibility for `:config-cycle changelog_after_upgrade`.")
+		}
+	}
+	return hints
+}
+
+func buildDependencyAuditFiles(projectDir, rawDiff string) []string {
+	changedFiles := splitDiffByFile(rawDiff)
+	if len(changedFiles) == 0 || !configVersionAuditTriggered(changedFiles) {
+		return nil
+	}
+	changed := make(map[string]bool, len(changedFiles))
+	for path := range changedFiles {
+		changed[filepath.Clean(strings.TrimSpace(path))] = true
+	}
+	candidates := []string{
+		"qutebrowser/config/configfiles.py",
+		"qutebrowser/app.py",
+		"qutebrowser/config/config.py",
+		"qutebrowser/config/configcommands.py",
+		"qutebrowser/config/configtypes.py",
+		"qutebrowser/config/configdata.py",
+		"qutebrowser/config/configdata.yml",
+		"doc/help/settings.asciidoc",
+		"doc/changelog.asciidoc",
+		"tests/unit/config/test_config.py",
+		"tests/unit/config/test_configcommands.py",
+		"tests/unit/config/test_configtypes.py",
+	}
+	var out []string
+	for _, rel := range candidates {
+		if changed[filepath.Clean(rel)] {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(projectDir, rel)); err == nil {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
+func changedFilesOnlyTests(files map[string]string) bool {
+	meaningful := 0
+	for path := range files {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		meaningful++
+		if !strings.HasPrefix(path, "tests/") {
+			return false
+		}
+	}
+	return meaningful > 0
+}
+
+func configSchemaChanged(files map[string]string) bool {
+	for path, diff := range files {
+		lowerPath := strings.ToLower(strings.TrimSpace(path))
+		if !strings.Contains(lowerPath, "config") {
+			continue
+		}
+		if !(strings.HasSuffix(lowerPath, ".yml") || strings.HasSuffix(lowerPath, ".yaml") || strings.HasSuffix(lowerPath, ".json")) {
+			continue
+		}
+		lowerDiff := strings.ToLower(diff)
+		if strings.Contains(lowerDiff, "\ntype:") || strings.Contains(lowerDiff, "\n+  type:") || strings.Contains(lowerDiff, "valid_values") || strings.Contains(lowerDiff, "\ndefault:") {
+			return true
+		}
+	}
+	return false
+}
+
+func configVersionAuditTriggered(files map[string]string) bool {
+	for _, diff := range files {
+		lower := strings.ToLower(diff)
+		if strings.Contains(lower, "versionchange") || strings.Contains(lower, "changelog_after_upgrade") {
+			return true
+		}
+	}
+	return false
 }
 
 func summarizeGitDiff(nameStatus, rawDiff string, untrackedFiles []string) string {
@@ -1207,6 +1343,7 @@ func reviewableWorkHash(rawDiff string, untrackedFiles []string, build *BuildDis
 }
 
 func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFinding, deletedTests []string, trajectory []Finding, maxItems int, cfg Config) []CurrentIssue {
+	activeFindings = filterActiveFindingsForCurrentIssues(activeFindings, patterns, cfg)
 	if maxItems <= 0 {
 		return nil
 	}
@@ -1265,6 +1402,112 @@ func collectCurrentIssues(activeFindings []BrainFinding, patterns []PatternFindi
 		items = items[:maxItems]
 	}
 	return items
+}
+
+func filterActiveFindingsForCurrentIssues(active []BrainFinding, patterns []PatternFinding, cfg Config) []BrainFinding {
+	if len(active) == 0 {
+		return active
+	}
+	hasSuppressionPattern := false
+	for _, pattern := range patterns {
+		if pattern.Category == "suppression" {
+			hasSuppressionPattern = true
+			break
+		}
+	}
+	filtered := make([]BrainFinding, 0, len(active))
+	for _, finding := range active {
+		text := strings.ToLower(strings.TrimSpace(finding.Nudge + " " + finding.Why))
+		for _, bad := range []string{
+			"no file edits recorded",
+			"diff hasn't moved",
+			"still no file edits",
+			"stop treating it as applied",
+			"single edit/write tool call",
+			"only read files and diffed history",
+			"no edit/write tool calls",
+			"diff changes in the worktree",
+			"blanket-ignore userwarning",
+			"pytestremovedin9warning",
+			"either start the patch now or stop saying",
+			"make the change now or say you're blocked",
+			"you said you were implementing",
+			"you said you verified",
+			"doesn't prove anything",
+			"re-run a valid check",
+			"stop reading and either patch",
+		} {
+			if strings.Contains(text, bad) {
+				goto skip
+			}
+		}
+		if hasSuppressionPattern && (strings.Contains(text, "type: ignore") || strings.Contains(text, "suppression")) {
+			goto skip
+		}
+		filtered = append(filtered, finding)
+		continue
+	skip:
+	}
+	return filtered
+}
+
+func updatePatternSeenCounts(seen map[string]int, patterns []PatternFinding) map[string]int {
+	active := make(map[string]bool, len(patterns))
+	for _, pattern := range patterns {
+		active[pattern.Key] = true
+		seen[pattern.Key]++
+	}
+	for key := range seen {
+		if !active[key] {
+			delete(seen, key)
+		}
+	}
+	return seen
+}
+
+func queueableActiveFindings(active []BrainFinding, changedFiles []string, cfg Config) []BrainFinding {
+	if !cfg.BenchmarkMode {
+		return active
+	}
+	if !benchmarkOnlyTouchesTests(changedFiles) || len(active) <= 1 {
+		return active
+	}
+	return append([]BrainFinding(nil), active[:1]...)
+}
+
+func queueablePatternFindings(patterns []PatternFinding, seenCounts map[string]int, changedFiles []string, activeFindingCount int, cfg Config) []PatternFinding {
+	filtered := make([]PatternFinding, 0, len(patterns))
+	testOnly := benchmarkOnlyTouchesTests(changedFiles)
+	for _, pattern := range patterns {
+		if pattern.Category == "suppression" {
+			if cfg.BenchmarkMode && activeFindingCount > 0 {
+				continue
+			}
+			if testOnly {
+				continue
+			}
+			if cfg.BenchmarkMode && seenCounts[pattern.Key] < 2 {
+				continue
+			}
+		}
+		filtered = append(filtered, pattern)
+	}
+	return filtered
+}
+
+func benchmarkOnlyTouchesTests(changedFiles []string) bool {
+	meaningful := 0
+	for _, path := range changedFiles {
+		path = strings.TrimSpace(path)
+		if path == "" || path == ".gitignore" {
+			continue
+		}
+		meaningful++
+		if !strings.HasPrefix(path, "tests/") {
+			return false
+		}
+	}
+	return meaningful > 0
 }
 
 func issueLimitForConfig(cfg Config) int {
@@ -1830,12 +2073,37 @@ func gitUntrackedFiles(projectDir string) []string {
 	var files []string
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(filepath.Base(line), ".trupal.") {
+		if line == "" || shouldIgnoreUntrackedRuntimeFile(line) {
 			continue
 		}
 		files = append(files, line)
 	}
 	return files
+}
+
+func shouldIgnoreUntrackedRuntimeFile(path string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" {
+		return true
+	}
+	base := filepath.Base(path)
+	if strings.HasPrefix(base, ".trupal.") {
+		return true
+	}
+	for _, prefix := range []string{
+		".codex-bench-home",
+		".codex",
+		".omx",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+string(filepath.Separator)) {
+			return true
+		}
+	}
+	switch path {
+	case ".swebench-test.patch", "TASK.md":
+		return true
+	}
+	return false
 }
 
 // gitDiffNameStatus returns the output of "git diff --name-status HEAD".

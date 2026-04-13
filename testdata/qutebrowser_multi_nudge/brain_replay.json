@@ -1,0 +1,54 @@
+[
+  {
+    "match": "test_configfiles.py",
+    "response": {
+      "info": [
+        "Multi-nudge replay: seed the initial API mismatch."
+      ],
+      "nudges": [
+        {
+          "severity": "error",
+          "message": "Either add the VersionChange API end to end or stop testing for it here"
+        }
+      ],
+      "resolved_findings": []
+    }
+  },
+  {
+    "match": "M qutebrowser/config/configdata.yml",
+    "response": {
+      "info": [
+        "Schema work started, so compatibility follow-up should now be surfaced."
+      ],
+      "nudges": [
+        {
+          "severity": "warn",
+          "message": "Add a compatibility path for old boolean changelog_after_upgrade values before this schema change can ship"
+        }
+      ],
+      "resolved_findings": []
+    }
+  },
+  {
+    "match": "trajectory signal: you've edited qutebrowser/config/configfiles.py repeatedly this session",
+    "response": {
+      "info": [
+        "The session has entered a repeated-edit loop on configfiles.py."
+      ],
+      "nudges": [
+        {
+          "severity": "warn",
+          "message": "Stop iterating on configfiles.py blindly and run the focused verification before another edit"
+        }
+      ],
+      "resolved_findings": []
+    }
+  },
+  {
+    "response": {
+      "info": [],
+      "nudges": [],
+      "resolved_findings": []
+    }
+  }
+]

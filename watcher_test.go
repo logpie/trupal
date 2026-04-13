@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +116,95 @@ func TestBuildBrainNotificationIncludesBuildOutput(t *testing.T) {
 	}
 	if !strings.Contains(notification, "undefined: server") {
 		t.Fatalf("expected notification to include specific build error, got:\n%s", notification)
+	}
+}
+
+func TestBuildBrainNotificationIncludesDependencyAuditHints(t *testing.T) {
+	projectDir := t.TempDir()
+	for _, rel := range []string{
+		"qutebrowser/config/config.py",
+		"qutebrowser/config/configcommands.py",
+		"qutebrowser/config/configtypes.py",
+		"qutebrowser/config/configdata.py",
+		"qutebrowser/config/configdata.yml",
+		"qutebrowser/config/configfiles.py",
+		"qutebrowser/app.py",
+		"doc/help/settings.asciidoc",
+		"doc/changelog.asciidoc",
+		"tests/unit/config/test_config.py",
+		"tests/unit/config/test_configcommands.py",
+		"tests/unit/config/test_configtypes.py",
+	} {
+		path := filepath.Join(projectDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", rel, err)
+		}
+		if err := os.WriteFile(path, []byte("placeholder\n"), 0644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", rel, err)
+		}
+	}
+	rawDiff := "" +
+		"diff --git a/tests/unit/config/test_configfiles.py b/tests/unit/config/test_configfiles.py\n" +
+		"--- a/tests/unit/config/test_configfiles.py\n" +
+		"+++ b/tests/unit/config/test_configfiles.py\n" +
+		"+assert configfiles.VersionChange.major\n" +
+		"diff --git a/qutebrowser/config/configdata.yml b/qutebrowser/config/configdata.yml\n" +
+		"--- a/qutebrowser/config/configdata.yml\n" +
+		"+++ b/qutebrowser/config/configdata.yml\n" +
+		"+  type:\n" +
+		"+    name: String\n" +
+		"+    valid_values:\n"
+	notification := buildBrainNotification(
+		projectDir,
+		"working tree changed",
+		nil,
+		nil,
+		"M\ttests/unit/config/test_configfiles.py\nM\tqutebrowser/config/configdata.yml\n",
+		rawDiff,
+		nil,
+		nil,
+	)
+	for _, want := range []string{
+		"DEPENDENCY AUDIT HINTS:",
+		"Config/schema surface changed",
+		"For version-change/config-upgrade work",
+		"command/config entry points",
+		"no-arg `:config-cycle` toggle behavior",
+		"missing `general.version`",
+		"DEPENDENCY FILES TO AUDIT:",
+		"qutebrowser/config/config.py",
+		"qutebrowser/config/configcommands.py",
+		"doc/help/settings.asciidoc",
+		"tests/unit/config/test_configcommands.py",
+	} {
+		if !strings.Contains(notification, want) {
+			t.Fatalf("expected notification to include %q, got:\n%s", want, notification)
+		}
+	}
+}
+
+func TestShouldIgnoreUntrackedRuntimeFile(t *testing.T) {
+	for _, path := range []string{
+		".codex-bench-home",
+		".codex-bench-home/sessions/foo.jsonl",
+		".codex/plugins/cache/file",
+		".omx/state/file.json",
+		".trupal.debug",
+		".swebench-test.patch",
+		"TASK.md",
+	} {
+		if !shouldIgnoreUntrackedRuntimeFile(path) {
+			t.Fatalf("expected %q to be ignored", path)
+		}
+	}
+	for _, path := range []string{
+		"qutebrowser/config/configfiles.py",
+		"tests/unit/config/test_configfiles.py",
+		"doc/help/settings.asciidoc",
+	} {
+		if shouldIgnoreUntrackedRuntimeFile(path) {
+			t.Fatalf("expected %q to be kept", path)
+		}
 	}
 }
 
@@ -318,6 +409,140 @@ func TestCollectCurrentIssuesRewritesWrongTreeBenchmarkNudge(t *testing.T) {
 	)
 	if len(summary) != 1 || !strings.Contains(summary[0].Nudge, "not examples/main.go") {
 		t.Fatalf("expected wrong-tree nudge rewrite, got %#v", summary)
+	}
+}
+
+func TestQueueablePatternFindingsDebouncesBenchmarkSuppressions(t *testing.T) {
+	patterns := []PatternFinding{
+		{Key: "a", Category: "suppression", Message: "suppression introduced"},
+		{Key: "b", Category: "todo", Message: "todo introduced"},
+	}
+	seen := map[string]int{"a": 1, "b": 1}
+	got := queueablePatternFindings(patterns, seen, []string{"qutebrowser/config/configfiles.py"}, 0, Config{BenchmarkMode: true})
+	if len(got) != 1 || got[0].Key != "b" {
+		t.Fatalf("expected first benchmark suppression sighting to be deferred, got %#v", got)
+	}
+
+	seen["a"] = 2
+	got = queueablePatternFindings(patterns, seen, []string{"qutebrowser/config/configfiles.py"}, 0, Config{BenchmarkMode: true})
+	if len(got) != 2 {
+		t.Fatalf("expected persistent suppression to become queueable, got %#v", got)
+	}
+
+	got = queueablePatternFindings(patterns, map[string]int{"a": 1, "b": 1}, []string{"qutebrowser/config/configfiles.py"}, 0, Config{})
+	if len(got) != 2 {
+		t.Fatalf("expected non-benchmark mode to keep immediate pattern nudges, got %#v", got)
+	}
+}
+
+func TestUpdatePatternSeenCountsResetsWhenPatternDisappears(t *testing.T) {
+	seen := map[string]int{}
+	seen = updatePatternSeenCounts(seen, []PatternFinding{{Key: "a", Category: "suppression"}})
+	seen = updatePatternSeenCounts(seen, []PatternFinding{{Key: "a", Category: "suppression"}})
+	if seen["a"] != 2 {
+		t.Fatalf("expected persistent pattern count to increment, got %#v", seen)
+	}
+	seen = updatePatternSeenCounts(seen, nil)
+	if len(seen) != 0 {
+		t.Fatalf("expected disappeared patterns to be forgotten, got %#v", seen)
+	}
+}
+
+func TestQueueableActiveFindingsCollapsesBenchmarkTestOnlyDrift(t *testing.T) {
+	active := []BrainFinding{
+		{ID: "f-001", Nudge: "broad missing implementation"},
+		{ID: "f-002", Nudge: "narrow follow-up 1"},
+		{ID: "f-003", Nudge: "narrow follow-up 2"},
+	}
+	got := queueableActiveFindings(active, []string{".gitignore", "tests/unit/config/test_configfiles.py"}, Config{BenchmarkMode: true})
+	if len(got) != 1 || got[0].ID != "f-001" {
+		t.Fatalf("expected benchmark test-only drift to keep only first active finding, got %#v", got)
+	}
+
+	got = queueableActiveFindings(active, []string{"tests/unit/config/test_configfiles.py", "qutebrowser/config/configfiles.py"}, Config{BenchmarkMode: true})
+	if len(got) != len(active) {
+		t.Fatalf("expected production edits to keep all findings, got %#v", got)
+	}
+
+	got = queueableActiveFindings(active, []string{"tests/unit/config/test_configfiles.py"}, Config{})
+	if len(got) != len(active) {
+		t.Fatalf("expected non-benchmark mode to keep all findings, got %#v", got)
+	}
+}
+
+func TestBenchmarkOnlyTouchesTests(t *testing.T) {
+	if !benchmarkOnlyTouchesTests([]string{".gitignore", "tests/unit/config/test_configfiles.py"}) {
+		t.Fatal("expected test-only diff to be recognized")
+	}
+	if benchmarkOnlyTouchesTests([]string{"tests/unit/config/test_configfiles.py", "qutebrowser/config/configfiles.py"}) {
+		t.Fatal("did not expect production diff to count as test-only")
+	}
+	if benchmarkOnlyTouchesTests([]string{".gitignore"}) {
+		t.Fatal("did not expect ignore-only diff to count as test-only")
+	}
+}
+
+func TestFilterActiveFindingsForCurrentIssuesDropsRedundantSuppressionAndDrift(t *testing.T) {
+	active := []BrainFinding{
+		{ID: "f-001", Nudge: "core missing implementation"},
+		{ID: "f-002", Nudge: "You said you're applying the upstream-style change set now, but there are still no file edits recorded."},
+		{ID: "f-003", Nudge: "You left a # type: ignore[unreachable] on the early return."},
+	}
+	patterns := []PatternFinding{{Key: "p-1", Category: "suppression", Message: "lint/type suppression introduced"}}
+	got := filterActiveFindingsForCurrentIssues(active, patterns, Config{BenchmarkMode: true})
+	if len(got) != 1 || got[0].ID != "f-001" {
+		t.Fatalf("expected only core finding to survive dedupe, got %#v", got)
+	}
+
+	got = filterActiveFindingsForCurrentIssues(active[:2], nil, Config{BenchmarkMode: true})
+	if len(got) != 1 || got[0].ID != "f-001" {
+		t.Fatalf("expected benchmark drift finding to be dropped, got %#v", got)
+	}
+
+	got = filterActiveFindingsForCurrentIssues(active, patterns, Config{})
+	if len(got) != 1 || got[0].ID != "f-001" {
+		t.Fatalf("expected non-benchmark mode to keep only the core finding after dedupe, got %#v", got)
+	}
+}
+
+func TestQueueablePatternFindingsDropsTestOnlySuppressionsInAllModes(t *testing.T) {
+	patterns := []PatternFinding{{Key: "a", Category: "suppression", Message: "suppression introduced"}}
+	for _, cfg := range []Config{{}, {BenchmarkMode: true}} {
+		got := queueablePatternFindings(patterns, map[string]int{"a": 3}, []string{"tests/unit/config/test_configfiles.py"}, 0, cfg)
+		if len(got) != 0 {
+			t.Fatalf("expected test-only suppressions to be skipped, got %#v", got)
+		}
+	}
+}
+
+func TestQueueablePatternFindingsDefersBenchmarkSuppressionsWhileCoreIssuesOpen(t *testing.T) {
+	patterns := []PatternFinding{{Key: "a", Category: "suppression", Message: "suppression introduced"}}
+	got := queueablePatternFindings(patterns, map[string]int{"a": 3}, []string{"qutebrowser/config/configfiles.py"}, 1, Config{BenchmarkMode: true})
+	if len(got) != 0 {
+		t.Fatalf("expected benchmark suppression to defer while active brain findings exist, got %#v", got)
+	}
+}
+
+func TestFilterActiveFindingsForCurrentIssuesDropsWarningFilterNoise(t *testing.T) {
+	active := []BrainFinding{
+		{ID: "f-001", Nudge: "real issue"},
+		{ID: "f-002", Nudge: "Don't blanket-ignore UserWarning; target PytestRemovedIn9Warning directly."},
+	}
+	got := filterActiveFindingsForCurrentIssues(active, nil, Config{})
+	if len(got) != 1 || got[0].ID != "f-001" {
+		t.Fatalf("expected warning-filter noise to be dropped, got %#v", got)
+	}
+}
+
+func TestFilterActiveFindingsForCurrentIssuesDropsBenchmarkDocsAndPatchMetaNoise(t *testing.T) {
+	active := []BrainFinding{
+		{ID: "f-001", Nudge: "core issue"},
+		{ID: "f-002", Nudge: "Either start the patch now or stop saying you're patching it."},
+		{ID: "f-003", Nudge: "You said you verified the PyQt version API, but the last probe is broken and doesn't prove anything."},
+	}
+	got := filterActiveFindingsForCurrentIssues(active, nil, Config{BenchmarkMode: true})
+	if len(got) != 1 || got[0].ID != "f-001" {
+		t.Fatalf("expected benchmark docs/process noise to be dropped, got %#v", got)
 	}
 }
 

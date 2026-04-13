@@ -9,6 +9,7 @@ import (
 const (
 	ProviderClaude = "claude"
 	ProviderCodex  = "codex"
+	ProviderReplay = "replay"
 )
 
 func normalizeProvider(provider, fallback string) string {

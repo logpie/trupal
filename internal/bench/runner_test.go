@@ -23,6 +23,47 @@ func TestBenchmarkAgentPromptForcesNonInteractiveExecution(t *testing.T) {
 	}
 }
 
+func TestBenchmarkPromptForSWEBenchTaskIncludesSelectedTests(t *testing.T) {
+	prompt := benchmarkPromptForSWEBenchTask(SWEBenchTask{
+		ProblemStatement: "Fix the bug",
+		SelectedTests:    []string{"tests/unit/config/test_configfiles.py"},
+	})
+	for _, want := range []string{
+		"Official task-selected tests/files for verification:",
+		"tests/unit/config/test_configfiles.py",
+		"Do not add, modify, or inspect unrelated test modules",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("benchmarkPromptForSWEBenchTask() missing %q in:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestPromptSubmissionStartedRequiresSessionAdvance(t *testing.T) {
+	before := sessionJSONLState{path: "/tmp/session.jsonl", size: 100}
+	cases := []struct {
+		name string
+		curr sessionJSONLState
+		want bool
+	}{
+		{name: "same file unchanged", curr: sessionJSONLState{path: "/tmp/session.jsonl", size: 100}, want: false},
+		{name: "same file grew", curr: sessionJSONLState{path: "/tmp/session.jsonl", size: 140}, want: true},
+		{name: "new file", curr: sessionJSONLState{path: "/tmp/session-2.jsonl", size: 10}, want: true},
+		{name: "missing current file", curr: sessionJSONLState{}, want: false},
+	}
+	for _, tc := range cases {
+		if got := promptSubmissionStarted(before, tc.curr); got != tc.want {
+			t.Fatalf("%s: promptSubmissionStarted(...) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if got := promptSubmissionStarted(sessionJSONLState{}, sessionJSONLState{path: "/tmp/session.jsonl", size: 0}); got {
+		t.Fatal("expected empty new session file to remain unstarted")
+	}
+	if got := promptSubmissionStarted(sessionJSONLState{}, sessionJSONLState{path: "/tmp/session.jsonl", size: 1}); !got {
+		t.Fatal("expected non-empty new session file to count as started")
+	}
+}
+
 func TestScenarioUsesGenericAgentModelForCodex(t *testing.T) {
 	scenario, err := parseScenarioYAML([]byte(`
 id: sample
@@ -305,6 +346,33 @@ func TestShouldEnterTimeoutGraceForLateGeneratedContinuousWork(t *testing.T) {
 	}
 	if got := benchmarkTimeoutGrace(policy, now, runtime); got < 12*time.Second {
 		t.Fatalf("benchmarkTimeoutGrace() = %s, want enough time for remaining cooldown", got)
+	}
+}
+
+func TestBenchmarkRecentActivityGraceKeepsContinuousSteerRunAliveForOneMoreReview(t *testing.T) {
+	now := time.Date(2026, 4, 10, 23, 20, 34, 0, time.UTC)
+	policy := effectiveBenchmarkSteeringPolicy(Scenario{SteeringMode: SteeringModeContinuous})
+	runtime := BenchmarkRuntimeStatus{
+		AgentStatus:         "idle",
+		LastSessionEventAt:  now.Add(-50 * time.Second),
+		LastWorkChangeAt:    now.Add(-42 * time.Second),
+		LastBrainActivityAt: now.Add(-40 * time.Second),
+	}
+	if got := benchmarkRecentActivityGrace(policy, ArmSteer, now, runtime); got < 45*time.Second {
+		t.Fatalf("benchmarkRecentActivityGrace() = %s, want enough time for one more review cycle", got)
+	}
+}
+
+func TestBenchmarkRecentActivityGraceSkipsQuietOrNonSteerRuns(t *testing.T) {
+	now := time.Date(2026, 4, 10, 23, 20, 34, 0, time.UTC)
+	policy := effectiveBenchmarkSteeringPolicy(Scenario{SteeringMode: SteeringModeContinuous})
+	quiet := BenchmarkRuntimeStatus{LastBrainActivityAt: now.Add(-2 * time.Minute)}
+	if got := benchmarkRecentActivityGrace(policy, ArmSteer, now, quiet); got != 0 {
+		t.Fatalf("benchmarkRecentActivityGrace() for quiet run = %s, want 0", got)
+	}
+	active := BenchmarkRuntimeStatus{LastBrainActivityAt: now.Add(-10 * time.Second)}
+	if got := benchmarkRecentActivityGrace(policy, ArmControl, now, active); got != 0 {
+		t.Fatalf("benchmarkRecentActivityGrace() for control arm = %s, want 0", got)
 	}
 }
 

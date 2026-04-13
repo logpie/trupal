@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -305,5 +307,123 @@ func TestCodexPromptForTurnUsesSystemPromptOnlyOnFirstTurn(t *testing.T) {
 	}
 	if resumed != "NOTIFICATION:\nhello" {
 		t.Fatalf("unexpected resumed prompt: %q", resumed)
+	}
+}
+
+func TestReplayBrainReturnsScriptedResponsesDeterministically(t *testing.T) {
+	projectDir := t.TempDir()
+	scriptPath := filepath.Join(projectDir, "brain-replay.json")
+	if err := os.WriteFile(scriptPath, []byte(`[
+		{"match":"working tree changed","response":{"info":["first turn"],"nudges":[{"severity":"warn","message":"first nudge"}],"resolved_findings":[]}},
+		{"match":"idle for 60s","response":{"info":["second turn"],"nudges":[],"resolved_findings":["f-1"]}}
+	]`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	brain, err := StartBrain(Config{
+		SessionProvider: ProviderCodex,
+		BrainProvider:   ProviderReplay,
+		BrainReplayPath: scriptPath,
+		BrainEffort:     "high",
+	}, projectDir, filepath.Join(projectDir, "session.jsonl"), BrainStats{})
+	if err != nil {
+		t.Fatalf("StartBrain() error = %v", err)
+	}
+
+	first, err := brain.Notify("working tree changed", "[]")
+	if err != nil {
+		t.Fatalf("first Notify() error = %v", err)
+	}
+	if got := first.InfoLines(); !reflect.DeepEqual(got, []string{"first turn"}) {
+		t.Fatalf("first InfoLines() = %#v, want scripted first turn", got)
+	}
+	if len(first.Nudges) != 1 || first.Nudges[0].Message != "first nudge" {
+		t.Fatalf("first Nudges = %#v, want scripted first nudge", first.Nudges)
+	}
+
+	second, err := brain.Notify("Codex has been idle for 60s — good time for a session review", "[]")
+	if err != nil {
+		t.Fatalf("second Notify() error = %v", err)
+	}
+	if got := second.InfoLines(); !reflect.DeepEqual(got, []string{"second turn"}) {
+		t.Fatalf("second InfoLines() = %#v, want scripted second turn", got)
+	}
+	if !reflect.DeepEqual(second.ResolvedFindings, []string{"f-1"}) {
+		t.Fatalf("second ResolvedFindings = %#v, want [f-1]", second.ResolvedFindings)
+	}
+
+	stats := brain.Stats()
+	if stats.Provider != ProviderReplay || stats.TurnCount != 2 {
+		t.Fatalf("replay stats = %#v, want provider replay with 2 turns", stats)
+	}
+}
+
+func TestReplayBrainFailsLoudlyOnNotificationMismatch(t *testing.T) {
+	projectDir := t.TempDir()
+	scriptPath := filepath.Join(projectDir, "brain-replay.json")
+	if err := os.WriteFile(scriptPath, []byte(`[
+		{"match":"idle for 60s","response":{"nudges":[],"resolved_findings":[]}}
+	]`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	brain, err := StartBrain(Config{
+		SessionProvider: ProviderCodex,
+		BrainProvider:   ProviderReplay,
+		BrainReplayPath: scriptPath,
+		BrainEffort:     "high",
+	}, projectDir, filepath.Join(projectDir, "session.jsonl"), BrainStats{})
+	if err != nil {
+		t.Fatalf("StartBrain() error = %v", err)
+	}
+
+	if _, err := brain.Notify("working tree changed", "[]"); err == nil {
+		t.Fatal("expected replay Notify() to fail on unmatched notification")
+	}
+}
+
+func TestReplayBrainUsesFallbackOnlyAfterTryingLaterSpecificMatches(t *testing.T) {
+	projectDir := t.TempDir()
+	scriptPath := filepath.Join(projectDir, "brain-replay.json")
+	if err := os.WriteFile(scriptPath, []byte(`[
+		{"match":"first","response":{"nudges":[{"severity":"warn","message":"n1"}],"resolved_findings":[]}},
+		{"match":"later","response":{"nudges":[{"severity":"warn","message":"n2"}],"resolved_findings":[]}},
+		{"response":{"info":["fallback"],"nudges":[],"resolved_findings":[]}}
+	]`), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	brain, err := StartBrain(Config{
+		SessionProvider: ProviderCodex,
+		BrainProvider:   ProviderReplay,
+		BrainReplayPath: scriptPath,
+		BrainEffort:     "high",
+	}, projectDir, filepath.Join(projectDir, "session.jsonl"), BrainStats{})
+	if err != nil {
+		t.Fatalf("StartBrain() error = %v", err)
+	}
+
+	first, err := brain.Notify("first notification", "[]")
+	if err != nil {
+		t.Fatalf("first Notify() error = %v", err)
+	}
+	if len(first.Nudges) != 1 || first.Nudges[0].Message != "n1" {
+		t.Fatalf("unexpected first replay response: %#v", first)
+	}
+
+	second, err := brain.Notify("later notification", "[]")
+	if err != nil {
+		t.Fatalf("second Notify() error = %v", err)
+	}
+	if len(second.Nudges) != 1 || second.Nudges[0].Message != "n2" {
+		t.Fatalf("unexpected second replay response: %#v", second)
+	}
+
+	third, err := brain.Notify("unmatched notification", "[]")
+	if err != nil {
+		t.Fatalf("third Notify() error = %v", err)
+	}
+	if got := third.InfoLines(); !reflect.DeepEqual(got, []string{"fallback"}) {
+		t.Fatalf("fallback InfoLines() = %#v, want [fallback]", got)
 	}
 }

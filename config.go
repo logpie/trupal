@@ -18,6 +18,7 @@ type Config struct {
 	BrainProvider         string // brain provider: "claude" or "codex"
 	BrainModel            string // claude: haiku/sonnet/opus, codex: model id or empty for default
 	BrainEffort           string // "low", "medium", "high", "max"
+	BrainReplayPath       string // replay script for deterministic brain responses
 	BenchmarkMode         bool
 	BenchmarkScenario     string
 	BenchmarkArm          string
@@ -41,6 +42,7 @@ func loadConfig(projectDir string) (Config, error) {
 	f, err := os.Open(filepath.Join(projectDir, ".trupal.toml"))
 	if err != nil {
 		if os.IsNotExist(err) {
+			applyConfigEnvOverrides(&cfg)
 			return cfg, nil
 		}
 		return cfg, err
@@ -78,6 +80,8 @@ func loadConfig(projectDir string) (Config, error) {
 			cfg.BrainModel = value
 		case "brain_effort":
 			cfg.BrainEffort = value
+		case "brain_replay_path":
+			cfg.BrainReplayPath = value
 		case "benchmark_mode":
 			cfg.BenchmarkMode = strings.EqualFold(value, "true")
 		case "benchmark_scenario":
@@ -91,8 +95,16 @@ func loadConfig(projectDir string) (Config, error) {
 	if err := scanner.Err(); err != nil {
 		return cfg, err
 	}
+	applyConfigEnvOverrides(&cfg)
 
 	return cfg, nil
+}
+
+func applyConfigEnvOverrides(cfg *Config) {
+	if replayPath := strings.TrimSpace(os.Getenv("TRUPAL_BRAIN_REPLAY_PATH")); replayPath != "" {
+		cfg.BrainProvider = ProviderReplay
+		cfg.BrainReplayPath = replayPath
+	}
 }
 
 func (cfg Config) String() string {
@@ -103,7 +115,16 @@ func (cfg Config) String() string {
 	parts = append(parts, "session="+cfg.SessionProvider)
 	brainModel := cfg.BrainModel
 	if brainModel == "" {
-		brainModel = "default"
+		switch cfg.BrainProvider {
+		case ProviderReplay:
+			if cfg.BrainReplayPath != "" {
+				brainModel = filepath.Base(cfg.BrainReplayPath)
+			} else {
+				brainModel = "script"
+			}
+		default:
+			brainModel = "default"
+		}
 	}
 	parts = append(parts, "brain="+cfg.BrainProvider+"/"+brainModel)
 	parts = append(parts, "effort="+cfg.BrainEffort)
@@ -122,6 +143,13 @@ func (cfg Config) BrainIdentityDisplay() string {
 	case ProviderCodex:
 		if model == "" {
 			model = "auto"
+		}
+	case ProviderReplay:
+		if cfg.BrainReplayPath != "" {
+			model = filepath.Base(cfg.BrainReplayPath)
+		}
+		if model == "" {
+			model = "script"
 		}
 	default:
 		if model == "" {
@@ -161,6 +189,9 @@ func SaveConfig(projectDir string, cfg Config) {
 		fmt.Fprintf(f, "brain_model = %q\n", cfg.BrainModel)
 	}
 	fmt.Fprintf(f, "brain_effort = %q\n", cfg.BrainEffort)
+	if cfg.BrainReplayPath != "" {
+		fmt.Fprintf(f, "brain_replay_path = %q\n", cfg.BrainReplayPath)
+	}
 	if cfg.BenchmarkMode {
 		fmt.Fprintf(f, "benchmark_mode = true\n")
 	}
@@ -231,8 +262,14 @@ func (cfg *Config) Validate() error {
 			return fmt.Errorf("unsupported brain_effort %q (supported: low, medium, high, max)", cfg.BrainEffort)
 		}
 		return nil
+	case ProviderReplay:
+		cfg.BrainReplayPath = strings.TrimSpace(cfg.BrainReplayPath)
+		if cfg.BrainReplayPath == "" {
+			return fmt.Errorf("brain_provider %q requires brain_replay_path", cfg.BrainProvider)
+		}
+		return nil
 	default:
-		return fmt.Errorf("unsupported brain_provider %q (supported: claude, codex)", cfg.BrainProvider)
+		return fmt.Errorf("unsupported brain_provider %q (supported: claude, codex, replay)", cfg.BrainProvider)
 	}
 }
 

@@ -314,3 +314,26 @@ func TestSetupSWEBenchWorkspaceRunsSetupCommand(t *testing.T) {
 		t.Fatalf("unexpected setup proof %q", string(raw))
 	}
 }
+
+func TestSetupSWEBenchWorkspaceRestoresTaskArtifactAfterCleanup(t *testing.T) {
+	workspace := t.TempDir()
+	task := SWEBenchTask{
+		InstanceID:       "sample",
+		ProblemStatement: "keep this task statement",
+		SetupCommand:     "rm -f TASK.md && printf ready > .setup-proof",
+	}
+	runner := &Runner{}
+	if err := writeSWEBenchTaskArtifact(workspace, task); err != nil {
+		t.Fatalf("writeSWEBenchTaskArtifact() error = %v", err)
+	}
+	if err := runner.SetupSWEBenchWorkspace(task, workspace); err != nil {
+		t.Fatalf("SetupSWEBenchWorkspace() error = %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(workspace, "TASK.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(TASK.md) error = %v", err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != task.ProblemStatement {
+		t.Fatalf("TASK.md = %q, want %q", got, task.ProblemStatement)
+	}
+}

@@ -152,6 +152,37 @@ func TestConfigValidateAllowsCodexDefaults(t *testing.T) {
 	}
 }
 
+func TestConfigValidateAllowsReplayProviderWithScript(t *testing.T) {
+	cfg := Config{
+		PollInterval:      3,
+		SessionProvider:   "codex",
+		BrainProvider:     "replay",
+		BrainReplayPath:   "fixtures/replay.json",
+		BrainEffort:       "high",
+		BenchmarkMode:     true,
+		BenchmarkScenario: "demo",
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() returned error: %v", err)
+	}
+	if cfg.BrainProvider != ProviderReplay {
+		t.Fatalf("expected replay provider, got %q", cfg.BrainProvider)
+	}
+}
+
+func TestConfigValidateRejectsReplayProviderWithoutScript(t *testing.T) {
+	cfg := Config{
+		PollInterval:    3,
+		SessionProvider: "codex",
+		BrainProvider:   "replay",
+		BrainEffort:     "high",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected replay provider without script to fail")
+	}
+}
+
 func TestParseTomlLineStripsInlineComments(t *testing.T) {
 	key, value, ok := parseTomlLine(`brain_provider = "codex"  # inline comment`)
 	if !ok {
@@ -195,5 +226,20 @@ benchmark_steering_mode = "continuous"
 	}
 	if !cfg.BenchmarkMode || cfg.BenchmarkScenario != "wrong-tree-verification" || cfg.BenchmarkArm != "steer" || cfg.BenchmarkSteeringMode != "continuous" {
 		t.Fatalf("unexpected benchmark config: %#v", cfg)
+	}
+}
+
+func TestLoadConfigReplayEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TRUPAL_BRAIN_REPLAY_PATH", "fixtures/replay.json")
+	cfg, err := loadConfig(dir)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if cfg.BrainProvider != ProviderReplay {
+		t.Fatalf("BrainProvider = %q, want replay", cfg.BrainProvider)
+	}
+	if cfg.BrainReplayPath != "fixtures/replay.json" {
+		t.Fatalf("BrainReplayPath = %q, want fixtures/replay.json", cfg.BrainReplayPath)
 	}
 }

@@ -1,0 +1,24 @@
+[
+  {
+    "match": "test_configfiles.py",
+    "response": {
+      "info": [
+        "Deterministic replay: seed the canonical qutebrowser API-mismatch finding."
+      ],
+      "nudges": [
+        {
+          "severity": "error",
+          "message": "Either add the VersionChange API end to end or stop testing for it here"
+        }
+      ],
+      "resolved_findings": []
+    }
+  },
+  {
+    "response": {
+      "info": [],
+      "nudges": [],
+      "resolved_findings": []
+    }
+  }
+]
